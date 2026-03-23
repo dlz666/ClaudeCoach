@@ -1,0 +1,160 @@
+{
+  "name": "claude-coach",
+  "displayName": "ClaudeCoach",
+  "description": "AI 学习助手 - 个性化课程生成、练习批改、自适应学习",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Education"
+  ],
+  "activationEvents": [
+    "onView:claudeCoach.sidebar"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-coach",
+          "title": "ClaudeCoach",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-coach": [
+        {
+          "type": "webview",
+          "id": "claudeCoach.sidebar",
+          "name": "ClaudeCoach"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeCoach.generateCourse",
+        "title": "ClaudeCoach: 生成课程"
+      },
+      {
+        "command": "claudeCoach.generateLesson",
+        "title": "ClaudeCoach: 生成讲义"
+      },
+      {
+        "command": "claudeCoach.generateExercises",
+        "title": "ClaudeCoach: 生成练习"
+      },
+      {
+        "command": "claudeCoach.gradeAnswer",
+        "title": "ClaudeCoach: 批改答案"
+      },
+      {
+        "command": "claudeCoach.showDiagnosis",
+        "title": "ClaudeCoach: 学习诊断"
+      },
+      {
+        "command": "claudeCoach.importMaterial",
+        "title": "ClaudeCoach: 导入资料"
+      },
+      {
+        "command": "claudeCoach.switchAIProfile",
+        "title": "ClaudeCoach: 切换 AI 配置"
+      },
+      {
+        "command": "claudeCoach.openAIConfigCenter",
+        "title": "ClaudeCoach: 打开 AI 配置中心"
+      },
+      {
+        "command": "claudeCoach.importAIProfile",
+        "title": "ClaudeCoach: 导入 AI 配置包"
+      },
+      {
+        "command": "claudeCoach.exportAIProfile",
+        "title": "ClaudeCoach: 导出当前 AI 配置"
+      },
+      {
+        "command": "claudeCoach.testAIProfile",
+        "title": "ClaudeCoach: 测试当前 AI 配置"
+      },
+      {
+        "command": "claudeCoach.syncFromClaude",
+        "title": "ClaudeCoach: 从 .claude 同步配置"
+      },
+      {
+        "command": "claudeCoach.syncFromCodex",
+        "title": "ClaudeCoach: 从 .codex 同步配置"
+      }
+    ],
+    "configuration": {
+      "title": "ClaudeCoach",
+      "properties": {
+        "claudeCoach.apiProvider": {
+          "type": "string",
+          "default": "openai",
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "description": "旧版单套 AI 配置的 provider，首次迁移时会转成默认 profile。"
+        },
+        "claudeCoach.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "旧版单套 AI 配置的 OpenAI 兼容 Base URL。"
+        },
+        "claudeCoach.anthropicBaseUrl": {
+          "type": "string",
+          "default": "https://api.anthropic.com",
+          "description": "旧版单套 AI 配置的 Anthropic Base URL。"
+        },
+        "claudeCoach.apiToken": {
+          "type": "string",
+          "default": "",
+          "description": "旧版单套 AI 配置的 Token。首次迁移后会复制到默认 profile。"
+        },
+        "claudeCoach.model": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "旧版单套 AI 配置的模型名称。"
+        },
+        "claudeCoach.modelContextWindow": {
+          "type": "number",
+          "default": 128000,
+          "description": "旧版单套 AI 配置的上下文窗口大小。"
+        },
+        "claudeCoach.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "旧版单套 AI 配置的默认输出 token 上限。"
+        },
+        "claudeCoach.workspaceAI": {
+          "type": "object",
+          "default": {
+            "enabled": false
+          },
+          "description": "当前工作区的 AI 配置覆盖。"
+        },
+        "claudeCoach.dataDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "数据存储目录，留空则使用 ~/ClaudeCoach/courses。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  }
+}
