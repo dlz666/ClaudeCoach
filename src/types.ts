@@ -257,52 +257,6 @@ export interface MaterialSummary {
 
 export type ChatGroundingMode = 'general' | 'course' | 'material';
 
-export type OutlineRebuildMode = 'full' | 'partial';
-
-export interface OutlineRebuildSelection {
-  startIndex: number;
-  endIndex: number;
-}
-
-export interface OutlineRebuildPreviewRequest {
-  subject: Subject;
-  mode: OutlineRebuildMode;
-  selection?: OutlineRebuildSelection;
-  instruction?: string;
-  materialIds?: string[];
-}
-
-export interface OutlineRebuildApplyRequest {
-  previewId: string;
-}
-
-export interface OutlineRebuildImpactSummary {
-  titleChanged: boolean;
-  oldTitle: string;
-  newTitle: string;
-  oldTopicCount: number;
-  newTopicCount: number;
-  replacedTopicCount: number;
-  replacementTopicCount: number;
-  affectedRangeLabel?: string;
-  clearedTopicTitles: string[];
-  renumberedTopicTitles: string[];
-  selectedMaterialTitles: string[];
-  instruction?: string;
-}
-
-export interface OutlineRebuildPreviewResult {
-  previewId: string;
-  subject: Subject;
-  mode: OutlineRebuildMode;
-  outline: CourseOutline;
-  impact: OutlineRebuildImpactSummary;
-  selection?: OutlineRebuildSelection;
-  materialIds: string[];
-  materialTitles: string[];
-  instruction?: string;
-}
-
 // ===== Token Budget =====
 export interface TokenBudget {
   modelContextWindow: number;
@@ -315,8 +269,6 @@ export interface TokenBudget {
 export type SidebarCommand =
   | { type: 'generateCourse'; subject: Subject }
   | { type: 'rebuildCourseOutline'; subject: Subject; materialId?: string }
-  | { type: 'previewRebuildCourseOutline'; request: OutlineRebuildPreviewRequest }
-  | { type: 'applyRebuildCourseOutline'; request: OutlineRebuildApplyRequest }
   | { type: 'generateLesson'; topicId: string; lessonId: string }
   | { type: 'generateExercises'; lessonId: string; count: number }
   | { type: 'openOrGenerateLesson'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; difficulty: number }
@@ -349,8 +301,6 @@ export type SidebarCommand =
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
   | { type: 'courseGenerated'; outline: CourseOutline }
-  | { type: 'outlineRebuildPreview'; data: OutlineRebuildPreviewResult }
-  | { type: 'outlineRebuildApplied'; previewId: string; mode: OutlineRebuildMode; outline: CourseOutline }
   | { type: 'gradeResult'; result: GradeResult }
   | { type: 'diagnosis'; data: LatestDiagnosis | null }
   | { type: 'preferences'; data: LearningPreferences }

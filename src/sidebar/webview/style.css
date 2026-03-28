@@ -22,40 +22,15 @@
   box-sizing: border-box;
 }
 
-html,
-body {
-  min-height: 100%;
-}
-
 body {
   margin: 0;
   padding: 0;
-  min-height: 100dvh;
-  overflow-x: hidden;
-  position: relative;
   color: var(--vscode-foreground);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--vscode-sideBar-background) 94%, black) 0%, var(--vscode-sideBar-background) 100%);
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--vscode-button-background) 16%, transparent), transparent 35%),
+    linear-gradient(180deg, color-mix(in srgb, var(--vscode-sideBar-background) 94%, black) 0%, var(--vscode-sideBar-background) 100%);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
-}
-
-.app-background {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--vscode-button-background) 16%, transparent), transparent 38%),
-    linear-gradient(180deg, transparent 0%, transparent 100%);
-  background-repeat: no-repeat;
-  background-position: top right, center;
-  background-size: min(72vw, 540px) min(72vw, 540px), cover;
-}
-
-.app-shell {
-  position: relative;
-  z-index: 1;
-  min-height: 100dvh;
 }
 
 .tabs {
@@ -118,9 +93,6 @@ body {
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--vscode-button-background) 20%, transparent), transparent 42%),
     linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 92%, transparent), color-mix(in srgb, var(--surface-2) 96%, transparent));
-  background-repeat: no-repeat;
-  background-position: top left, center;
-  background-size: 360px 240px, 100% 100%;
 }
 
 .ai-config-center-body {
@@ -1076,201 +1048,6 @@ textarea:focus,
   font-size: 12px;
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  padding: 14px;
-  background: rgba(5, 10, 18, 0.66);
-  backdrop-filter: blur(10px);
-}
-
-.modal-panel {
-  width: min(100%, 760px);
-  max-height: calc(100dvh - 28px);
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 98%, transparent), color-mix(in srgb, var(--surface-1) 98%, transparent));
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.36);
-  overflow: hidden;
-}
-
-.modal-header,
-.modal-section-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.modal-header {
-  padding: 18px 18px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.modal-body {
-  display: grid;
-  gap: 14px;
-  padding: 16px 18px 18px;
-  max-height: calc(100dvh - 120px);
-  overflow: auto;
-}
-
-.modal-section {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-}
-
-.section-label {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.segmented-group {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.segmented-btn {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-  color: var(--vscode-foreground);
-  cursor: pointer;
-  font-size: 12px;
-  transition: 120ms ease;
-}
-
-.segmented-btn:hover {
-  border-color: color-mix(in srgb, var(--vscode-button-background) 55%, var(--border));
-}
-
-.segmented-btn.active {
-  border-color: color-mix(in srgb, var(--vscode-button-background) 75%, var(--border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--vscode-button-background) 18%, transparent), color-mix(in srgb, var(--surface-1) 86%, transparent));
-}
-
-.selection-list {
-  display: grid;
-  gap: 8px;
-}
-
-.selection-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 10px;
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--surface-1) 76%, transparent);
-  color: var(--vscode-foreground);
-  text-align: left;
-  cursor: pointer;
-  transition: 120ms ease;
-}
-
-.selection-item:hover {
-  border-color: color-mix(in srgb, var(--vscode-button-background) 55%, var(--border));
-  transform: translateY(-1px);
-}
-
-.selection-item.selected {
-  border-color: color-mix(in srgb, var(--vscode-button-background) 76%, var(--border));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--vscode-button-background) 16%, transparent), color-mix(in srgb, var(--surface-1) 88%, transparent));
-}
-
-.selection-item.anchor {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f59e0b 60%, transparent);
-}
-
-.selection-item-main {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.selection-item-title {
-  font-weight: 700;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.selection-item-meta {
-  font-size: 11px;
-  line-height: 1.45;
-  opacity: 0.78;
-}
-
-.inline-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.impact-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.impact-card {
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-1) 80%, transparent);
-}
-
-.impact-card strong {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-}
-
-.preview-tree {
-  display: grid;
-  gap: 10px;
-}
-
-.preview-topic {
-  padding: 12px 13px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--surface-1) 76%, transparent);
-}
-
-.preview-topic-title {
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-
-.preview-topic ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.preview-topic li {
-  margin: 4px 0;
-  line-height: 1.5;
-}
-
-.error-text {
-  color: #ffb4b4;
-}
-
 @media (max-width: 480px) {
   .panel,
   .card {
@@ -1291,20 +1068,5 @@ textarea:focus,
   .actions-grid .btn,
   .actions-row .btn {
     flex-basis: 100%;
-  }
-
-  .modal-overlay {
-    padding: 8px;
-  }
-
-  .modal-header,
-  .modal-body {
-    padding-left: 14px;
-    padding-right: 14px;
-  }
-
-  .impact-grid,
-  .segmented-group {
-    grid-template-columns: 1fr;
   }
 }

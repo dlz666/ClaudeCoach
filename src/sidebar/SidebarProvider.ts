@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { createHash } from 'crypto';
 import { ContentGenerator } from '../courses/contentGenerator';
 import { Grader } from '../courses/grader';
 import { CourseManager } from '../courses/courseManager';
@@ -10,30 +9,11 @@ import { MaterialManager } from '../materials/materialManager';
 import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
 import { AdaptiveEngine } from '../progress/adaptiveEngine';
-import {
-  SidebarResponse,
-  ChatMessage,
-  MaterialEntry,
-  MaterialIndex,
-  MaterialPreview,
-  CourseOutline,
-  ChatGroundingMode,
-  AIProfile,
-  AIWorkspaceOverride,
-  LessonMeta,
-  OutlineRebuildApplyRequest,
-  OutlineRebuildImpactSummary,
-  OutlineRebuildMode,
-  OutlineRebuildPreviewRequest,
-  OutlineRebuildPreviewResult,
-  OutlineRebuildSelection,
-  Subject,
-  TopicOutline,
-} from '../types';
+import { SidebarResponse, ChatMessage, MaterialEntry, MaterialIndex, MaterialPreview, CourseOutline, ChatGroundingMode, AIProfile, AIWorkspaceOverride, LessonMeta, Subject, TopicOutline } from '../types';
 import { AIClient } from '../ai/client';
 import { AIProfileManager } from '../ai/profileManager';
 import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../ai/prompts';
-import { buildCourseSummaryMd, openMarkdownPreview, reprocessMarkdown, writeMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
+import { openMarkdownPreview, reprocessMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
 import { fileExists, ensureDir } from '../utils/fileSystem';
 import { getDataDirectory } from '../config';
 
@@ -61,20 +41,6 @@ interface MarkdownPatchResult {
   content: string;
 }
 
-interface OutlineRebuildPreviewCacheEntry {
-  previewId: string;
-  subject: Subject;
-  mode: OutlineRebuildMode;
-  selection?: OutlineRebuildSelection;
-  instruction?: string;
-  materialIds: string[];
-  materialTitles: string[];
-  sourceOutlineHash: string;
-  sourceOutline: CourseOutline;
-  previewOutline: CourseOutline;
-  impact: OutlineRebuildImpactSummary;
-}
-
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private contentGen = new ContentGenerator();
@@ -91,7 +57,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private chatHistory: ChatMessage[] = [];
   private lastOpenedLessonFile?: ChatEditTarget;
   private selectedMaterialId?: string;
-  private readonly outlineRebuildPreviews = new Map<string, OutlineRebuildPreviewCacheEntry>();
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -100,9 +65,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   ) {
     this.materialManager.onDidChangeIndex((index) => {
       this._post({ type: 'materials', data: index });
-      void this._refreshSelectedMaterialPreview(index).catch((error) => {
-        console.error('Failed to refresh material preview:', error);
-      });
+      void this._refreshSelectedMaterialPreview(index);
     });
   }
 
@@ -130,6 +93,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _refreshCourses() {
+    await this.courseManager.syncLessonStatuses();
     const courses = await this.courseManager.getAllCourses();
     this._post({ type: 'courses', data: courses });
   }
@@ -212,154 +176,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return summary.slice(0, 2500);
   }
 
-  private _normalizeMaterialIds(materialIds?: string[]): string[] {
-    return Array.from(new Set((materialIds ?? []).map((materialId) => String(materialId ?? '').trim()).filter(Boolean)));
-  }
-
-  private _optionalNonEmptyString(value: unknown): string | undefined {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    return normalized || undefined;
-  }
-
-  private _requireNonEmptyString(value: unknown, fieldName: string): string {
-    const normalized = this._optionalNonEmptyString(value);
-    if (!normalized) {
-      throw new Error(`Request is missing required field: ${fieldName}`);
-    }
-    return normalized;
-  }
-
-  private _requireLessonTarget(msg: any): {
-    subject: Subject;
-    topicId: string;
-    topicTitle?: string;
-    lessonId: string;
-    lessonTitle: string;
-  } {
-    return {
-      subject: this._requireNonEmptyString(msg?.subject, 'subject'),
-      topicId: this._requireNonEmptyString(msg?.topicId, 'topicId'),
-      topicTitle: this._optionalNonEmptyString(msg?.topicTitle),
-      lessonId: this._requireNonEmptyString(msg?.lessonId, 'lessonId'),
-      lessonTitle: this._optionalNonEmptyString(msg?.lessonTitle) ?? 'lesson',
-    };
-  }
-
-  private _requireMaterialEntryPath(entry: MaterialEntry, fieldName: 'filePath' | 'textPath'): string {
-    const value = this._optionalNonEmptyString(((entry as unknown) as Record<string, unknown>)[fieldName]);
-    if (!value) {
-      const materialLabel = this._optionalNonEmptyString(entry.fileName) ?? entry.id;
-      throw new Error(`Material entry "${materialLabel}" is missing ${fieldName}.`);
-    }
-    return value;
-  }
-
-  private _hashOutline(outline: CourseOutline): string {
-    return createHash('sha1')
-      .update(JSON.stringify(outline))
-      .digest('hex');
-  }
-
-  private _buildOutlineRebuildRangeLabel(outline: CourseOutline, selection?: OutlineRebuildSelection): string | undefined {
-    if (!selection) {
-      return undefined;
-    }
-
-    const startTopic = outline.topics[selection.startIndex];
-    const endTopic = outline.topics[selection.endIndex];
-    if (!startTopic || !endTopic) {
-      return undefined;
-    }
-
-    return `${selection.startIndex + 1}. ${startTopic.title} -> ${selection.endIndex + 1}. ${endTopic.title}`;
-  }
-
-  private _buildOutlineRebuildImpact(
-    oldOutline: CourseOutline,
-    newOutline: CourseOutline,
-    mode: OutlineRebuildMode,
-    selection: OutlineRebuildSelection | undefined,
-    materialTitles: string[],
-    instruction?: string,
-  ): OutlineRebuildImpactSummary {
-    const clearedTopicTitles = mode === 'full'
-      ? oldOutline.topics.map((topic) => topic.title)
-      : oldOutline.topics
-        .slice(selection?.startIndex ?? 0, (selection?.endIndex ?? -1) + 1)
-        .map((topic) => topic.title);
-
-    const renumberedTopicTitles: string[] = [];
-    if (mode === 'partial' && selection) {
-      const oldSelectedCount = selection.endIndex - selection.startIndex + 1;
-      const newSelectedCount = newOutline.topics.length - (oldOutline.topics.length - oldSelectedCount);
-
-      for (let oldIndex = selection.endIndex + 1; oldIndex < oldOutline.topics.length; oldIndex += 1) {
-        const newIndex = oldIndex - oldSelectedCount + newSelectedCount;
-        const oldTopic = oldOutline.topics[oldIndex];
-        const newTopic = newOutline.topics[newIndex];
-        if (!oldTopic || !newTopic) {
-          continue;
-        }
-        const lessonIdsChanged = oldTopic.lessons.some((lesson, lessonIndex) => lesson.id !== newTopic.lessons[lessonIndex]?.id);
-        if (oldTopic.id !== newTopic.id || lessonIdsChanged) {
-          renumberedTopicTitles.push(newTopic.title);
-        }
-      }
-    }
-
-    const replacedTopicCount = mode === 'full'
-      ? oldOutline.topics.length
-      : (selection ? selection.endIndex - selection.startIndex + 1 : 0);
-    const replacementTopicCount = mode === 'full'
-      ? newOutline.topics.length
-      : Math.max(0, newOutline.topics.length - (oldOutline.topics.length - replacedTopicCount));
-
-    return {
-      titleChanged: oldOutline.title !== newOutline.title,
-      oldTitle: oldOutline.title,
-      newTitle: newOutline.title,
-      oldTopicCount: oldOutline.topics.length,
-      newTopicCount: newOutline.topics.length,
-      replacedTopicCount,
-      replacementTopicCount,
-      affectedRangeLabel: this._buildOutlineRebuildRangeLabel(oldOutline, selection),
-      clearedTopicTitles,
-      renumberedTopicTitles,
-      selectedMaterialTitles: materialTitles,
-      instruction: String(instruction ?? '').trim() || undefined,
-    };
-  }
-
-  private _validateOutlineRebuildPreviewRequest(
-    request: OutlineRebuildPreviewRequest,
-    outline: CourseOutline,
-  ): OutlineRebuildSelection | undefined {
-    if (request.mode === 'full') {
-      return undefined;
-    }
-
-    const selection = request.selection;
-    if (!selection) {
-      throw new Error('Partial rebuild requires a topic range.');
-    }
-
-    if (
-      !Number.isInteger(selection.startIndex)
-      || !Number.isInteger(selection.endIndex)
-      || selection.startIndex < 0
-      || selection.endIndex < selection.startIndex
-      || selection.endIndex >= outline.topics.length
-    ) {
-      throw new Error('Invalid rebuild topic range.');
-    }
-
-    return selection;
-  }
-
   private async _buildSubjectGrounding(
     subject: string | undefined,
     query: string,
-    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number },
+    options?: { materialId?: string; maxExcerpts?: number },
   ): Promise<{
     currentCourseTitle?: string;
     courseOutlineSummary?: string;
@@ -373,9 +193,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const outline = await this.courseManager.getCourseOutline(subject);
-    const materialIds = options?.materialIds ?? (options?.materialId ? [options.materialId] : undefined);
     const grounding = await this.materialManager.buildGroundingContext(subject, query, {
-      materialIds,
+      materialId: options?.materialId,
       maxExcerpts: options?.maxExcerpts,
     });
 
@@ -412,156 +231,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     return this._buildSubjectGrounding(subject, message, {
-      materialIds: resolvedMode === 'material' && materialId ? [materialId] : undefined,
+      materialId: resolvedMode === 'material' ? materialId : undefined,
       maxExcerpts: resolvedMode === 'material' ? 5 : 4,
-    });
-  }
-
-  private async _resolveMaterialTitles(materialIds: string[]): Promise<string[]> {
-    const titles = await Promise.all(
-      materialIds.map(async (materialId) => (await this.materialManager.getMaterialById(materialId))?.fileName ?? null)
-    );
-    return titles.filter((title): title is string => !!title);
-  }
-
-  private async _previewCourseOutlineRebuild(request: OutlineRebuildPreviewRequest): Promise<void> {
-    const currentOutline = await this.courseManager.getCourseOutline(request.subject);
-    if (!currentOutline) {
-      throw new Error('Current course outline was not found.');
-    }
-
-    const selection = this._validateOutlineRebuildPreviewRequest(request, currentOutline);
-    const materialIds = this._normalizeMaterialIds(request.materialIds);
-    if (materialIds.length > 0) {
-      await this.materialManager.reconcileMaterials(undefined, { materialIds });
-    }
-
-    const [prefs, diag, profile, materialTitles] = await Promise.all([
-      this.prefsStore.get(),
-      this.adaptiveEngine.getLatestDiagnosis(request.subject),
-      this.progressStore.getProfile(),
-      this._resolveMaterialTitles(materialIds),
-    ]);
-
-    const grounding = await this._buildSubjectGrounding(
-      request.subject,
-      [currentOutline.title, request.instruction ?? '', 'course outline rebuild'].join(' ').trim(),
-      { materialIds, maxExcerpts: 6 },
-    );
-
-    const previewOutline = request.mode === 'full'
-      ? await this.contentGen.previewFullRebuild(request.subject, currentOutline, {
-          profile,
-          preferences: prefs,
-          diagnosis: diag,
-          ...grounding,
-        }, request.instruction)
-      : await this.contentGen.previewPartialRebuild(request.subject, currentOutline, selection!, {
-          profile,
-          preferences: prefs,
-          diagnosis: diag,
-          ...grounding,
-        }, request.instruction);
-
-    const previewId = `outline-preview-${Date.now()}`;
-    const impact = this._buildOutlineRebuildImpact(
-      currentOutline,
-      previewOutline,
-      request.mode,
-      selection,
-      materialTitles,
-      request.instruction,
-    );
-
-    const cacheEntry: OutlineRebuildPreviewCacheEntry = {
-      previewId,
-      subject: request.subject,
-      mode: request.mode,
-      selection,
-      instruction: String(request.instruction ?? '').trim() || undefined,
-      materialIds,
-      materialTitles,
-      sourceOutlineHash: this._hashOutline(currentOutline),
-      sourceOutline: currentOutline,
-      previewOutline,
-      impact,
-    };
-
-    this.outlineRebuildPreviews.set(previewId, cacheEntry);
-    const response: OutlineRebuildPreviewResult = {
-      previewId,
-      subject: request.subject,
-      mode: request.mode,
-      outline: previewOutline,
-      impact,
-      selection,
-      materialIds,
-      materialTitles,
-      instruction: cacheEntry.instruction,
-    };
-    this._post({ type: 'outlineRebuildPreview', data: response });
-    this._post({
-      type: 'log',
-      message: request.mode === 'full'
-        ? `Outline preview generated for ${currentOutline.title}`
-        : `Partial outline preview generated for ${currentOutline.title}`,
-      level: 'info',
-    });
-  }
-
-  private async _applyCourseOutlineRebuild(request: OutlineRebuildApplyRequest): Promise<void> {
-    const cacheEntry = this.outlineRebuildPreviews.get(request.previewId);
-    if (!cacheEntry) {
-      throw new Error('Preview expired or was not found. Please generate a new preview.');
-    }
-
-    const currentOutline = await this.courseManager.getCourseOutline(cacheEntry.subject);
-    if (!currentOutline) {
-      throw new Error('Current course outline was not found.');
-    }
-
-    if (this._hashOutline(currentOutline) !== cacheEntry.sourceOutlineHash) {
-      this.outlineRebuildPreviews.delete(request.previewId);
-      throw new Error('The course outline changed after preview. Please generate a new preview before applying.');
-    }
-
-    if (cacheEntry.mode === 'full') {
-      await this.courseManager.applyFullRebuild(cacheEntry.subject, cacheEntry.previewOutline);
-    } else {
-      await this.courseManager.applyPartialRebuild(
-        cacheEntry.subject,
-        currentOutline,
-        cacheEntry.previewOutline,
-        cacheEntry.selection!,
-      );
-    }
-
-    await writeMarkdown(
-      this.courseManager.getCourseSummaryPath(cacheEntry.subject),
-      buildCourseSummaryMd(cacheEntry.previewOutline.title, cacheEntry.previewOutline.topics),
-    );
-
-    this.outlineRebuildPreviews.delete(request.previewId);
-    this.lastOpenedLessonFile = undefined;
-    await this._refreshCourses();
-    this._post({
-      type: 'outlineRebuildApplied',
-      previewId: request.previewId,
-      mode: cacheEntry.mode,
-      outline: cacheEntry.previewOutline,
-    });
-    this._view?.webview.postMessage({
-      type: 'chatResponse',
-      content: cacheEntry.mode === 'full'
-        ? `已应用完整重构预览。\n\n- 课程标题：${cacheEntry.previewOutline.title}\n- 主题数量：${cacheEntry.previewOutline.topics.length}\n- 旧讲义与旧练习已按完整重构规则清理并重建结构`
-        : `已应用部分重构预览。\n\n- 课程标题保持为：${cacheEntry.previewOutline.title}\n- 当前主题数量：${cacheEntry.previewOutline.topics.length}\n- 选区旧内容已清理，未选区内容已按新编号迁移`,
-    });
-    this._post({
-      type: 'log',
-      message: cacheEntry.mode === 'full'
-        ? `Applied full outline rebuild for ${cacheEntry.previewOutline.title}`
-        : `Applied partial outline rebuild for ${cacheEntry.previewOutline.title}`,
-      level: 'info',
     });
   }
 
@@ -589,46 +260,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _buildMaterialPreview(entry: MaterialEntry): Promise<MaterialPreview> {
-    const filePath = this._requireMaterialEntryPath(entry, 'filePath');
-    const fileName = this._optionalNonEmptyString(entry.fileName) ?? path.basename(filePath);
-    const normalizedEntry = { ...entry, fileName, filePath } as MaterialEntry;
-    const ext = path.extname(fileName).toLowerCase();
+    const ext = path.extname(entry.fileName).toLowerCase();
 
     if (ext === '.md' || ext === '.markdown') {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return this._normalizeMaterialPreview(normalizedEntry, 'markdown', 'Markdown source', content);
-    }
-
-    if (ext === '.txt') {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return this._normalizeMaterialPreview(normalizedEntry, 'text', 'TXT source', content);
-    }
-
-    if (ext === '.pdf') {
-      const textPath = this._optionalNonEmptyString(entry.textPath);
-      if (textPath && await fileExists(textPath)) {
-        const content = await this.materialManager.ensureMaterialText({ ...normalizedEntry, textPath } as MaterialEntry);
-        return this._normalizeMaterialPreview(normalizedEntry, 'text', 'PDF extracted text', content);
-      }
-      return this._normalizeMaterialPreview(normalizedEntry, 'text', 'PDF', 'This PDF is still being processed. Please try again in a moment.');
-    }
-
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return this._normalizeMaterialPreview(normalizedEntry, 'text', 'Text preview', content);
-    } catch {
-      return this._normalizeMaterialPreview(normalizedEntry, 'text', 'File preview', 'This file type is not currently supported for inline preview.');
-    }
-  }
-
-  private async _buildMaterialPreviewLegacy(entry: MaterialEntry): Promise<MaterialPreview> {
-    const filePath = this._requireMaterialEntryPath(entry, 'filePath');
-    const fileName = this._optionalNonEmptyString(entry.fileName) ?? path.basename(filePath);
-    const normalizedEntry = { ...entry, fileName, filePath } as MaterialEntry;
-    const ext = path.extname(fileName).toLowerCase();
-
-    if (ext === '.md' || ext === '.markdown') {
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await fs.readFile(entry.filePath, 'utf-8');
       return this._normalizeMaterialPreview(entry, 'markdown', 'Markdown 原文', content);
     }
 
@@ -1029,13 +664,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     try {
       switch (msg.type) {
         case 'confirmDeleteCourse': {
-          const subject = this._requireNonEmptyString(msg.subject, 'subject');
           const choice = await vscode.window.showWarningMessage(
             `移除课程 "${msg.title}"（讲义和练习文件不会被删除）`,
             '移除', '取消'
           );
           if (choice === '移除') {
-            await this.courseManager.deleteCourse(subject);
+            await this.courseManager.deleteCourse(msg.subject);
             this._post({ type: 'log', message: `课程已移除：${msg.title}`, level: 'info' });
             await this._refreshCourses();
           }
@@ -1048,8 +682,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'generateCourse': {
-          const subject = this._requireNonEmptyString(msg.subject, 'subject');
-          const existingOutline = await this.courseManager.getCourseOutline(subject);
+          const existingOutline = await this.courseManager.getCourseOutline(msg.subject);
           if (existingOutline) {
             const choice = await vscode.window.showWarningMessage(
               `学科 "${existingOutline.title}" 已有课程大纲，是否重新生成？`,
@@ -1063,11 +696,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._startTask(msg.subject + ' 课程大纲', async () => {
             const [prefs, diag, profile] = await Promise.all([
               this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(subject),
+              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
-            const materialSummary = await this.materialManager.getRelevantSummary(subject, '');
-            const outline = await this.contentGen.generateCourse(subject, {
+            const materialSummary = await this.materialManager.getRelevantSummary(msg.subject, '');
+            const outline = await this.contentGen.generateCourse(msg.subject, {
               profile, preferences: prefs, diagnosis: diag, materialSummary,
             });
             this._post({ type: 'courseGenerated', outline });
@@ -1076,34 +709,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'previewRebuildCourseOutline': {
-          const request = (msg.request ?? {}) as OutlineRebuildPreviewRequest;
-          request.subject = this._requireNonEmptyString(request.subject, 'request.subject');
-          const outline = await this.courseManager.getCourseOutline(request.subject);
-          if (!outline) {
-            throw new Error('Current course outline was not found.');
-          }
-
-          this._startTask(`${outline.title} Outline Preview`, async () => {
-            await this._previewCourseOutlineRebuild(request);
-          });
-          break;
-        }
-
-        case 'applyRebuildCourseOutline': {
-          const request = (msg.request ?? {}) as OutlineRebuildApplyRequest;
-          request.previewId = this._requireNonEmptyString(request.previewId, 'request.previewId');
-          const preview = this.outlineRebuildPreviews.get(request.previewId);
-          const taskLabel = preview ? `${preview.previewOutline.title} Apply Outline Rebuild` : 'Apply Outline Rebuild';
-          this._startTask(taskLabel, async () => {
-            await this._applyCourseOutlineRebuild(request);
-          });
-          break;
-        }
-
         case 'rebuildCourseOutline': {
-          const subject = this._requireNonEmptyString(msg.subject, 'subject');
-          const currentOutline = await this.courseManager.getCourseOutline(subject);
+          const currentOutline = await this.courseManager.getCourseOutline(msg.subject);
           if (!currentOutline) {
             throw new Error('当前学科还没有课程大纲，无法重构');
           }
@@ -1111,16 +718,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._startTask(currentOutline.title + ' 大纲重构', async () => {
             const [prefs, diag, profile] = await Promise.all([
               this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(subject),
+              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
             const grounding = await this._buildSubjectGrounding(
-              subject,
+              msg.subject,
               [currentOutline.title, '重构课程大纲'].join(' '),
               { materialId: msg.materialId, maxExcerpts: 6 },
             );
 
-            const rebuilt = await this.contentGen.rebuildCourse(subject, currentOutline, {
+            const rebuilt = await this.contentGen.rebuildCourse(msg.subject, currentOutline, {
               profile,
               preferences: prefs,
               diagnosis: diag,
@@ -1140,11 +747,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case 'openOrGenerateLesson':
         case 'generateLesson': {
-          const lessonTarget = this._requireLessonTarget(msg);
-          const lessonPath = this.courseManager.getLessonPath(lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId);
+          const lessonPath = this.courseManager.getLessonPath(msg.subject, msg.topicId, msg.lessonId);
           const lessonExists = await fileExists(lessonPath);
           if (lessonExists && msg.type === 'openOrGenerateLesson') {
-            this._rememberLessonTarget(lessonTarget.subject, lessonTarget.topicId, lessonTarget.topicTitle, lessonTarget.lessonId, lessonTarget.lessonTitle);
+            this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
             await openMarkdownPreview(lessonPath);
             break;
           }
@@ -1154,7 +760,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               '打开现有', '重新生成', '取消'
             );
             if (choice === '打开现有') {
-              this._rememberLessonTarget(lessonTarget.subject, lessonTarget.topicId, lessonTarget.topicTitle, lessonTarget.lessonId, lessonTarget.lessonTitle);
+              this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
               await openMarkdownPreview(lessonPath);
               break;
             }
@@ -1163,19 +769,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._startTask(msg.lessonTitle + ' 讲义', async () => {
             const [prefs, diag, profile] = await Promise.all([
               this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(lessonTarget.subject),
+              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
             const grounding = await this._buildSubjectGrounding(
-              lessonTarget.subject,
+              msg.subject,
               [msg.topicTitle, msg.lessonTitle, '讲义'].filter(Boolean).join(' '),
               { maxExcerpts: 5 },
             );
             await this.contentGen.generateLesson(
-              lessonTarget.subject, lessonTarget.topicId, lessonTarget.topicTitle ?? '', lessonTarget.lessonId, lessonTarget.lessonTitle, msg.difficulty,
+              msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle, msg.difficulty,
               { profile, preferences: prefs, diagnosis: diag, ...grounding },
             );
-            this._rememberLessonTarget(lessonTarget.subject, lessonTarget.topicId, lessonTarget.topicTitle, lessonTarget.lessonId, lessonTarget.lessonTitle);
+            this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
             this._post({ type: 'log', message: `讲义已生成：${msg.lessonTitle}`, level: 'info' });
             const courses = await this.courseManager.getAllCourses();
             this._post({ type: 'courses', data: courses });
@@ -1184,10 +790,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'openLessonContent': {
-          const lessonTarget = this._requireLessonTarget(msg);
-          const lPath = this.courseManager.getLessonPath(lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId);
+          const lPath = this.courseManager.getLessonPath(msg.subject, msg.topicId, msg.lessonId);
           if (await fileExists(lPath)) {
-            this._rememberLessonTarget(lessonTarget.subject, lessonTarget.topicId, lessonTarget.topicTitle, lessonTarget.lessonId, lessonTarget.lessonTitle);
+            this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
             await openMarkdownPreview(lPath);
           } else {
             vscode.window.showInformationMessage('该小节尚未生成讲义，请点击“讲义”按钮生成。');
@@ -1197,9 +802,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case 'openOrGenerateExercises':
         case 'generateExercises': {
-          const lessonTarget = this._requireLessonTarget(msg);
-          const expectedSessionId = await this.courseManager.getDeterministicSessionId(lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId);
-          const expectedPath = this.courseManager.getExercisePath(lessonTarget.subject, lessonTarget.topicId, expectedSessionId);
+          const expectedSessionId = await this.courseManager.getDeterministicSessionId(msg.subject, msg.topicId, msg.lessonId);
+          const expectedPath = this.courseManager.getExercisePath(msg.subject, msg.topicId, expectedSessionId);
 
           if (msg.type === 'openOrGenerateExercises') {
             if (await fileExists(expectedPath)) {
@@ -1217,16 +821,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._startTask(msg.lessonTitle + ' 练习', async () => {
             const [prefs, diag, profile] = await Promise.all([
               this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(lessonTarget.subject),
+              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
             const grounding = await this._buildSubjectGrounding(
-              lessonTarget.subject,
+              msg.subject,
               [msg.topicTitle, msg.lessonTitle, '练习题'].filter(Boolean).join(' '),
               { maxExcerpts: 5 },
             );
             await this.contentGen.generateExercises(
-              lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId, lessonTarget.lessonTitle, msg.count, msg.difficulty,
+              msg.subject, msg.topicId, msg.lessonId, msg.lessonTitle, msg.count, msg.difficulty,
               { profile, preferences: prefs, diagnosis: diag, ...grounding },
             );
             await this.progressStore.incrementSession();
@@ -1237,9 +841,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'resetLessonProgress': {
-          const lessonTarget = this._requireLessonTarget(msg);
           this._startTask(msg.lessonTitle + ' 重置', async () => {
-            await this.courseManager.resetLessonProgress(lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId);
+            await this.courseManager.resetLessonProgress(msg.subject, msg.topicId, msg.lessonId);
             await this._refreshCourses();
             this._post({ type: 'log', message: `已重置：${msg.lessonTitle}`, level: 'info' });
           });
@@ -1247,8 +850,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'markLessonCompleted': {
-          const lessonTarget = this._requireLessonTarget(msg);
-          await this.courseManager.markLessonCompleted(lessonTarget.subject, lessonTarget.topicId, lessonTarget.lessonId);
+          await this.courseManager.markLessonCompleted(msg.subject, msg.topicId, msg.lessonId);
           await this._refreshCourses();
           this._post({ type: 'log', message: `已标记完成：${msg.lessonTitle}`, level: 'info' });
           break;
@@ -1326,16 +928,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'renameCourse': {
-          const subject = this._requireNonEmptyString(msg.subject, 'subject');
           const newTitle = await vscode.window.showInputBox({
             prompt: '输入新的课程标题',
             value: msg.currentTitle,
           });
           if (newTitle && newTitle !== msg.currentTitle) {
-            const outline = await this.courseManager.getCourseOutline(subject);
+            const outline = await this.courseManager.getCourseOutline(msg.subject);
             if (outline) {
               outline.title = newTitle;
-              await this.courseManager.saveCourseOutline(subject, outline);
+              await this.courseManager.saveCourseOutline(msg.subject, outline);
               this._post({ type: 'log', message: `课程已重命名：${newTitle}`, level: 'info' });
               const courses = await this.courseManager.getAllCourses();
               this._post({ type: 'courses', data: courses });
@@ -1443,10 +1044,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'importMaterial': {
-          const subject = this._requireNonEmptyString(msg.subject, 'subject');
-          const entry = await this.materialManager.importMaterial(subject);
+          const entry = await this.materialManager.importMaterial(msg.subject);
           if (entry) {
-            this._reconcileMaterialsInBackground(subject, entry.id);
+            this._reconcileMaterialsInBackground(msg.subject, entry.id);
           }
           if (entry) {
             this._post({ type: 'log', message: `资料已导入：${entry.fileName}`, level: 'info' });
@@ -1464,8 +1064,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'deleteMaterial': {
-          const materialId = this._requireNonEmptyString(msg.materialId, 'materialId');
-          await this.materialManager.deleteMaterial(materialId);
+          await this.materialManager.deleteMaterial(msg.materialId);
           const suffix = msg.fileName ? `：${msg.fileName}` : '';
           this._post({ type: 'log', message: `资料已删除${suffix}`, level: 'info' });
           const updatedIndex = await this.materialManager.getIndex();
@@ -1474,7 +1073,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'requestDeleteMaterial': {
-          const materialId = this._requireNonEmptyString(msg.materialId, 'materialId');
           const fileName = String(msg.fileName ?? '资料');
           const choice = await vscode.window.showWarningMessage(
             `确认删除资料 "${fileName}"？`,
@@ -1485,7 +1083,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             break;
           }
 
-          await this.materialManager.deleteMaterial(materialId);
+          await this.materialManager.deleteMaterial(msg.materialId);
           this._post({ type: 'log', message: `资料已删除：${fileName}`, level: 'info' });
           const updatedIndex = await this.materialManager.getIndex();
           this._post({ type: 'materials', data: updatedIndex });
@@ -1511,17 +1109,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'openFile': {
-          const filePath = this._requireNonEmptyString(msg.filePath, 'filePath');
-          const uri = vscode.Uri.file(filePath);
+          const uri = vscode.Uri.file(msg.filePath);
           await vscode.commands.executeCommand('markdown.showPreview', uri);
           break;
         }
 
         case 'previewMaterial': {
-          const materialId = this._requireNonEmptyString(msg.materialId, 'materialId');
-          this.selectedMaterialId = materialId;
+          this.selectedMaterialId = msg.materialId;
           const index = await this.materialManager.getIndex();
-          const entry = index.materials.find((item) => item.id === materialId);
+          const entry = index.materials.find((item) => item.id === msg.materialId);
           if (!entry) {
             this._post({ type: 'error', message: '未找到要预览的资料文件。' });
             break;
