@@ -1,58 +1,13 @@
-import { ChatMessage, Subject, LearningPreferences, LatestDiagnosis, StudentProfile, CourseOutline, subjectLabel } from '../types';
-
-function preferencesContext(prefs: LearningPreferences | null): string {
-  if (!prefs) { return ''; }
-
-  const diffLabel: Record<string, string> = {
-    beginner: '入门',
-    basic: '基础',
-    intermediate: '进阶',
-    challenge: '挑战',
-  };
-  const langLabel: Record<string, string> = {
-    zh: '中文',
-    en: '英文',
-    mixed: '中英混合（术语英文，解释中文）',
-  };
-  const speedLabel: Record<string, string> = {
-    slow: '慢速（多复习）',
-    medium: '中速',
-    fast: '快速',
-  };
-
-  return `
-学生偏好设置：
-- 整体难度：${diffLabel[prefs.difficulty.global] ?? prefs.difficulty.global}
-- 练习难度分布：简单 ${prefs.difficulty.exerciseMix.easy}% / 中等 ${prefs.difficulty.exerciseMix.medium}% / 困难 ${prefs.difficulty.exerciseMix.hard}%
-- 学习速度：${speedLabel[prefs.pace.speed] ?? prefs.pace.speed}
-- 每次练习数量：${prefs.pace.exercisesPerSession} 题
-- 内容语言：${langLabel[prefs.language.content] ?? prefs.language.content}
-- 代码注释语言：${langLabel[prefs.language.codeComments] ?? prefs.language.codeComments}
-`;
-}
-
-function diagnosisContext(diag: LatestDiagnosis | null): string {
-  if (!diag) { return ''; }
-
-  let ctx = `\n最新学习诊断（${diag.updatedAt}）：\n整体策略：${diag.overallStrategy}\n`;
-  for (const snapshot of diag.subjectSnapshots) {
-    ctx += `- ${snapshot.subject}：掌握度 ${snapshot.mastery}% ，趋势 ${snapshot.recentTrend}`;
-    if (snapshot.topWeaknesses.length) {
-      ctx += `，薄弱点：${snapshot.topWeaknesses.join('、')}`;
-    }
-    ctx += '\n';
-  }
-  return ctx;
-}
-
-function profileContext(profile: StudentProfile | null): string {
-  if (!profile) {
-    return '学生：计算机专业大一新生\n';
-  }
-
-  const goals = profile.goals.length ? profile.goals.join('、') : '暂无明确目标';
-  return `学生：${profile.name}，水平 ${profile.level}，目标：${goals}，已完成 ${profile.totalExercises} 道练习\n`;
-}
+import {
+  ChatMessage,
+  Subject,
+  LearningPreferences,
+  LatestDiagnosis,
+  StudentProfile,
+  CourseOutline,
+  OutlineRebuildSelection,
+  subjectLabel,
+} from '../types';
 
 interface PromptContext {
   profile?: StudentProfile | null;
@@ -66,249 +21,311 @@ interface PromptContext {
   selectedMaterialTitle?: string;
 }
 
-function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, count: number): string {
-  const lines: string[] = [
-    `练习生成要求：请按学生画像做个性化出题，不要只生成通用模板题。`,
-    `目标题量：${count} 题，目标中心难度：${difficulty}/5。`,
-    '如果资料中提供了课后习题、章末习题、复习题或例题，请优先参考它们的考点分布、题型结构和表述风格，但必须重新组织题面，不能照抄原题。',
-    '题组内部尽量形成梯度：先基础理解，再方法应用，再综合变式；如果题量较少，也至少保持由浅入深。',
-  ];
-
-  if (ctx.profile) {
-    lines.push(`请结合学生当前水平“${ctx.profile.level}”、学习目标“${ctx.profile.goals.join('、') || '暂无明确目标'}”和已完成练习量 ${ctx.profile.totalExercises} 题，调整题目的脚手架程度、应用场景和综合性。`);
+function preferencesContext(prefs: LearningPreferences | null): string {
+  if (!prefs) {
+    return '';
   }
 
-  if (ctx.preferences) {
-    lines.push(`请遵循学生的学习偏好：整体难度 ${ctx.preferences.difficulty.global}，节奏 ${ctx.preferences.pace.speed}，单次练习数量偏好 ${ctx.preferences.pace.exercisesPerSession} 题。`);
-    if (ctx.preferences.pace.speed === 'slow') {
-      lines.push('由于学生偏好慢速推进，请让至少一半题目更强调分步思考、概念辨析或中间步骤。');
-    }
-    if (ctx.preferences.difficulty.global === 'challenge' || difficulty >= 4) {
-      lines.push('请至少包含 1 道更强调迁移、综合或开放性思考的题目。');
-    }
-    if (ctx.preferences.difficulty.global === 'beginner' || ctx.preferences.difficulty.global === 'basic') {
-      lines.push('请避免题面过度跳步，基础题要清楚覆盖定义、判定条件和基本方法。');
-    }
-  }
-
-  const weaknesses = ctx.diagnosis?.subjectSnapshots.flatMap(snapshot => snapshot.topWeaknesses).filter(Boolean) ?? [];
-  if (weaknesses.length) {
-    lines.push(`请优先覆盖这些近期薄弱点：${Array.from(new Set(weaknesses)).slice(0, 5).join('、')}。`);
-  }
-
-  return `\n${lines.map(line => `- ${line}`).join('\n')}`;
-}
-
-function buildSystemBase(ctx: PromptContext): string {
-  let sys = '你是一位经验丰富、耐心清晰的大学老师，正在辅导一位计算机专业大一学生。\n';
-  sys += profileContext(ctx.profile ?? null);
-  sys += preferencesContext(ctx.preferences ?? null);
-  sys += diagnosisContext(ctx.diagnosis ?? null);
-
-  if (ctx.currentCourseTitle) {
-    sys += `\n当前选中的课程：${ctx.currentCourseTitle}\n`;
-  }
-
-  if (ctx.courseOutlineSummary) {
-    sys += `\n当前课程大纲：\n${ctx.courseOutlineSummary}\n`;
-  }
-
-  if (ctx.selectedMaterialTitle) {
-    sys += `\n当前锁定资料：${ctx.selectedMaterialTitle}\n`;
-  }
-
-  if (ctx.materialSummary) {
-    sys += `\n资料摘要：\n${ctx.materialSummary}\n`;
-  }
-
-  if (ctx.materialExerciseSummary) {
-    sys += `\n资料中的参考习题与题型：\n${ctx.materialExerciseSummary}\n`;
-  }
-
-  if (ctx.retrievedExcerpts) {
-    sys += `\n与当前问题最相关的资料片段：\n${ctx.retrievedExcerpts}\n`;
-    sys += '以上资料摘要和资料片段就是你当前已经“看过”的资料库内容。除非用户要求逐字引用原文、读取尚未导入的文件，或者查看外部系统里的新资料，否则不要说你看不到资料库。';
-    sys += '\n如果你的回答明显依赖某份资料，请尽量在答案末尾列出“参考资料：文件名”。';
-  }
-
-  sys += `\n\n数学公式格式规则（必须严格遵守）：
-- 行内公式使用单个美元符号，例如 $x^2+1$，不要在美元符号内侧加空格。
-- 独立公式使用双美元符号，并单独占一行，前后各空一行。
-- 不要用 $ 包裹中文说明文字，中文直接写在正文里。`;
-
-  sys += '\nHard math formatting rules: single-dollar inline math must open and close on the same physical line. Never output delimiter-adjacent prose such as "记作$" or "$存在"; write prose and math with spaces, e.g. "记作 $S_n=...$" and "$\\lim_{n\\to\\infty}S_n=S$ 存在". Never let list markers, punctuation, or Chinese prose share a dangling single "$". Use $$...$$ only for standalone display equations.';
-
-  return sys;
-}
-
-export function courseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
-  const subjectName = subjectLabel(subject);
   return [
-    {
-      role: 'system',
-      content: buildSystemBase(ctx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
-{
-  "title": "课程标题",
-  "topics": [
-    {
-      "id": "topic-01",
-      "title": "主题名称",
-      "lessons": [
-        { "id": "lesson-01", "title": "课名", "difficulty": 1 }
-      ]
-    }
-  ]
-}
-要求：
-- 包含 5 到 8 个主题
-- 每个主题 3 到 5 节课
-- difficulty 从 1 到 5 逐步递进
-- 只输出 JSON，不要额外解释`,
-    },
-    { role: 'user', content: `请为“${subjectName}”生成课程大纲。` },
-  ];
+    'Learning preferences:',
+    `- Global difficulty: ${prefs.difficulty.global}`,
+    `- Exercise mix: easy ${prefs.difficulty.exerciseMix.easy}%, medium ${prefs.difficulty.exerciseMix.medium}%, hard ${prefs.difficulty.exerciseMix.hard}%`,
+    `- Pace: ${prefs.pace.speed}`,
+    `- Exercises per session: ${prefs.pace.exercisesPerSession}`,
+    `- Content language: ${prefs.language.content}`,
+    `- Code comment language: ${prefs.language.codeComments}`,
+  ].join('\n');
 }
 
-export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: CourseOutline, ctx: PromptContext): ChatMessage[] {
-  const subjectName = subjectLabel(subject);
-  const currentOutlineJson = JSON.stringify({
-    title: currentOutline.title,
-    topics: currentOutline.topics.map(topic => ({
+function diagnosisContext(diag: LatestDiagnosis | null): string {
+  if (!diag) {
+    return '';
+  }
+
+  const lines = [
+    `Latest diagnosis at ${diag.updatedAt}:`,
+    `- Overall strategy: ${diag.overallStrategy}`,
+  ];
+
+  for (const snapshot of diag.subjectSnapshots) {
+    lines.push(
+      `- ${snapshot.subject}: mastery ${snapshot.mastery}%, trend ${snapshot.recentTrend}, weaknesses ${snapshot.topWeaknesses.join(', ') || 'none'}`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+function profileContext(profile: StudentProfile | null): string {
+  if (!profile) {
+    return 'Student profile: first-year computer science student.\n';
+  }
+
+  return [
+    `Student profile: ${profile.name}`,
+    `- Level: ${profile.level}`,
+    `- Goals: ${profile.goals.join(', ') || 'none'}`,
+    `- Total exercises completed: ${profile.totalExercises}`,
+  ].join('\n');
+}
+
+function serializeOutlineForRebuild(outline: CourseOutline): string {
+  return JSON.stringify({
+    title: outline.title,
+    topics: outline.topics.map((topic) => ({
       id: topic.id,
+      code: topic.code,
       title: topic.title,
-      lessons: topic.lessons.map(lesson => ({
+      lessons: topic.lessons.map((lesson) => ({
         id: lesson.id,
+        code: lesson.code,
         title: lesson.title,
         difficulty: lesson.difficulty,
       })),
     })),
   }, null, 2);
-
-  return [
-    {
-      role: 'system',
-      content: buildSystemBase(ctx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次完整重构。
-输出纯 JSON，格式如下：
-{
-  "title": "课程标题",
-  "topics": [
-    {
-      "id": "topic-01",
-      "title": "主题名称",
-      "lessons": [
-        { "id": "lesson-01", "title": "课名", "difficulty": 1 }
-      ]
-    }
-  ]
 }
-要求：
-- 只输出 JSON，不要额外解释
-- 这是一次完全重构，旧大纲、旧讲义、旧练习会被清空后再写入新结构，不需要保留原有 topic id 和 lesson id
-- 你可以大胆删除、重排、合并、拆分原有主题和课时，只要新的结构更合理
-- 保持结构清晰，主题顺序合理
-- difficulty 使用 1 到 5
-- 如果资料显示当前大纲缺失关键内容，可以补充；如果内容重复或顺序不合理，可以直接重写`,
-    },
-    {
-      role: 'user',
-      content: `当前课程标题：${currentOutline.title}\n\n当前课程大纲 JSON：\n${currentOutlineJson}\n\n请在参考现有课程结构的基础上，输出一份“完全重构后”的新课程大纲 JSON。`,
-    },
+
+function buildOptionalRebuildInstruction(instruction?: string): string {
+  const trimmed = String(instruction ?? '').trim();
+  return trimmed || 'No extra user instruction.';
+}
+
+function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, count: number): string {
+  const lines = [
+    `Generate ${count} exercises centered around difficulty ${difficulty}/5.`,
+    'Personalize the set to the student instead of producing a generic worksheet.',
+    'If the reference materials contain after-class exercises, review questions, worked examples, or end-of-chapter problems, borrow their distribution and style but do not copy wording.',
+    'Keep the set progressive: foundational understanding first, then application, then synthesis when appropriate.',
   ];
+
+  if (ctx.profile) {
+    lines.push(`Adjust scaffolding and challenge for level ${ctx.profile.level}.`);
+  }
+
+  if (ctx.preferences) {
+    lines.push(`Respect the learner pace ${ctx.preferences.pace.speed} and preferred session size ${ctx.preferences.pace.exercisesPerSession}.`);
+  }
+
+  const weaknesses = ctx.diagnosis?.subjectSnapshots.flatMap((snapshot) => snapshot.topWeaknesses).filter(Boolean) ?? [];
+  if (weaknesses.length) {
+    lines.push(`Prioritize these recent weak spots: ${Array.from(new Set(weaknesses)).slice(0, 5).join(', ')}.`);
+  }
+
+  return lines.map((line) => `- ${line}`).join('\n');
+}
+
+function buildSystemBase(ctx: PromptContext): string {
+  const sections: string[] = [
+    'You are a patient, rigorous university tutor helping a beginner-level computer science student.',
+    profileContext(ctx.profile ?? null),
+    preferencesContext(ctx.preferences ?? null),
+    diagnosisContext(ctx.diagnosis ?? null),
+  ].filter(Boolean);
+
+  if (ctx.currentCourseTitle) {
+    sections.push(`Current course title:\n${ctx.currentCourseTitle}`);
+  }
+
+  if (ctx.courseOutlineSummary) {
+    sections.push(`Current course outline summary:\n${ctx.courseOutlineSummary}`);
+  }
+
+  if (ctx.selectedMaterialTitle) {
+    sections.push(`Pinned reference material:\n${ctx.selectedMaterialTitle}`);
+  }
+
+  if (ctx.materialSummary) {
+    sections.push(`Reference material summary:\n${ctx.materialSummary}`);
+  }
+
+  if (ctx.materialExerciseSummary) {
+    sections.push(`Reference exercise summary:\n${ctx.materialExerciseSummary}`);
+  }
+
+  if (ctx.retrievedExcerpts) {
+    sections.push(`Retrieved material excerpts:\n${ctx.retrievedExcerpts}`);
+  }
+
+  sections.push([
+    'Markdown and math formatting rules:',
+    '- Inline math must use $...$ on a single physical line.',
+    '- Display math must use $$...$$ on its own lines.',
+    '- Never output a standalone "=" line; merge "=" onto the previous formula line.',
+    '- Never leave dangling "$" markers or broken math fences.',
+  ].join('\n'));
+
+  return sections.join('\n\n');
+}
+
+export function courseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
+  return strictCourseOutlinePrompt(subject, ctx);
+}
+
+export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: CourseOutline, ctx: PromptContext): ChatMessage[] {
+  return strictRebuildCourseOutlinePrompt(subject, currentOutline, ctx);
 }
 
 export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
+
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
+      content: buildSystemBase(ctx) + `\nCreate a structured course outline for "${subjectName}" and return JSON only in this shape:
 {
   "title": "课程标题",
   "topics": [
     {
-      "id": "topic-01",
-      "title": "主题名称",
+      "title": "主题标题",
       "lessons": [
-        { "id": "lesson-01", "title": "课时名称", "difficulty": 1 }
+        { "title": "课时标题", "difficulty": 1 }
       ]
     }
   ]
 }
-要求：
-- 包含 5 到 8 个主题
-- 每个主题 3 到 5 节课
-- 课程标题 主题标题 课时标题必须全中文
-- 无论学生内容语言偏好是什么 大纲标题都必须全中文
-- 大纲标题只能写一个短句
-- 不要出现公式
-- 不要出现 LaTeX
-- 不要出现英文字母
-- 不要出现阿拉伯数字
-- 不要使用逗号 句号 顿号 分号 冒号 括号 斜杠 连字符等标点
-- 标题只表达一个核心概念 保持干练
-- 大纲只负责列课程结构 不要在标题里展开解释
-- difficulty 使用 1 到 5 逐步递进
-- 只输出 JSON 不要额外解释`,
+
+Rules:
+- Include 5 to 8 topics.
+- Each topic should have 3 to 5 lessons.
+- Course / topic / lesson titles must be concise Chinese only.
+- Do not use formulas, LaTeX, English letters, digits, or punctuation in titles.
+- Keep the structure progressive and coherent.
+- Use lesson difficulty values from 1 to 5.
+- Output JSON only.`,
     },
     {
       role: 'user',
-      content: `请为“${subjectName}”生成课程大纲`,
+      content: `Generate the course outline JSON for "${subjectName}".`,
     },
   ];
 }
 
 export function strictRebuildCourseOutlinePrompt(subject: Subject, currentOutline: CourseOutline, ctx: PromptContext): ChatMessage[] {
+  return strictFullRebuildCourseOutlinePrompt(subject, currentOutline, ctx);
+}
+
+export function strictFullRebuildCourseOutlinePrompt(
+  subject: Subject,
+  currentOutline: CourseOutline,
+  ctx: PromptContext,
+  instruction?: string,
+): ChatMessage[] {
   const subjectName = subjectLabel(subject);
-  const currentOutlineJson = JSON.stringify({
-    title: currentOutline.title,
-    topics: currentOutline.topics.map(topic => ({
-      id: topic.id,
-      title: topic.title,
-      lessons: topic.lessons.map(lesson => ({
-        id: lesson.id,
-        title: lesson.title,
-        difficulty: lesson.difficulty,
-      })),
-    })),
-  }, null, 2);
+  const currentOutlineJson = serializeOutlineForRebuild(currentOutline);
+  const userInstruction = buildOptionalRebuildInstruction(instruction);
 
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请基于当前课程大纲 资料摘要和命中的资料片段 对“${subjectName}”执行一次完整重构。输出纯 JSON，格式如下：
+      content: buildSystemBase(ctx) + `\nYou are generating a full course-outline rebuild for "${subjectName}".
+
+Return pure JSON only in this exact shape:
 {
   "title": "课程标题",
   "topics": [
     {
-      "id": "topic-01",
-      "title": "主题名称",
+      "title": "主题标题",
       "lessons": [
-        { "id": "lesson-01", "title": "课时名称", "difficulty": 1 }
+        { "title": "课时标题", "difficulty": 1 }
       ]
     }
   ]
 }
-要求：
-- 只输出 JSON 不要额外解释
-- 这是一次完全重构 旧大纲 旧讲义 旧练习会被清空后再写入新结构 不需要保留原 topic id 和 lesson id
-- 你可以大胆删除 重排 合并 拆分原有主题和课时 只要新的结构更合理
-- 保持结构清晰 主题顺序合理
-- 如果资料显示当前大纲缺少关键内容 可以补充
-- 如果内容重复或顺序不合理 可以直接重构
-- 课程标题 主题标题 课时标题必须全中文
-- 无论学生内容语言偏好是什么 大纲标题都必须全中文
-- 大纲标题只能写一个短句
-- 不要出现公式
-- 不要出现 LaTeX
-- 不要出现英文字母
-- 不要出现阿拉伯数字
-- 不要使用逗号 句号 顿号 分号 冒号 括号 斜杠 连字符等标点
-- 如果当前大纲里有英文 公式 或夹杂符号 需要在新大纲中改写成简洁中文标题
-- difficulty 使用 1 到 5`,
+
+Rules:
+- This is a full rebuild. Old outline artifacts can be cleared before apply.
+- You may reorder, merge, split, or remove topics and lessons when needed.
+- Course / topic / lesson titles must be concise Chinese only.
+- Do not output formulas, LaTeX, English letters, digits, or punctuation in titles.
+- Keep the progression coherent.
+- Use lesson difficulty values from 1 to 5.
+- Output JSON only.`,
     },
     {
       role: 'user',
-      content: `当前课程标题：${currentOutline.title}\n\n当前课程大纲 JSON：\n${currentOutlineJson}\n\n请输出一份完全重构后的新课程大纲 JSON`,
+      content: `Current course title: ${currentOutline.title}
+
+Current outline JSON:
+${currentOutlineJson}
+
+User instruction:
+${userInstruction}
+
+Generate the fully rebuilt course outline JSON now.`,
+    },
+  ];
+}
+
+export function strictPartialRebuildCourseOutlinePrompt(
+  subject: Subject,
+  currentOutline: CourseOutline,
+  selection: OutlineRebuildSelection,
+  ctx: PromptContext,
+  instruction?: string,
+): ChatMessage[] {
+  const subjectName = subjectLabel(subject);
+  const currentOutlineJson = serializeOutlineForRebuild(currentOutline);
+  const selectedTopicsJson = JSON.stringify(
+    currentOutline.topics.slice(selection.startIndex, selection.endIndex + 1).map((topic) => ({
+      id: topic.id,
+      code: topic.code,
+      title: topic.title,
+      lessons: topic.lessons.map((lesson) => ({
+        id: lesson.id,
+        code: lesson.code,
+        title: lesson.title,
+        difficulty: lesson.difficulty,
+      })),
+    })),
+    null,
+    2,
+  );
+  const userInstruction = buildOptionalRebuildInstruction(instruction);
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(ctx) + `\nYou are rebuilding only a selected continuous topic range for "${subjectName}".
+
+Return pure JSON only in this exact shape:
+{
+  "topics": [
+    {
+      "title": "主题标题",
+      "lessons": [
+        { "title": "课时标题", "difficulty": 1 }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Return replacement topics only, not the full course outline.
+- The course title must stay unchanged in partial mode.
+- The replacement may be shorter or longer than the original selected range.
+- Unselected topics before and after the range will be preserved by the app.
+- Topic / lesson titles must be concise Chinese only.
+- Do not output formulas, LaTeX, English letters, digits, or punctuation in titles.
+- Use lesson difficulty values from 1 to 5.
+- Output JSON only.`,
+    },
+    {
+      role: 'user',
+      content: `Course title (must stay unchanged): ${currentOutline.title}
+
+Selected range: topics ${selection.startIndex + 1} to ${selection.endIndex + 1}
+
+Full current outline JSON:
+${currentOutlineJson}
+
+Selected topics to replace:
+${selectedTopicsJson}
+
+User instruction:
+${userInstruction}
+
+Generate only the replacement topics JSON now.`,
     },
   ];
 }
@@ -317,15 +334,20 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请用 Markdown 写一篇详细讲义。
-要求：
-- 开头先写“关键概念摘要”
-- 包含循序渐进的讲解、例题和解析
-- 结尾加“练习预告”
-- 难度等级：${difficulty}/5
-- 多步推导时，每一步尽量独立展示，避免把太多推导挤在一个公式块里`,
+      content: buildSystemBase(ctx) + `\nWrite a complete lecture note in Markdown.
+
+Requirements:
+- Start with a short "Key Ideas" section.
+- Explain concepts progressively with intuition, worked examples, and short checks.
+- End with a short "Next Practice" section.
+- Use difficulty ${difficulty}/5 as the target depth.
+- Keep Markdown clean and stable for local rendering.
+- Never put "=" on a line by itself inside math; attach it to the previous formula line.`,
     },
-    { role: 'user', content: `请为“${subjectLabel(subject)}”课程中“${topicTitle}”主题下的“${lessonTitle}”编写讲义。` },
+    {
+      role: 'user',
+      content: `Write a lecture note for subject "${subjectLabel(subject)}", topic "${topicTitle}", lesson "${lessonTitle}".`,
+    },
   ];
 }
 
@@ -333,33 +355,26 @@ export function exercisePrompt(subject: Subject, lessonTitle: string, count: num
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + exercisePersonalizationContext(ctx, difficulty, count) + `\n请生成练习题。输出纯 JSON 数组，格式如下：
+      content: buildSystemBase(ctx) + '\n' + exercisePersonalizationContext(ctx, difficulty, count) + `\nReturn pure JSON only in this shape:
 [
   {
     "id": "ex-01",
-    "prompt": "题目内容",
+    "prompt": "question text",
     "type": "free-response",
     "difficulty": ${difficulty}
   }
 ]
-要求：
-- type 可选：free-response、multiple-choice、code
-- 生成 ${count} 道题
-- 难度围绕 ${difficulty}/5
-- 如果资料中的参考习题有明确章节映射、题型风格或考点分布，请优先借鉴这些信息重新命题，不要复制原题
-- 题目要明显贴合学生当前水平、学习目标、学习偏好和最近薄弱点
-- 如果生成选择题，不要把所有题都做成选择题；尽量保证题型有区分度
-- 如果生成代码题，只在当前学科或资料内容明显适合代码表达时使用
-- 只输出 JSON`,
+
+Rules:
+- Allowed types: free-response, multiple-choice, code.
+- Generate exactly ${count} exercises.
+- Keep difficulty centered around ${difficulty}/5.
+- When material exercises are available, borrow structure and focus but do not copy.
+- Output JSON only.`,
     },
     {
       role: 'user',
-      content: `请为“${subjectLabel(subject)}”的“${lessonTitle}”生成 ${count} 道练习题。
-
-请特别注意：
-- 参考资料中的课后习题、章末习题、例题或复习题风格，但不要照抄
-- 如果学生有明显薄弱点，优先让题目覆盖这些内容
-- 让题组既能检查基本掌握，也能检查方法迁移`,
+      content: `Generate ${count} exercises for "${subjectLabel(subject)}" / "${lessonTitle}".`,
     },
   ];
 }
@@ -368,19 +383,23 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请批改学生答案。输出纯 JSON，格式如下：
+      content: buildSystemBase(ctx) + `\nGrade the student's answer and return JSON only in this shape:
 {
   "score": 85,
-  "feedback": "详细反馈（Markdown）",
-  "strengths": ["优点1"],
-  "weaknesses": ["不足1"]
+  "feedback": "detailed markdown feedback",
+  "strengths": ["point 1"],
+  "weaknesses": ["point 1"]
 }
-要求：
-- 分数范围 0 到 100
-- 反馈具体、可执行
-- 只输出 JSON`,
+
+Rules:
+- Score must be from 0 to 100.
+- Feedback should be actionable and specific.
+- Output JSON only.`,
     },
-    { role: 'user', content: `题目：${exercisePromptText}\n\n学生答案：${studentAnswer}` },
+    {
+      role: 'user',
+      content: `Prompt:\n${exercisePromptText}\n\nStudent answer:\n${studentAnswer}`,
+    },
   ];
 }
 
@@ -388,32 +407,37 @@ export function diagnosisPrompt(
   subject: Subject,
   topicSummaries: string,
   recentGrades: string,
-  ctx: PromptContext
+  ctx: PromptContext,
 ): ChatMessage[] {
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请分析学生当前的学习情况，输出纯 JSON，格式如下：
+      content: buildSystemBase(ctx) + `\nAnalyze the student's learning status for "${subjectLabel(subject)}" and return JSON only in this shape:
 {
   "subjectSnapshots": [
     {
-      "subject": "学科名",
+      "subject": "subject-name",
       "mastery": 75,
       "recentTrend": "improving",
-      "topStrengths": ["强项1"],
-      "topWeaknesses": ["弱项1"],
-      "keyMistakePatterns": ["错误模式1"],
-      "recommendedFocus": "建议重点"
+      "topStrengths": ["strength 1"],
+      "topWeaknesses": ["weakness 1"],
+      "keyMistakePatterns": ["pattern 1"],
+      "recommendedFocus": "what to focus next"
     }
   ],
-  "overallStrategy": "整体学习策略建议",
-  "nextSteps": ["下一步建议"]
+  "overallStrategy": "overall strategy",
+  "nextSteps": ["next step 1"]
 }
-要求：
-- 基于数据识别概念漏洞和错误模式
-- 只输出 JSON`,
+
+Rules:
+- Base the diagnosis on the supplied data.
+- Identify conceptual gaps, error patterns, and next priorities.
+- Output JSON only.`,
     },
-    { role: 'user', content: `各主题统计摘要：\n${topicSummaries}\n\n最近批改记录：\n${recentGrades}` },
+    {
+      role: 'user',
+      content: `Topic summaries:\n${topicSummaries}\n\nRecent grades:\n${recentGrades}`,
+    },
   ];
 }
 
@@ -421,27 +445,31 @@ export function materialIndexPrompt(text: string, subject: Subject): ChatMessage
   return [
     {
       role: 'system',
-      content: `你是一位教学资料分析专家。请分析以下课程资料文本，提取结构化信息。输出纯 JSON：
+      content: `Analyze the study material and return JSON only in this shape:
 {
   "chapters": [
     {
-      "title": "章节标题",
-      "summary": "200-300 字摘要",
-      "keyPoints": ["知识点1", "知识点2"],
-      "topicMapping": ["可能对应的课程主题 ID 或标题"]
+      "title": "chapter title",
+      "summary": "short summary",
+      "keyPoints": ["point 1"],
+      "topicMapping": ["possible course topic"]
     }
   ]
 }
-只输出 JSON。`,
+
+Keep the result concise and grounded in the provided material.`,
     },
-    { role: 'user', content: `学科：${subjectLabel(subject)}\n\n资料内容：\n${text.slice(0, 15000)}` },
+    {
+      role: 'user',
+      content: `Subject: ${subjectLabel(subject)}\n\nMaterial text:\n${text.slice(0, 15000)}`,
+    },
   ];
 }
 
 export function textbookChunkParsePrompt(
   text: string,
   subject: Subject,
-  options?: { chunkIndex?: number; totalChunks?: number }
+  options?: { chunkIndex?: number; totalChunks?: number },
 ): ChatMessage[] {
   const chunkIndex = options?.chunkIndex ?? 1;
   const totalChunks = options?.totalChunks ?? 1;
@@ -449,115 +477,111 @@ export function textbookChunkParsePrompt(
   return [
     {
       role: 'system',
-      content: `你是一位教材结构化解析专家，擅长处理 OCR 抽取后的教材文本。你的任务是从单个文本片段中抽取“章号、节号、主题内容、课后习题映射”。
+      content: `You are parsing OCR-like textbook text into structured JSON.
 
-输出纯 JSON，严格使用下面的结构：
+Return JSON only in this shape:
 {
-  "documentType": "textbook" | "notes" | "mixed" | "unknown",
+  "documentType": "textbook",
   "chapters": [
     {
       "chapterNumber": "1",
-      "title": "章节标题",
-      "summary": "这一章在当前片段中涵盖的内容摘要",
-      "keyPoints": ["知识点1", "知识点2"],
-      "topicMapping": ["可能对应的课程主题"],
-      "sectionNumbers": ["1.1", "1.2"],
-      "relatedExerciseTitles": ["习题1.1"]
+      "title": "chapter title",
+      "summary": "summary",
+      "keyPoints": ["point 1"],
+      "topicMapping": ["possible topic"],
+      "sectionNumbers": ["1.1"],
+      "relatedExerciseTitles": ["exercise 1"]
     }
   ],
   "sectionMappings": [
     {
       "chapterNumber": "1",
-      "chapterTitle": "章节标题",
+      "chapterTitle": "chapter title",
       "sectionNumber": "1.1",
-      "sectionTitle": "小节标题",
-      "summary": "本节内容摘要",
-      "keyPoints": ["知识点1", "知识点2"],
-      "topicMapping": ["可能对应的课程主题"],
-      "anchorTerms": ["便于后续定位原文的关键词或短语"],
-      "relatedExerciseTitles": ["习题1.1", "章末练习"]
+      "sectionTitle": "section title",
+      "summary": "summary",
+      "keyPoints": ["point 1"],
+      "topicMapping": ["possible topic"],
+      "anchorTerms": ["search term"],
+      "relatedExerciseTitles": ["exercise 1"]
     }
   ],
   "exerciseMappings": [
     {
       "chapterNumber": "1",
-      "chapterTitle": "章节标题",
+      "chapterTitle": "chapter title",
       "sectionNumber": "1.1",
-      "sectionTitle": "小节标题",
-      "title": "习题1.1",
-      "exerciseType": "课后习题",
-      "summary": "这一组习题主要考查什么",
-      "keyPoints": ["考点1", "考点2"],
-      "topicMapping": ["可能对应的课程主题"],
-      "anchorTerms": ["原文中的习题标题或关键词"],
-      "relatedSections": ["1.1 小节标题", "1.2 小节标题"]
+      "sectionTitle": "section title",
+      "title": "exercise title",
+      "exerciseType": "after-class exercise",
+      "summary": "summary",
+      "keyPoints": ["point 1"],
+      "topicMapping": ["possible topic"],
+      "anchorTerms": ["search term"],
+      "relatedSections": ["1.1 section title"]
     }
   ]
 }
 
-规则：
-- 只抽取当前片段里能确认的信息，不要编造未出现的章节。
-- 章号、节号尽量保留教材原格式，例如 "第1章"、"1"、"1.2"、"§1.2" 都可以，但要稳定。
-- 如果 OCR 文本不完整，可以结合上下文做谨慎推断；一旦推断，请只在 summary 中自然表达，不要添加解释字段。
-- 对课后习题、章末习题、复习题、综合练习、例题要尽量做映射，重点说明它们主要对应哪些节或知识点。
-- "anchorTerms" 应该短、可搜索，便于后续在原始 OCR 文本中定位。
-- 每个数组控制精简：keyPoints / topicMapping / anchorTerms 最多 5 项。
-- 只输出 JSON，不要输出 Markdown，不要解释。`,
+Rules:
+- Extract only what is supported by the current chunk.
+- Keep chapter and section numbering faithful to the source.
+- Output JSON only.`,
     },
     {
       role: 'user',
-      content: `学科：${subjectLabel(subject)}
-当前片段：${chunkIndex}/${totalChunks}
-
-教材 OCR / 提取文本片段：
-${text.slice(0, 12000)}`,
+      content: `Subject: ${subjectLabel(subject)}\nChunk: ${chunkIndex}/${totalChunks}\n\nText:\n${text.slice(0, 12000)}`,
     },
   ];
 }
 
 export function chatPrompt(userMessage: string, history: ChatMessage[], ctx: PromptContext): ChatMessage[] {
-  const system: ChatMessage = {
-    role: 'system',
-    content: buildSystemBase(ctx) + `\n你现在是学生的 AI 学习助手，可以回答学习相关的任何问题。
-要求：
-- 优先基于当前课程大纲、资料摘要和命中的资料片段回答
-- 如果答案里包含推断，请明确说明“这是根据现有资料做的推断”
-- 如果资料不足以支持一个确定结论，要明确说出缺口
-- 如果使用了某份资料，尽量在答案末尾写出“参考资料：文件名”
-- 语气清晰、耐心、鼓励，必要时使用 LaTeX 和代码示例`,
-  };
-  return [system, ...history, { role: 'user', content: userMessage }];
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(ctx) + `\nYou are the student's learning copilot.
+
+Rules:
+- Prefer answers grounded in the current course outline and retrieved materials.
+- If you infer beyond the supplied material, say so explicitly.
+- Be clear, patient, and concrete.
+- If you materially rely on a specific reference, mention it briefly at the end.`,
+    },
+    ...history,
+    { role: 'user', content: userMessage },
+  ];
 }
 
 export function reviseMarkdownPrompt(
   instruction: string,
   currentContent: string,
   targetLabel: string,
-  ctx: PromptContext
+  ctx: PromptContext,
 ): ChatMessage[] {
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n你正在直接修改一份现有的课程讲义 Markdown 文件，系统会把你的输出直接写回磁盘。
-要求：
-- 必须根据用户反馈修改“当前 Markdown 内容”
-- 输出完整的修订后 Markdown，不要只输出片段
-- 保留与本次要求无关的有效内容，除非用户明确要求删除、合并、重构
-- 如果用户要求补充内容，请补到合适的位置，而不是简单附在文末
-- 如果用户要求重构结构，可以调整标题层级和段落顺序，但保持内容连贯
-- 只输出最终 Markdown，不要解释，不要写“已修改”，不要使用 Markdown 代码块包裹`,
+      content: buildSystemBase(ctx) + `\nYou are directly revising an existing lecture Markdown file.
+
+Rules:
+- Modify the current Markdown according to the user request.
+- Return the full revised Markdown only.
+- Do not add markdown fences.
+- Preserve unrelated valid content unless the user clearly wants it changed.
+- Keep the Markdown stable for local rendering.
+- Never put "=" on a line by itself inside math.`,
     },
     {
       role: 'user',
-      content: `目标讲义：${targetLabel}
+      content: `Target lecture: ${targetLabel}
 
-用户反馈：
+User request:
 ${instruction}
 
-当前 Markdown 内容：
+Current Markdown:
 ${currentContent}
 
-请直接输出修订后的完整 Markdown。`,
+Return the full revised Markdown only.`,
     },
   ];
 }
@@ -567,12 +591,12 @@ export function reviseMarkdownPatchPrompt(
   targetLabel: string,
   documentOutline: string,
   relevantSections: string,
-  ctx: PromptContext
+  ctx: PromptContext,
 ): ChatMessage[] {
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\nYou are editing an existing lecture markdown file. To keep the response small and fast, do not rewrite the whole document unless absolutely necessary. Return pure JSON only in this schema:
+      content: buildSystemBase(ctx) + `\nYou are editing an existing lecture markdown file. To keep the response compact, return pure JSON only in this schema:
 {
   "action": "replace_section" | "insert_after_section" | "insert_before_section" | "append_document",
   "targetHeading": "exact heading line from DOCUMENT OUTLINE, empty when action is append_document",
@@ -582,11 +606,11 @@ export function reviseMarkdownPatchPrompt(
 Rules:
 - Choose exactly one action.
 - Prefer the smallest possible edit.
-- When action is replace_section, content must include the full replacement section including its heading line.
-- When action is insert_after_section or insert_before_section, content must be only the fragment to insert.
-- targetHeading must exactly match one heading line from DOCUMENT OUTLINE when the action is section-based.
+- For replace_section, content must include the full replacement section including its heading.
+- For insert_after_section or insert_before_section, content must include only the fragment to insert.
+- targetHeading must exactly match a heading line from DOCUMENT OUTLINE for section-based actions.
 - Do not wrap JSON in code fences.
-- Do not include explanations outside the JSON.`,
+- Do not include any explanation outside the JSON.`,
     },
     {
       role: 'user',

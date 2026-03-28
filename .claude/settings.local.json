@@ -6,7 +6,8 @@
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
       "Bash(.\"cd \"d:ClaudeCoach \")",
-      "Bash(. \"cd d:/ClaudeCoach)"
+      "Bash(. \"cd d:/ClaudeCoach)",
+      "Bash(.\\\\list_src_files.sh)"
     ]
   }
 }

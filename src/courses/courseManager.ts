@@ -1,8 +1,8 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { CourseOutline, LessonMeta, Subject, TopicOutline, TopicSummary } from '../types';
+import { CourseOutline, Exercise, LessonMeta, OutlineRebuildSelection, Subject, TopicOutline, TopicSummary } from '../types';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
-import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver } from '../storage/pathResolver';
+import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver, sanitizeSegment } from '../storage/pathResolver';
 
 export class CourseManager {
   private readonly paths: StoragePathResolver;
@@ -103,6 +103,184 @@ export class CourseManager {
 
   async clearCourseContent(subject: Subject): Promise<void> {
     await fs.rm(this.paths.courseSubjectDir(subject), { recursive: true, force: true });
+  }
+
+  async applyFullRebuild(subject: Subject, outline: CourseOutline): Promise<void> {
+    const subjectDir = this.paths.courseSubjectDir(subject);
+    const backupDir = path.join(
+      this.paths.workspaceCoursesDir,
+      `.${sanitizeSegment(subject, 'course')}-full-rebuild-backup-${Date.now()}`
+    );
+    const hadExistingCourse = await fileExists(subjectDir);
+
+    try {
+      if (hadExistingCourse) {
+        await fs.rm(backupDir, { recursive: true, force: true });
+        await fs.rename(subjectDir, backupDir);
+      }
+
+      await this.saveCourseOutline(subject, outline);
+      await fs.rm(backupDir, { recursive: true, force: true });
+    } catch (error) {
+      await fs.rm(subjectDir, { recursive: true, force: true }).catch(() => undefined);
+      if (hadExistingCourse && await fileExists(backupDir)) {
+        await fs.rename(backupDir, subjectDir).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  async applyPartialRebuild(
+    subject: Subject,
+    oldOutline: CourseOutline,
+    newOutline: CourseOutline,
+    selection: OutlineRebuildSelection,
+  ): Promise<void> {
+    const subjectDir = this.paths.courseSubjectDir(subject);
+    const topicsDir = this.paths.courseTopicsDir(subject);
+    const backupTopicsDir = path.join(subjectDir, `.topics-rebuild-backup-${Date.now()}`);
+    const retainedMappings = this.buildRetainedTopicMappings(oldOutline, newOutline, selection);
+    const hadTopicsDir = await fileExists(topicsDir);
+
+    try {
+      if (hadTopicsDir) {
+        await fs.rm(backupTopicsDir, { recursive: true, force: true });
+        await fs.rename(topicsDir, backupTopicsDir);
+      }
+
+      await this.saveCourseOutline(subject, newOutline);
+
+      for (const mapping of retainedMappings) {
+        await this.restoreRetainedTopicArtifacts(subject, backupTopicsDir, mapping.oldTopic, mapping.newTopic);
+      }
+
+      await fs.rm(backupTopicsDir, { recursive: true, force: true });
+    } catch (error) {
+      await fs.rm(topicsDir, { recursive: true, force: true }).catch(() => undefined);
+      if (hadTopicsDir && await fileExists(backupTopicsDir)) {
+        await fs.rename(backupTopicsDir, topicsDir).catch(() => undefined);
+      }
+      await writeJson(this.paths.courseOutlinePath(subject), this.normalizeOutline(subject, oldOutline)).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private buildRetainedTopicMappings(
+    oldOutline: CourseOutline,
+    newOutline: CourseOutline,
+    selection: OutlineRebuildSelection,
+  ): Array<{ oldTopic: TopicOutline; newTopic: TopicOutline }> {
+    const mappings: Array<{ oldTopic: TopicOutline; newTopic: TopicOutline }> = [];
+    const oldSelectedCount = selection.endIndex - selection.startIndex + 1;
+    const newSelectedCount = newOutline.topics.length - (oldOutline.topics.length - oldSelectedCount);
+
+    for (let index = 0; index < selection.startIndex; index += 1) {
+      const oldTopic = oldOutline.topics[index];
+      const newTopic = newOutline.topics[index];
+      if (oldTopic && newTopic) {
+        mappings.push({ oldTopic, newTopic });
+      }
+    }
+
+    for (let oldIndex = selection.endIndex + 1; oldIndex < oldOutline.topics.length; oldIndex += 1) {
+      const newIndex = oldIndex - oldSelectedCount + newSelectedCount;
+      const oldTopic = oldOutline.topics[oldIndex];
+      const newTopic = newOutline.topics[newIndex];
+      if (oldTopic && newTopic) {
+        mappings.push({ oldTopic, newTopic });
+      }
+    }
+
+    return mappings;
+  }
+
+  private async restoreRetainedTopicArtifacts(
+    subject: Subject,
+    backupTopicsDir: string,
+    oldTopic: TopicOutline,
+    newTopic: TopicOutline,
+  ): Promise<void> {
+    const backupTopicDir = path.join(backupTopicsDir, oldTopic.id);
+    if (!await fileExists(backupTopicDir)) {
+      return;
+    }
+
+    const targetTopicDir = this.paths.courseTopicDir(subject, newTopic.id);
+    await fs.rm(targetTopicDir, { recursive: true, force: true });
+    await ensureDir(path.dirname(targetTopicDir));
+    await fs.rename(backupTopicDir, targetTopicDir);
+    await this.renameLessonArtifactsInTopic(subject, newTopic.id, oldTopic, newTopic);
+    await this.updateTopicSummaryReference(subject, newTopic.id);
+  }
+
+  private async renameLessonArtifactsInTopic(
+    subject: Subject,
+    topicId: string,
+    oldTopic: TopicOutline,
+    newTopic: TopicOutline,
+  ): Promise<void> {
+    const lessonPairs = Math.min(oldTopic.lessons.length, newTopic.lessons.length);
+    for (let index = 0; index < lessonPairs; index += 1) {
+      const oldLesson = oldTopic.lessons[index];
+      const newLesson = newTopic.lessons[index];
+      if (!oldLesson || !newLesson) {
+        continue;
+      }
+
+      if (oldLesson.id !== newLesson.id) {
+        await this.renameIfExists(
+          this.paths.courseLessonPath(subject, topicId, oldLesson.id),
+          this.paths.courseLessonPath(subject, topicId, newLesson.id),
+        );
+        await this.renameIfExists(
+          this.paths.courseExerciseSessionDir(subject, topicId, oldLesson.id),
+          this.paths.courseExerciseSessionDir(subject, topicId, newLesson.id),
+        );
+        await this.updateExercisePromptJson(subject, topicId, newLesson.id, newLesson.id);
+      }
+    }
+  }
+
+  private async updateTopicSummaryReference(subject: Subject, topicId: string): Promise<void> {
+    const summaryPath = this.paths.courseTopicSummaryPath(subject, topicId);
+    const summary = await readJson<TopicSummary>(summaryPath);
+    if (!summary) {
+      return;
+    }
+
+    await writeJson(summaryPath, {
+      ...summary,
+      subject,
+      topicId,
+    });
+  }
+
+  private async updateExercisePromptJson(
+    subject: Subject,
+    topicId: string,
+    lessonId: string,
+    nextLessonId: string,
+  ): Promise<void> {
+    const jsonPath = this.paths.courseExerciseJsonPath(subject, topicId, lessonId);
+    const exercises = await readJson<Exercise[]>(jsonPath);
+    if (!exercises?.length) {
+      return;
+    }
+
+    await writeJson(jsonPath, exercises.map((exercise) => ({
+      ...exercise,
+      lessonId: nextLessonId,
+    })));
+  }
+
+  private async renameIfExists(sourcePath: string, targetPath: string): Promise<void> {
+    if (!await fileExists(sourcePath) || sourcePath === targetPath) {
+      return;
+    }
+
+    await ensureDir(path.dirname(targetPath));
+    await fs.rm(targetPath, { recursive: true, force: true });
+    await fs.rename(sourcePath, targetPath);
   }
 
   private async copyLegacyFileIfMissing(sourcePath: string, targetPath: string): Promise<void> {
@@ -372,6 +550,10 @@ export class CourseManager {
     lessonId: string,
     currentStatus?: LessonMeta['status'],
   ): Promise<LessonMeta['status']> {
+    if (!subject || !topicId || !lessonId) {
+      return currentStatus ?? 'not-started';
+    }
+
     const lessonPath = this.getLessonPath(subject, topicId, lessonId);
     const exercisePath = this.getExercisePath(subject, topicId, lessonId);
     const [lessonExists, exerciseExists] = await Promise.all([
@@ -422,6 +604,10 @@ export class CourseManager {
   }
 
   async resetLessonProgress(subject: Subject, topicId: string, lessonId: string): Promise<void> {
+    if (!subject || !topicId || !lessonId) {
+      return;
+    }
+
     const lessonPath = this.getLessonPath(subject, topicId, lessonId);
     const exerciseDir = path.dirname(this.getExercisePath(subject, topicId, lessonId));
 
@@ -434,6 +620,10 @@ export class CourseManager {
   }
 
   async syncLessonStatus(subject: Subject, topicId: string, lessonId: string): Promise<LessonMeta['status'] | null> {
+    if (!subject || !topicId || !lessonId) {
+      return null;
+    }
+
     const outline = await this.getCourseOutline(subject);
     if (!outline) {
       return null;
@@ -470,6 +660,9 @@ export class CourseManager {
 
       for (const topic of outline.topics) {
         for (const lesson of topic.lessons) {
+          if (!outline.subject || !topic.id || !lesson.id) {
+            continue;
+          }
           const nextStatus = await this.resolveLessonStatus(outline.subject, topic.id, lesson.id, lesson.status);
           if (lesson.status !== nextStatus) {
             lesson.status = nextStatus;

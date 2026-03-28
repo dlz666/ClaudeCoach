@@ -23,6 +23,15 @@ interface GroundingContext {
   materialTitle?: string;
 }
 
+interface MaterialFilterOptions {
+  materialId?: string;
+  materialIds?: string[];
+}
+
+interface GroundingOptions extends MaterialFilterOptions {
+  maxExcerpts?: number;
+}
+
 interface ScoredTextCandidate {
   text: string;
   score: number;
@@ -71,25 +80,50 @@ export class MaterialManager {
     this.indexEmitter.fire(normalized);
   }
 
+  private _optionalEntryString(value: unknown): string | undefined {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    return normalized || undefined;
+  }
+
+  private _describeEntry(entry: Partial<MaterialEntry>): string {
+    return this._optionalEntryString(entry.fileName) ?? this._optionalEntryString(entry.id) ?? 'unknown-material';
+  }
+
+  private _requireEntryPath(entry: MaterialEntry, fieldName: 'filePath' | 'textPath'): string {
+    const value = this._optionalEntryString(((entry as unknown) as Record<string, unknown>)[fieldName]);
+    if (!value) {
+      throw new Error(`Material entry "${this._describeEntry(entry)}" is missing ${fieldName}.`);
+    }
+    return value;
+  }
+
   private normalizeEntry(entry: MaterialEntry): MaterialEntry {
+    const filePath = this._optionalEntryString(entry.filePath);
+    const storageDir = this._optionalEntryString(entry.storageDir)
+      ?? (filePath
+        ? (() => {
+            const relativeToMaterials = path.relative(this.paths.materialsDir, filePath);
+            return relativeToMaterials && !relativeToMaterials.startsWith('..')
+              ? path.dirname(filePath)
+              : undefined;
+          })()
+        : undefined)
+      ?? (this._optionalEntryString(entry.subject) && this._optionalEntryString(entry.id)
+        ? this.paths.materialDir(entry.subject, entry.id)
+        : undefined);
+    const fileName = this._optionalEntryString(entry.fileName) ?? (filePath ? path.basename(filePath) : '');
+
     const normalized: MaterialEntry = {
       ...entry,
+      fileName,
+      filePath: filePath ?? entry.filePath,
+      textPath: this._optionalEntryString(entry.textPath) ?? (storageDir ? path.join(storageDir, 'extracted.txt') : entry.textPath),
+      summaryPath: this._optionalEntryString(entry.summaryPath) ?? (storageDir ? path.join(storageDir, 'summary.json') : entry.summaryPath),
+      storageDir: storageDir ?? entry.storageDir,
       updatedAt: entry.updatedAt || entry.indexedAt || entry.addedAt,
       indexedAt: entry.indexedAt || undefined,
       lastError: entry.lastError || undefined,
     };
-
-    if (entry.storageDir) {
-      return normalized;
-    }
-
-    const relativeToMaterials = path.relative(this.paths.materialsDir, entry.filePath || '');
-    if (entry.filePath && relativeToMaterials && !relativeToMaterials.startsWith('..')) {
-      return {
-        ...normalized,
-        storageDir: path.dirname(entry.filePath),
-      };
-    }
 
     return normalized;
   }
@@ -100,6 +134,11 @@ export class MaterialManager {
   }
 
   async importMaterial(subject: Subject): Promise<MaterialEntry | null> {
+    const normalizedSubject = this._optionalEntryString(subject);
+    if (!normalizedSubject) {
+      throw new Error('Please select a course before importing material.');
+    }
+
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: false,
       filters: {
@@ -113,20 +152,20 @@ export class MaterialManager {
     const sourceFile = uris[0].fsPath;
     const fileName = path.basename(sourceFile);
     const id = `mat-${Date.now()}`;
-    const storageDir = this.paths.materialDir(subject, id);
+    const storageDir = this.paths.materialDir(normalizedSubject, id);
     await ensureDir(storageDir);
 
-    const destPath = this.paths.materialSourcePath(subject, id, fileName);
+    const destPath = this.paths.materialSourcePath(normalizedSubject, id, fileName);
     await fs.copyFile(sourceFile, destPath);
 
     const entry: MaterialEntry = {
       id,
       fileName,
-      subject,
+      subject: normalizedSubject,
       storageDir,
       filePath: destPath,
-      textPath: this.paths.materialTextPath(subject, id),
-      summaryPath: this.paths.materialSummaryPath(subject, id),
+      textPath: this.paths.materialTextPath(normalizedSubject, id),
+      summaryPath: this.paths.materialSummaryPath(normalizedSubject, id),
       status: 'pending',
       addedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -135,7 +174,7 @@ export class MaterialManager {
     const index = await this.getIndex();
     index.materials.push(entry);
     await this.saveIndex(index);
-    await writeJson(this.paths.materialMetaPath(subject, id), entry);
+    await writeJson(this.paths.materialMetaPath(normalizedSubject, id), entry);
 
     void this.ensureMaterialIndexed(entry).catch(error => {
       console.error(`Failed to process imported material ${entry.fileName}:`, error);
@@ -169,12 +208,12 @@ export class MaterialManager {
     return task;
   }
 
-  async reconcileMaterials(subject?: Subject, options?: { materialId?: string }): Promise<MaterialEntry[]> {
+  async reconcileMaterials(subject?: Subject, options?: MaterialFilterOptions): Promise<MaterialEntry[]> {
     const index = await this.getIndex();
-    const candidates = index.materials.filter(material =>
-      (!subject || material.subject === subject) &&
-      (!options?.materialId || material.id === options.materialId)
-    );
+    const requestedIds = this._normalizeRequestedMaterialIds(options);
+    const candidates = requestedIds !== undefined
+      ? this._resolveRequestedMaterials(index.materials, requestedIds)
+      : index.materials.filter(material => !subject || material.subject === subject);
 
     const results: MaterialEntry[] = [];
     for (const candidate of candidates) {
@@ -185,6 +224,9 @@ export class MaterialManager {
         }
       } catch (error) {
         console.error(`Failed to reconcile material ${candidate.fileName}:`, error);
+        if (requestedIds !== undefined) {
+          throw error;
+        }
         const latest = await this.getMaterialById(candidate.id);
         if (latest) {
           results.push(latest);
@@ -272,8 +314,8 @@ export class MaterialManager {
   }
 
   /** Get material summaries relevant to a topic, for prompt injection. */
-  async getRelevantSummary(subject: Subject, topicTitle: string, options?: { materialId?: string }): Promise<string> {
-    const subjectMaterials = await this._getIndexedMaterials(subject, options?.materialId);
+  async getRelevantSummary(subject: Subject, topicTitle: string, options?: MaterialFilterOptions): Promise<string> {
+    const subjectMaterials = await this._getIndexedMaterials(subject, this._normalizeRequestedMaterialIds(options));
     const keywords = this._extractSearchTerms(topicTitle);
     const exerciseFocusedQuery = /(习题|练习|题目|作业|例题|章末|复习题|综合练习)/i.test(topicTitle);
 
@@ -347,9 +389,12 @@ export class MaterialManager {
   async buildGroundingContext(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; maxExcerpts?: number }
+    options?: GroundingOptions
   ): Promise<GroundingContext> {
-    const material = options?.materialId ? await this.getMaterialById(options.materialId) : null;
+    const materialIds = this._normalizeRequestedMaterialIds(options);
+    const selectedMaterials = materialIds !== undefined
+      ? (await Promise.all(materialIds.map((materialId) => this.getMaterialById(materialId)))).filter((entry): entry is MaterialEntry => !!entry)
+      : [];
     const summary = await this.getRelevantSummary(subject, query, options);
     const exerciseSummary = await this.getRelevantExerciseSummary(subject, query, options);
     const excerpts = await this.retrieveRelevantExcerpts(subject, query, options);
@@ -359,12 +404,16 @@ export class MaterialManager {
       exerciseSummary,
       excerpts: this._formatExcerpts(excerpts),
       sourceLabels: Array.from(new Set(excerpts.map(item => item.fileName))),
-      materialTitle: material?.fileName,
+      materialTitle: selectedMaterials.length === 1
+        ? selectedMaterials[0].fileName
+        : selectedMaterials.length > 1
+          ? selectedMaterials.map((item) => item.fileName).slice(0, 3).join(', ')
+          : undefined,
     };
   }
 
-  async getRelevantExerciseSummary(subject: Subject, query: string, options?: { materialId?: string }): Promise<string> {
-    const materials = await this._getIndexedMaterials(subject, options?.materialId);
+  async getRelevantExerciseSummary(subject: Subject, query: string, options?: MaterialFilterOptions): Promise<string> {
+    const materials = await this._getIndexedMaterials(subject, this._normalizeRequestedMaterialIds(options));
     const keywords = this._extractSearchTerms(query);
     return this._buildRelevantExerciseSummaryText(materials, query, keywords);
     /*
@@ -430,9 +479,9 @@ export class MaterialManager {
   private async retrieveRelevantExcerpts(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; maxExcerpts?: number }
+    options?: GroundingOptions
   ): Promise<RetrievedExcerpt[]> {
-    const materials = await this._getIndexedMaterials(subject, options?.materialId);
+    const materials = await this._getIndexedMaterials(subject, this._normalizeRequestedMaterialIds(options));
     const maxExcerpts = options?.maxExcerpts ?? 4;
     const queryText = query.trim().toLowerCase();
     const keywords = this._extractSearchTerms(query);
@@ -513,12 +562,46 @@ export class MaterialManager {
     return formatted;
   }
 
-  private async _getIndexedMaterials(subject: Subject, materialId?: string): Promise<MaterialEntry[]> {
+  private _normalizeRequestedMaterialIds(options?: MaterialFilterOptions): string[] | undefined {
+    if (!options) {
+      return undefined;
+    }
+
+    const ids = Array.isArray(options.materialIds)
+      ? options.materialIds
+      : options.materialId
+        ? [options.materialId]
+        : undefined;
+
+    if (ids === undefined) {
+      return undefined;
+    }
+
+    return Array.from(new Set(ids.map((id) => String(id ?? '').trim()).filter(Boolean)));
+  }
+
+  private _resolveRequestedMaterials(materials: MaterialEntry[], materialIds: string[]): MaterialEntry[] {
+    if (materialIds.length === 0) {
+      return [];
+    }
+
+    const resolved = materialIds.map((materialId) => materials.find((material) => material.id === materialId) ?? null);
+    const missing = resolved
+      .map((entry, index) => entry ? null : materialIds[index])
+      .filter((materialId): materialId is string => !!materialId);
+
+    if (missing.length) {
+      throw new Error(`Selected materials not found: ${missing.join(', ')}`);
+    }
+
+    return resolved.filter((entry): entry is MaterialEntry => !!entry);
+  }
+
+  private async _getIndexedMaterials(subject: Subject, materialIds?: string[]): Promise<MaterialEntry[]> {
     const index = await this.getIndex();
-    const candidates = index.materials.filter(material =>
-      material.subject === subject &&
-      (!materialId || material.id === materialId)
-    );
+    const candidates = materialIds !== undefined
+      ? this._resolveRequestedMaterials(index.materials, materialIds)
+      : index.materials.filter((material) => material.subject === subject);
 
     const ready: MaterialEntry[] = [];
     for (const candidate of candidates) {
@@ -526,9 +609,11 @@ export class MaterialManager {
         const ensured = await this.ensureMaterialIndexed(candidate);
         if (ensured?.status === 'indexed') {
           ready.push(ensured);
+        } else if (materialIds !== undefined) {
+          throw new Error(`Selected material is not indexed yet: ${candidate.fileName}`);
         }
       } catch (error) {
-        if (materialId && candidate.id === materialId) {
+        if (materialIds !== undefined) {
           throw error;
         }
         console.error(`Skipping unindexed material ${candidate.fileName}:`, error);
@@ -563,6 +648,74 @@ export class MaterialManager {
   }
 
   private async _ensureTextForIndexing(entry: MaterialEntry): Promise<string> {
+    const normalizedEntry = this.normalizeEntry(entry);
+    const textPath = this._requireEntryPath(normalizedEntry, 'textPath');
+    const filePath = this._requireEntryPath(normalizedEntry, 'filePath');
+
+    if (await fileExists(textPath)) {
+      const cached = await this.ensureMaterialText(normalizedEntry);
+      if (cached.trim()) {
+        return cached;
+      }
+    }
+
+    const extracted = await extractTextFromFile(filePath);
+    if (!extracted.replace(/\s/g, '').length) {
+      throw new Error('No usable text could be extracted from the material.');
+    }
+
+    await writeText(textPath, extracted);
+    return extracted;
+  }
+
+  async ensureMaterialText(entry: MaterialEntry): Promise<string> {
+    const normalizedEntry = this.normalizeEntry(entry);
+    const textPath = this._requireEntryPath(normalizedEntry, 'textPath');
+    const filePath = this._requireEntryPath(normalizedEntry, 'filePath');
+    let content = '';
+
+    if (await fileExists(textPath)) {
+      content = await fs.readFile(textPath, 'utf-8');
+      if (content.replace(/\s/g, '').length >= 200) {
+        return content;
+      }
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext !== '.pdf') {
+      return content;
+    }
+
+    const refreshed = await extractTextFromFile(filePath);
+    if (refreshed.replace(/\s/g, '').length >= 200) {
+      await writeText(textPath, refreshed);
+      return refreshed;
+    }
+
+    return content || refreshed;
+  }
+
+  private async _readMaterialText(entry: MaterialEntry): Promise<string> {
+    const normalizedEntry = this.normalizeEntry(entry);
+    const textPath = this._requireEntryPath(normalizedEntry, 'textPath');
+    const filePath = this._requireEntryPath(normalizedEntry, 'filePath');
+
+    if (await fileExists(textPath)) {
+      const content = await this.ensureMaterialText(normalizedEntry);
+      if (content) {
+        return content;
+      }
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.md' || ext === '.markdown' || ext === '.txt') {
+      return fs.readFile(filePath, 'utf-8');
+    }
+
+    return '';
+  }
+
+  private async _ensureTextForIndexingLegacy(entry: MaterialEntry): Promise<string> {
     if (await fileExists(entry.textPath)) {
       const cached = await this.ensureMaterialText(entry);
       if (cached.trim()) {
@@ -602,7 +755,7 @@ export class MaterialManager {
     return String(error || '未知错误');
   }
 
-  async ensureMaterialText(entry: MaterialEntry): Promise<string> {
+  async ensureMaterialTextLegacy(entry: MaterialEntry): Promise<string> {
     let content = '';
 
     if (await fileExists(entry.textPath)) {
@@ -626,7 +779,7 @@ export class MaterialManager {
     return content || refreshed;
   }
 
-  private async _readMaterialText(entry: MaterialEntry): Promise<string> {
+  private async _readMaterialTextLegacy(entry: MaterialEntry): Promise<string> {
     if (await fileExists(entry.textPath)) {
       const content = await this.ensureMaterialText(entry);
       if (content) {

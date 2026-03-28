@@ -1,11 +1,11 @@
-import { StudentProfile, Subject } from '../types';
+import { StudentProfile } from '../types';
 import { readJson, writeJson } from '../utils/fileSystem';
 import { getStoragePathResolver } from '../storage/pathResolver';
 
 const DEFAULT_PROFILE: StudentProfile = {
   name: '同学',
   level: 'beginner',
-  subjects: ['calculus', 'linear-algebra', 'discrete-math', 'react'],
+  subjects: [],
   goals: ['打好数学基础', '掌握前端开发'],
   startDate: new Date().toISOString(),
   totalSessions: 0,

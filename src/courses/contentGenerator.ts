@@ -1,6 +1,13 @@
 import { AIClient } from '../ai/client';
-import { strictCourseOutlinePrompt, strictRebuildCourseOutlinePrompt, lessonPrompt, exercisePrompt } from '../ai/prompts';
-import { CourseOutline, Subject, Exercise, LearningPreferences, LatestDiagnosis, StudentProfile, subjectLabel } from '../types';
+import {
+  strictCourseOutlinePrompt,
+  strictRebuildCourseOutlinePrompt,
+  strictFullRebuildCourseOutlinePrompt,
+  strictPartialRebuildCourseOutlinePrompt,
+  lessonPrompt,
+  exercisePrompt,
+} from '../ai/prompts';
+import { CourseOutline, Subject, Exercise, LearningPreferences, LatestDiagnosis, StudentProfile, OutlineRebuildSelection, TopicOutline, subjectLabel } from '../types';
 import { CourseManager } from './courseManager';
 import { writeText } from '../utils/fileSystem';
 import { writeMarkdownAndPreview, buildCourseSummaryMd } from '../utils/markdown';
@@ -64,6 +71,44 @@ export class ContentGenerator {
       title: data.title,
       topics: freshTopics,
       createdAt: new Date().toISOString(),
+    });
+  }
+
+  async previewFullRebuild(
+    subject: Subject,
+    currentOutline: CourseOutline,
+    ctx: GenerationContext,
+    instruction?: string,
+  ): Promise<CourseOutline> {
+    const messages = strictFullRebuildCourseOutlinePrompt(subject, currentOutline, ctx, instruction);
+    const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+    return this.buildPreviewOutline(subject, {
+      id: `course-${subject}-${Date.now()}`,
+      subject,
+      title: data.title,
+      topics: data.topics,
+      createdAt: currentOutline.createdAt || new Date().toISOString(),
+    });
+  }
+
+  async previewPartialRebuild(
+    subject: Subject,
+    currentOutline: CourseOutline,
+    selection: OutlineRebuildSelection,
+    ctx: GenerationContext,
+    instruction?: string,
+  ): Promise<CourseOutline> {
+    const messages = strictPartialRebuildCourseOutlinePrompt(subject, currentOutline, selection, ctx, instruction);
+    const data = await this.ai.chatJson<{ topics: CourseOutline['topics'] }>(messages);
+    const prefix = currentOutline.topics.slice(0, selection.startIndex);
+    const suffix = currentOutline.topics.slice(selection.endIndex + 1);
+
+    return this.buildPreviewOutline(subject, {
+      id: currentOutline.id,
+      subject,
+      title: currentOutline.title,
+      topics: [...prefix, ...(data.topics ?? []), ...suffix],
+      createdAt: currentOutline.createdAt,
     });
   }
 
@@ -141,19 +186,16 @@ export class ContentGenerator {
       id: cleanedOutlineData.id,
       subject,
       title: cleanedOutlineData.title,
-      topics: cleanedOutlineData.topics.map(topic => ({
-        ...topic,
-        lessons: topic.lessons.map(lesson => {
-          const previous = this.findMatchingLesson(previousOutline, topic.id, topic.title, lesson.id, lesson.title);
-          return {
-            ...lesson,
-            status: previous?.status ?? 'not-started',
-            filePath: this.courseManager.getLessonPath(subject, topic.id, lesson.id),
-          };
-        }),
-      })),
+      topics: cleanedOutlineData.topics,
       createdAt: cleanedOutlineData.createdAt,
     });
+
+    for (const topic of outline.topics) {
+      for (const lesson of topic.lessons) {
+        const previous = this.findMatchingLesson(previousOutline, topic.id, topic.title, lesson.id, lesson.title);
+        lesson.status = previous?.status ?? lesson.status ?? 'not-started';
+      }
+    }
 
     await this.courseManager.saveCourseOutline(subject, outline);
 
@@ -161,6 +203,37 @@ export class ContentGenerator {
     await writeMarkdownAndPreview(this.courseManager.getCourseSummaryPath(subject), summaryMd);
 
     return outline;
+  }
+
+  private buildPreviewOutline(
+    subject: Subject,
+    outlineData: Pick<CourseOutline, 'id' | 'subject' | 'title' | 'topics' | 'createdAt'>,
+  ): CourseOutline {
+    const cleanedOutlineData = this.sanitizeOutlineData(subject, outlineData);
+
+    return this.courseManager.normalizeOutline(subject, {
+      id: cleanedOutlineData.id,
+      subject,
+      title: cleanedOutlineData.title,
+      topics: this.resetOutlineIdentity(cleanedOutlineData.topics),
+      createdAt: cleanedOutlineData.createdAt,
+    });
+  }
+
+  private resetOutlineIdentity(topics: TopicOutline[]): TopicOutline[] {
+    return (topics ?? []).map((topic) => ({
+      ...topic,
+      id: '',
+      code: '',
+      slug: '',
+      lessons: (topic.lessons ?? []).map((lesson) => ({
+        ...lesson,
+        id: '',
+        code: '',
+        slug: '',
+        filePath: '',
+      })),
+    }));
   }
 
   private sanitizeOutlineData(
