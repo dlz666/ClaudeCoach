@@ -9,12 +9,14 @@ import { ProgressStore } from './progressStore';
 import { PreferencesStore } from './preferencesStore';
 import { CourseManager } from '../courses/courseManager';
 import { getStoragePathResolver } from '../storage/pathResolver';
+import { CourseProfileStore, inferWeaknessTagsFromTexts } from './courseProfileStore';
 
 export class AdaptiveEngine {
   private ai: AIClient;
   private progressStore: ProgressStore;
   private prefsStore: PreferencesStore;
   private courseManager: CourseManager;
+  private courseProfileStore: CourseProfileStore;
   private paths = getStoragePathResolver();
 
   constructor() {
@@ -22,6 +24,7 @@ export class AdaptiveEngine {
     this.progressStore = new ProgressStore();
     this.prefsStore = new PreferencesStore();
     this.courseManager = new CourseManager();
+    this.courseProfileStore = new CourseProfileStore();
   }
 
   private get diagnosisDir(): string {
@@ -80,6 +83,31 @@ export class AdaptiveEngine {
       overallStrategy: result.overallStrategy || '',
       nextSteps: Array.isArray(result.nextSteps) ? result.nextSteps.filter(Boolean) : [],
     };
+  }
+
+  private async _resolveDiagnosisTopicId(subject: Subject, diagnosis: LatestDiagnosis): Promise<string | null> {
+    const outline = await this.courseManager.getCourseOutline(subject);
+    const snapshot = diagnosis.subjectSnapshots[0];
+    if (!outline || !snapshot) {
+      return null;
+    }
+
+    const focusText = [
+      snapshot.recommendedFocus,
+      ...snapshot.topWeaknesses,
+      ...snapshot.keyMistakePatterns,
+    ].join(' ').toLowerCase();
+
+    let bestMatch: { topicId: string; score: number } | null = null;
+    for (const topic of outline.topics) {
+      const title = topic.title.toLowerCase();
+      const score = title && focusText.includes(title) ? title.length : 0;
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { topicId: topic.id, score };
+      }
+    }
+
+    return bestMatch && bestMatch.score > 0 ? bestMatch.topicId : null;
   }
 
   async getLatestDiagnosis(subject?: Subject): Promise<LatestDiagnosis | null> {
@@ -151,12 +179,13 @@ export class AdaptiveEngine {
   async runDiagnosis(subject: Subject): Promise<LatestDiagnosis> {
     await this.courseManager.syncLessonStatuses(subject);
 
-    const [profile, prefs, prevDiagnosis, summaries, grades] = await Promise.all([
+    const [profile, prefs, prevDiagnosis, summaries, grades, courseProfileContext] = await Promise.all([
       this.progressStore.getProfile(),
       this.prefsStore.get(),
       this.getLatestDiagnosis(subject),
       this.collectSummaries(subject),
       this.collectRecentGrades(50, subject),
+      this.courseProfileStore.buildPromptContext(subject),
     ]);
 
     // Use token budget to select what fits
@@ -169,6 +198,7 @@ export class AdaptiveEngine {
       profile,
       preferences: prefs,
       diagnosis: prevDiagnosis,
+      ...courseProfileContext,
     });
 
     const result = await this.ai.chatJson<Omit<LatestDiagnosis, 'updatedAt'>>(messages);
@@ -183,6 +213,30 @@ export class AdaptiveEngine {
 
     // Save new latest
     await writeJson(this.getLatestPath(subject), diagnosis);
+
+    const snapshot = diagnosis.subjectSnapshots[0];
+    const topicId = await this._resolveDiagnosisTopicId(subject, diagnosis);
+    await this.courseProfileStore.recordEvent(subject, {
+      id: `diagnosis-${subject}-${diagnosis.updatedAt}`,
+      type: 'diagnosis',
+      subject,
+      topicId,
+      lessonId: null,
+      createdAt: diagnosis.updatedAt,
+      summary: `Focus: ${snapshot?.recommendedFocus || diagnosis.overallStrategy || 'none'}. Evidence: ${summaries.length} topic summaries, ${grades.length} grades.`,
+      weaknessTags: inferWeaknessTagsFromTexts([
+        ...(snapshot?.topWeaknesses ?? []),
+        ...(snapshot?.keyMistakePatterns ?? []),
+        snapshot?.recommendedFocus ?? '',
+      ]),
+      strengthTags: [],
+      rawRefs: [this.getLatestPath(subject)],
+      metadata: {
+        evidenceTopicSummaries: summaries.length,
+        evidenceGrades: grades.length,
+        recommendedFocus: snapshot?.recommendedFocus || '',
+      },
+    });
 
     // Generate readable report
     await this._generateReport(subject, diagnosis);

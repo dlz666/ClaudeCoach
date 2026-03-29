@@ -15,7 +15,7 @@
   --success-soft: rgba(72, 187, 120, 0.18);
   --warn-soft: rgba(245, 158, 11, 0.18);
   --danger-soft: rgba(239, 68, 68, 0.18);
-  --shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+  --shadow: 0 16px 34px rgba(0, 0, 0, 0.224);
 }
 
 * {
@@ -25,10 +25,12 @@
 body {
   margin: 0;
   padding: 0;
+  min-height: 100vh;
   color: var(--vscode-foreground);
   background:
     radial-gradient(circle at top right, color-mix(in srgb, var(--vscode-button-background) 16%, transparent), transparent 35%),
     linear-gradient(180deg, color-mix(in srgb, var(--vscode-sideBar-background) 94%, black) 0%, var(--vscode-sideBar-background) 100%);
+  background-repeat: no-repeat;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   font-size: 13px;
 }
@@ -88,55 +90,6 @@ body {
   box-shadow: var(--shadow);
 }
 
-.ai-hero {
-  padding: 18px;
-  background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--vscode-button-background) 20%, transparent), transparent 42%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 92%, transparent), color-mix(in srgb, var(--surface-2) 96%, transparent));
-}
-
-.ai-config-center-body {
-  overflow: hidden;
-  max-height: 4000px;
-  opacity: 1;
-  transition: max-height 180ms ease, opacity 140ms ease, margin-top 140ms ease;
-}
-
-.ai-hero.collapsed .ai-config-center-body {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-  pointer-events: none;
-}
-
-.collapse-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 8px 12px;
-  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-  color: var(--vscode-foreground);
-  cursor: pointer;
-  font-size: 12px;
-  transition: 120ms ease;
-}
-
-.collapse-toggle:hover {
-  border-color: color-mix(in srgb, var(--vscode-button-background) 55%, var(--border));
-  transform: translateY(-1px);
-}
-
-.collapse-toggle-icon {
-  display: inline-block;
-  transition: transform 160ms ease;
-}
-
-.ai-hero.collapsed .collapse-toggle-icon {
-  transform: rotate(-90deg);
-}
-
 .panel-header {
   display: flex;
   align-items: flex-start;
@@ -167,13 +120,6 @@ body {
   margin: 4px 0 0;
   line-height: 1.55;
   font-size: 12px;
-}
-
-.eyebrow {
-  margin-bottom: 8px;
-  color: color-mix(in srgb, var(--vscode-button-background) 82%, white);
-  font-size: 11px;
-  letter-spacing: 0.14em;
 }
 
 .stack,
@@ -230,12 +176,22 @@ body {
   gap: 10px;
 }
 
+.resolved-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .stat-card {
   min-width: 0;
   padding: 11px 12px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface-1) 80%, transparent);
   border: 1px solid var(--border);
+}
+
+.stat-card-wide {
+  grid-column: 1 / -1;
 }
 
 .stat-label {
@@ -452,6 +408,16 @@ textarea:focus,
 
 .custom-dropdown {
   position: relative;
+}
+
+.ai-change-dropdown {
+  flex: 0 0 auto;
+}
+
+.ai-change-dropdown .dropdown-menu {
+  left: auto;
+  right: 0;
+  min-width: 170px;
 }
 
 .dropdown-trigger {
@@ -1054,7 +1020,8 @@ textarea:focus,
     padding: 14px;
   }
 
-  .resolved-stats {
+  .resolved-stats,
+  .resolved-summary-grid {
     grid-template-columns: 1fr;
   }
 

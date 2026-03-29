@@ -140,205 +140,11 @@
   </div>
 
   <div id="tab-settings" class="tab-content">
-    <section class="panel ai-hero" id="ai-config-center">
-      <div class="panel-header">
-        <div>
-          <div class="eyebrow">AI CONFIG CENTER</div>
-          <h3>AI 配置中心</h3>
-          <p class="section-subtitle">像 profile switcher 一样管理全部 AI 配置，支持导入、切换、项目覆盖和快速验证。</p>
-        </div>
-        <button class="collapse-toggle" id="btn-toggle-ai-config-center" type="button" aria-expanded="true" aria-controls="ai-config-center-body">
-          <span class="collapse-toggle-label">收起</span>
-          <span class="collapse-toggle-icon">▼</span>
-        </button>
-      </div>
-
-      <div class="ai-config-center-body" id="ai-config-center-body">
-      <div class="ai-grid">
-        <div class="ai-stack">
-          <div class="card resolved-card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">当前生效配置</div>
-                <div class="card-subtitle" id="resolved-config-source">加载中...</div>
-              </div>
-              <div class="pill-group" id="resolved-warning-pills"></div>
-            </div>
-            <div class="resolved-main">
-              <div class="resolved-name" id="resolved-config-name">-</div>
-              <div class="resolved-meta" id="resolved-config-meta">-</div>
-            </div>
-            <div class="resolved-stats">
-              <div class="stat-card">
-                <span class="stat-label">Base URL</span>
-                <span class="stat-value mono" id="resolved-config-url">-</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-label">上下文窗口</span>
-                <span class="stat-value" id="resolved-config-context">-</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-label">最大输出</span>
-                <span class="stat-value" id="resolved-config-max-tokens">-</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-label">历史预算</span>
-                <span class="stat-value" id="resolved-config-history-budget">-</span>
-              </div>
-            </div>
-            <div class="resolved-footnote">影响范围：课程生成、讲义、练习、诊断、资料摘要、对话。</div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Profiles</div>
-                <div class="card-subtitle">选择一个 profile 进行编辑，或直接激活切换。</div>
-              </div>
-              <button class="btn small primary" id="btn-new-ai-profile">新建</button>
-            </div>
-            <div id="ai-profiles-list" class="profile-list"></div>
-          </div>
-        </div>
-
-        <div class="ai-stack">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Profile 详情</div>
-                <div class="card-subtitle" id="ai-editor-status">选择一个 profile 后可编辑并保存。</div>
-              </div>
-              <div class="pill warn">Token 明文保存在本地</div>
-            </div>
-
-            <div class="form-grid">
-              <label for="ai-profile-name">配置名称</label>
-              <input type="text" id="ai-profile-name" placeholder="例如：GPT-4o 主力 / Claude Sonnet / DeepSeek 研究">
-
-              <label for="ai-provider">Provider</label>
-              <select id="ai-provider">
-                <option value="openai">OpenAI Compatible</option>
-                <option value="anthropic">Anthropic</option>
-              </select>
-
-              <label for="ai-base-url">OpenAI 兼容 Base URL</label>
-              <input type="text" id="ai-base-url" placeholder="https://api.openai.com/v1">
-
-              <label for="ai-anthropic-base-url">Anthropic Base URL</label>
-              <input type="text" id="ai-anthropic-base-url" placeholder="https://api.anthropic.com">
-
-              <label for="ai-token">API Token</label>
-              <div class="inline-field">
-                <input type="password" id="ai-token" placeholder="sk-...">
-                <button class="btn ghost small fixed" id="btn-toggle-token-visibility">显示</button>
-              </div>
-
-              <label for="ai-model">模型名称</label>
-              <input type="text" id="ai-model" placeholder="gpt-4o / claude-3-7-sonnet / deepseek-chat">
-
-              <label for="ai-context-window">Context Window</label>
-              <input type="number" id="ai-context-window" value="128000" min="4096" step="1024">
-
-              <label for="ai-max-tokens">Max Tokens</label>
-              <input type="number" id="ai-max-tokens" value="4096" min="256" step="256">
-
-              <label for="ai-profile-notes">备注</label>
-              <textarea id="ai-profile-notes" rows="3" placeholder="比如适用场景、限流情况、备注说明"></textarea>
-            </div>
-
-            <div class="actions-row">
-              <button class="btn primary" id="btn-save-ai-profile">保存 Profile</button>
-              <button class="btn" id="btn-activate-ai-profile">设为当前全局配置</button>
-              <button class="btn" id="btn-test-ai-profile">测试连接</button>
-            </div>
-            <div class="actions-row">
-              <button class="btn ghost" id="btn-duplicate-ai-profile">复制</button>
-              <button class="btn ghost danger" id="btn-delete-ai-profile">删除</button>
-              <button class="btn ghost" id="btn-export-ai-profile">导出</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">项目覆盖</div>
-                <div class="card-subtitle">可让当前工作区使用不同于全局默认的 AI 配置。</div>
-              </div>
-            </div>
-
-            <div class="toggle-row">
-              <label class="switch">
-                <input type="checkbox" id="workspace-override-enabled">
-                <span class="switch-slider"></span>
-              </label>
-              <div>
-                <div class="toggle-title">为当前项目启用独立 AI 配置</div>
-                <div class="toggle-subtitle">关闭时直接继承当前全局 profile。</div>
-              </div>
-            </div>
-
-            <div class="form-grid compact">
-              <label for="workspace-base-profile">基于哪个全局 Profile</label>
-              <select id="workspace-base-profile"></select>
-
-              <label for="workspace-provider">覆盖 Provider</label>
-              <select id="workspace-provider">
-                <option value="">继承全局</option>
-                <option value="openai">OpenAI Compatible</option>
-                <option value="anthropic">Anthropic</option>
-              </select>
-
-              <label for="workspace-base-url">覆盖 OpenAI Base URL</label>
-              <input type="text" id="workspace-base-url" placeholder="留空表示继承">
-
-              <label for="workspace-anthropic-base-url">覆盖 Anthropic Base URL</label>
-              <input type="text" id="workspace-anthropic-base-url" placeholder="留空表示继承">
-
-              <label for="workspace-token">覆盖 Token</label>
-              <input type="password" id="workspace-token" placeholder="留空表示继承">
-
-              <label for="workspace-model">覆盖模型名称</label>
-              <input type="text" id="workspace-model" placeholder="留空表示继承">
-
-              <label for="workspace-context-window">覆盖 Context Window</label>
-              <input type="number" id="workspace-context-window" min="4096" step="1024" placeholder="留空表示继承">
-
-              <label for="workspace-max-tokens">覆盖 Max Tokens</label>
-              <input type="number" id="workspace-max-tokens" min="256" step="256" placeholder="留空表示继承">
-
-              <label for="workspace-notes">覆盖备注</label>
-              <textarea id="workspace-notes" rows="2" placeholder="可记录当前项目的特殊要求"></textarea>
-            </div>
-
-            <button class="btn primary" id="btn-save-workspace-override">保存项目覆盖</button>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">导入 / 导出 / 测试</div>
-                <div class="card-subtitle">支持从 `.claude`、`.codex`、JSON 配置包导入。</div>
-              </div>
-            </div>
-            <div class="actions-grid">
-              <button class="btn" id="btn-import-claude">从 .claude 导入</button>
-              <button class="btn" id="btn-import-codex">从 .codex 导入</button>
-              <button class="btn" id="btn-import-package">导入配置包</button>
-              <button class="btn" id="btn-export-active-profile">导出当前激活配置</button>
-              <button class="btn" id="btn-test-resolved-config">测试当前生效配置</button>
-            </div>
-            <div id="ai-import-feedback" class="feedback-line muted">导入成功后会出现在 Profiles 列表中。</div>
-          </div>
-        </div>
-      </div>
-      </div>
-    </section>
-
     <section class="panel">
       <div class="panel-header">
         <div>
           <h3>学习偏好</h3>
-          <p class="section-subtitle">保留现有学习偏好设置，AI 配置已独立上移为主模块。</p>
+          <p class="section-subtitle">保留现有学习偏好设置，AI 配置改为只读展示。</p>
         </div>
       </div>
 
@@ -388,6 +194,48 @@
       </select>
 
       <button class="btn primary" id="btn-save-prefs">保存学习偏好</button>
+    </section>
+
+    <section class="panel resolved-card" id="ai-config-center">
+      <div class="panel-header">
+        <div>
+          <h3>当前 AI 模型</h3>
+          <p class="section-subtitle">查看当前生效模型配置。</p>
+        </div>
+        <div class="custom-dropdown ai-change-dropdown">
+          <button class="btn small" id="btn-change-ai-config" type="button">更换</button>
+          <div class="dropdown-menu hidden" id="ai-change-menu">
+            <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
+            <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
+            <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-subtitle" id="resolved-config-source">加载中...</div>
+      <div class="resolved-main">
+        <div class="resolved-name" id="resolved-config-name">-</div>
+      </div>
+      <div class="resolved-summary-grid">
+        <div class="stat-card">
+          <span class="stat-label">Provider</span>
+          <span class="stat-value" id="resolved-config-provider">-</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">来源</span>
+          <span class="stat-value" id="resolved-config-origin">-</span>
+        </div>
+        <div class="stat-card stat-card-wide">
+          <span class="stat-label">Base URL</span>
+          <span class="stat-value mono" id="resolved-config-url">-</span>
+        </div>
+      </div>
+      <div class="hidden">
+        <span id="resolved-warning-pills"></span>
+        <span id="resolved-config-meta"></span>
+        <span id="resolved-config-context"></span>
+        <span id="resolved-config-max-tokens"></span>
+        <span id="resolved-config-history-budget"></span>
+      </div>
     </section>
 
     <section class="panel">

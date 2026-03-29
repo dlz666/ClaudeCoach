@@ -9,6 +9,7 @@ import { MaterialManager } from '../materials/materialManager';
 import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
 import { AdaptiveEngine } from '../progress/adaptiveEngine';
+import { CourseProfileStore, inferRevisionPreferenceTags } from '../progress/courseProfileStore';
 import { SidebarResponse, ChatMessage, MaterialEntry, MaterialIndex, MaterialPreview, CourseOutline, ChatGroundingMode, AIProfile, AIWorkspaceOverride, LessonMeta, Subject, TopicOutline } from '../types';
 import { AIClient } from '../ai/client';
 import { AIProfileManager } from '../ai/profileManager';
@@ -50,6 +51,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private progressStore = new ProgressStore();
   private prefsStore = new PreferencesStore();
   private adaptiveEngine = new AdaptiveEngine();
+  private courseProfileStore = new CourseProfileStore();
   private exerciseScanner = new ExerciseScanner();
   private _taskId = 0;
   private _activeTaskKeys = new Map<string, string>();
@@ -125,12 +127,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _pushAIConfigState() {
-    const [state, resolved, workspaceOverride] = await Promise.all([
-      this.aiProfiles.getState(),
+    const [resolved, workspaceOverride] = await Promise.all([
       this.aiProfiles.resolveConfig(),
       this.aiProfiles.getWorkspaceOverride(),
     ]);
-    this._post({ type: 'aiProfiles', data: state });
     this._view?.webview.postMessage({ type: 'resolvedAIConfig', data: resolved, workspaceOverride });
   }
 
@@ -569,6 +569,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     };
   }
 
+  private async _buildCourseProfileContext(subject?: Subject, topicId?: string) {
+    return this.courseProfileStore.buildPromptContext(subject, topicId);
+  }
+
+  private async _recordRevisionFeedbackEvent(options: {
+    type: 'lecture-revision' | 'answer-revision';
+    subject?: Subject;
+    topicId?: string | null;
+    lessonId?: string | null;
+    userMessage: string;
+    summaryTarget: string;
+    rawRefs?: string[];
+  }): Promise<void> {
+    if (!options.subject) {
+      return;
+    }
+
+    const preferenceTags = inferRevisionPreferenceTags(options.userMessage);
+    if (!preferenceTags.length) {
+      return;
+    }
+
+    await this.courseProfileStore.recordEvent(options.subject, {
+      id: `${options.type}-${Date.now()}`,
+      type: options.type,
+      subject: options.subject,
+      topicId: options.topicId ?? null,
+      lessonId: options.lessonId ?? null,
+      createdAt: new Date().toISOString(),
+      summary: `${options.summaryTarget}. User revision intent: ${options.userMessage.slice(0, 180)}`,
+      weaknessTags: [],
+      strengthTags: [],
+      preferenceTags,
+      rawRefs: options.rawRefs ?? [],
+      metadata: {
+        target: options.summaryTarget,
+      },
+    });
+  }
+
   private async _reviseLectureViaChat(
     userMessage: string,
     subject: Subject | undefined,
@@ -596,6 +636,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     const currentContent = await fs.readFile(target.filePath, 'utf-8');
     const editGrounding = await this._buildEditGrounding(subject ?? target.subject);
+    const courseProfileContext = await this._buildCourseProfileContext(target.subject, target.topicId);
     let revisedContent = currentContent;
 
     const sections = this._parseMarkdownSections(currentContent);
@@ -611,6 +652,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           profile,
           preferences: prefs,
           diagnosis: diag,
+          ...courseProfileContext,
           ...editGrounding,
         }
       );
@@ -625,6 +667,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         profile,
         preferences: prefs,
         diagnosis: diag,
+        ...courseProfileContext,
         ...editGrounding,
       });
       const revisedRaw = await this.aiClient.chatCompletion(reviseMessages, {
@@ -636,6 +679,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const changed = revisedContent.trim() !== currentContent.trim();
     if (changed) {
       await writeMarkdownAndPreview(target.filePath, revisedContent);
+      await this._recordRevisionFeedbackEvent({
+        type: 'lecture-revision',
+        subject: target.subject,
+        topicId: target.topicId,
+        lessonId: target.lessonId,
+        userMessage,
+        summaryTarget: target.label,
+        rawRefs: [target.filePath],
+      });
     }
 
     this._rememberResolvedTarget(target);
@@ -699,9 +751,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
             const materialSummary = await this.materialManager.getRelevantSummary(msg.subject, '');
             const outline = await this.contentGen.generateCourse(msg.subject, {
-              profile, preferences: prefs, diagnosis: diag, materialSummary,
+              profile, preferences: prefs, diagnosis: diag, materialSummary, ...courseProfileContext,
             });
             this._post({ type: 'courseGenerated', outline });
             this._post({ type: 'log', message: `课程已生成：${outline.title}`, level: 'info' });
@@ -726,11 +779,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               [currentOutline.title, '重构课程大纲'].join(' '),
               { materialId: msg.materialId, maxExcerpts: 6 },
             );
-
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
             const rebuilt = await this.contentGen.rebuildCourse(msg.subject, currentOutline, {
               profile,
               preferences: prefs,
               diagnosis: diag,
+              ...courseProfileContext,
               ...grounding,
             });
 
@@ -777,9 +831,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               [msg.topicTitle, msg.lessonTitle, '讲义'].filter(Boolean).join(' '),
               { maxExcerpts: 5 },
             );
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateLesson(
               msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle, msg.difficulty,
-              { profile, preferences: prefs, diagnosis: diag, ...grounding },
+              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
             );
             this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
             this._post({ type: 'log', message: `讲义已生成：${msg.lessonTitle}`, level: 'info' });
@@ -829,9 +884,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               [msg.topicTitle, msg.lessonTitle, '练习题'].filter(Boolean).join(' '),
               { maxExcerpts: 5 },
             );
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateExercises(
               msg.subject, msg.topicId, msg.lessonId, msg.lessonTitle, msg.count, msg.difficulty,
-              { profile, preferences: prefs, diagnosis: diag, ...grounding },
+              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
             );
             await this.progressStore.incrementSession();
             await this._refreshCourses();
@@ -863,9 +919,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             const result = await this.grader.grade(
               msg.exercise, msg.answer, msg.subject, msg.topicId, msg.sessionId,
-              { profile, preferences: prefs, diagnosis: diag },
+              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext },
             );
             await this.progressStore.incrementExercises(1);
             this._post({ type: 'gradeResult', result });
@@ -957,17 +1014,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'getAIProfiles': {
-          await this._pushAIConfigState();
-          break;
-        }
-
         case 'getResolvedAIConfig': {
           await this._pushAIConfigState();
           break;
         }
 
-        case 'saveAIProfile': {
+        case '__legacy_saveAIProfile__': {
           await this.aiProfiles.saveProfile({
             id: msg.profile.id,
             name: msg.profile.name,
@@ -985,25 +1037,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'deleteAIProfile': {
+        case '__legacy_deleteAIProfile__': {
           await this.aiProfiles.deleteProfile(msg.profileId);
           await this._afterAIConfigMutation('AI 配置已删除');
           break;
         }
 
-        case 'duplicateAIProfile': {
+        case '__legacy_duplicateAIProfile__': {
           const duplicated = await this.aiProfiles.duplicateProfile(msg.profileId);
           await this._afterAIConfigMutation(`已复制 AI 配置：${duplicated.name}`);
           break;
         }
 
-        case 'activateAIProfile': {
+        case '__legacy_activateAIProfile__': {
           await this.aiProfiles.activateProfile(msg.profileId);
           await this._afterAIConfigMutation('已切换当前 AI 配置');
           break;
         }
 
-        case 'saveWorkspaceAIOverride': {
+        case '__legacy_saveWorkspaceAIOverride__': {
           await this.aiProfiles.saveWorkspaceOverride(msg.override as AIWorkspaceOverride);
           await this._afterAIConfigMutation('项目级 AI 覆盖已更新');
           break;
@@ -1011,7 +1063,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case 'importAIProfile': {
           try {
-            const result = await this.aiProfiles.importProfile(msg.source, { activate: false });
+            const result = await this.aiProfiles.importProfile(msg.source, { activate: true });
             this._post({ type: 'aiImportResult', data: result });
             await this._afterAIConfigMutation(`已导入 AI 配置：${result.profile.name}`);
           } catch (error: any) {
@@ -1024,13 +1076,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'exportAIProfile': {
+        case '__legacy_exportAIProfile__': {
           await this.aiProfiles.exportProfile(msg.profileId, !!msg.includeToken);
           this._post({ type: 'log', message: 'AI 配置已导出', level: 'info' });
           break;
         }
 
-        case 'testAIProfile': {
+        case '__legacy_testAIProfile__': {
           try {
             const message = await this.aiProfiles.testResolvedConfig(msg.profile as Partial<AIProfile> | undefined);
             this._view?.webview.postMessage({ type: 'aiTestResult', success: true, message });
@@ -1148,13 +1200,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             }
 
             const grounding = await this._buildChatGrounding(userMessage, msg.subject, msg.mode, msg.materialId);
+            const activeLessonTarget = this.lastOpenedLessonFile?.subject === msg.subject
+              ? this.lastOpenedLessonFile
+              : undefined;
+            const chatTopicId = activeLessonTarget?.topicId;
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, chatTopicId);
             const messages = chatPrompt(userMessage, this.chatHistory, {
               profile,
               preferences: prefs,
               diagnosis: diag,
+              ...courseProfileContext,
               ...grounding,
             });
             const reply = await this.aiClient.chatCompletion(messages);
+            await this._recordRevisionFeedbackEvent({
+              type: 'answer-revision',
+              subject: msg.subject,
+              topicId: chatTopicId ?? null,
+              lessonId: activeLessonTarget?.lessonId ?? null,
+              userMessage,
+              summaryTarget: 'chat-answer',
+            });
             this._recordChatTurn(userMessage, reply);
             this._view?.webview.postMessage({ type: 'chatResponse', content: reply });
             this._post({ type: 'log', message: `AI 鍥炲瀹屾垚锛?{reply.length} 瀛楋級`, level: 'info' });

@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import { createHash } from 'crypto';
 import { Subject } from '../types';
+
+const DEFAULT_WORKSPACE_STORAGE_ID = 'default-workspace';
 
 function expandHome(inputPath: string): string {
   return inputPath.replace(/^~/, os.homedir());
@@ -83,19 +84,10 @@ export function buildLessonCode(
   return `${formatTwoDigits(chapterNumber)}-${formatTwoDigits(lessonNumber)}-${slug}`;
 }
 
-function getWorkspaceFolderPath(): string | null {
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
-}
-
 export function getWorkspaceStorageId(): string {
-  const folderPath = getWorkspaceFolderPath();
-  if (!folderPath) {
-    return 'default-workspace';
-  }
-
-  const folderName = sanitizeSegment(path.basename(folderPath), 'workspace');
-  const hash = createHash('sha1').update(folderPath.toLowerCase()).digest('hex').slice(0, 8);
-  return `${folderName}-${hash}`;
+  // Keep all workspace-scoped artifacts under the shared default workspace so
+  // existing local courses and overrides remain visible across extension runs.
+  return DEFAULT_WORKSPACE_STORAGE_ID;
 }
 
 export class StoragePathResolver {
@@ -244,6 +236,10 @@ export class StoragePathResolver {
 
   courseSummaryPath(subject: Subject): string {
     return path.join(this.courseSubjectDir(subject), 'summary.md');
+  }
+
+  courseProfilePath(subject: Subject): string {
+    return path.join(this.courseSubjectDir(subject), 'profile.json');
   }
 
   courseTopicsDir(subject: Subject): string {

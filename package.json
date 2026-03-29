@@ -1,7 +1,7 @@
 {
   "name": "claude-coach",
   "displayName": "ClaudeCoach",
-  "description": "AI 学习助手 - 个性化课程生成、练习批改、自适应学习",
+  "description": "AI 学习助手，支持课程生成、练习批改和自适应学习。",
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.85.0"
@@ -58,24 +58,8 @@
         "title": "ClaudeCoach: 导入资料"
       },
       {
-        "command": "claudeCoach.switchAIProfile",
-        "title": "ClaudeCoach: 切换 AI 配置"
-      },
-      {
-        "command": "claudeCoach.openAIConfigCenter",
-        "title": "ClaudeCoach: 打开 AI 配置中心"
-      },
-      {
         "command": "claudeCoach.importAIProfile",
         "title": "ClaudeCoach: 导入 AI 配置包"
-      },
-      {
-        "command": "claudeCoach.exportAIProfile",
-        "title": "ClaudeCoach: 导出当前 AI 配置"
-      },
-      {
-        "command": "claudeCoach.testAIProfile",
-        "title": "ClaudeCoach: 测试当前 AI 配置"
       },
       {
         "command": "claudeCoach.syncFromClaude",
@@ -101,7 +85,7 @@
         "claudeCoach.apiBaseUrl": {
           "type": "string",
           "default": "https://api.openai.com/v1",
-          "description": "旧版单套 AI 配置的 OpenAI 兼容 Base URL。"
+          "description": "旧版单套 AI 配置的 OpenAI Compatible Base URL。"
         },
         "claudeCoach.anthropicBaseUrl": {
           "type": "string",

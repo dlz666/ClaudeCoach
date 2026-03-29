@@ -1,6 +1,16 @@
 import { AIClient } from '../ai/client';
 import { strictCourseOutlinePrompt, strictRebuildCourseOutlinePrompt, lessonPrompt, exercisePrompt } from '../ai/prompts';
-import { CourseOutline, Subject, Exercise, LearningPreferences, LatestDiagnosis, StudentProfile, subjectLabel } from '../types';
+import {
+  CourseOutline,
+  Subject,
+  Exercise,
+  LearningPreferences,
+  LatestDiagnosis,
+  StudentProfile,
+  CourseProfile,
+  CourseProfileChapter,
+  subjectLabel,
+} from '../types';
 import { CourseManager } from './courseManager';
 import { writeText } from '../utils/fileSystem';
 import { writeMarkdownAndPreview, buildCourseSummaryMd } from '../utils/markdown';
@@ -9,6 +19,9 @@ interface GenerationContext {
   profile?: StudentProfile | null;
   preferences?: LearningPreferences | null;
   diagnosis?: LatestDiagnosis | null;
+  courseProfile?: CourseProfile | null;
+  chapterProfile?: CourseProfileChapter | null;
+  profileEvidenceSummary?: string;
   currentCourseTitle?: string;
   courseOutlineSummary?: string;
   materialSummary?: string;

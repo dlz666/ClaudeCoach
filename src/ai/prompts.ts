@@ -1,4 +1,16 @@
-import { ChatMessage, Subject, LearningPreferences, LatestDiagnosis, StudentProfile, CourseOutline, subjectLabel } from '../types';
+import {
+  ChatMessage,
+  Subject,
+  LearningPreferences,
+  LatestDiagnosis,
+  StudentProfile,
+  CourseOutline,
+  CourseProfile,
+  CourseProfileChapter,
+  FeedbackStrengthTag,
+  FeedbackWeaknessTag,
+  subjectLabel,
+} from '../types';
 
 function preferencesContext(prefs: LearningPreferences | null): string {
   if (!prefs) { return ''; }
@@ -54,10 +66,81 @@ function profileContext(profile: StudentProfile | null): string {
   return `学生：${profile.name}，水平 ${profile.level}，目标：${goals}，已完成 ${profile.totalExercises} 道练习\n`;
 }
 
+function courseProfileContext(courseProfile: CourseProfile | null): string {
+  if (!courseProfile) {
+    return '';
+  }
+
+  const lines: string[] = [`\n课程级画像（${courseProfile.courseTitle}）：`];
+  if (courseProfile.overall.learnerLevelEstimate) {
+    lines.push(`- 课程估计水平：${courseProfile.overall.learnerLevelEstimate}`);
+  }
+  if (courseProfile.overall.commonWeaknessTags.length) {
+    lines.push(`- 常见薄弱点：${courseProfile.overall.commonWeaknessTags.join('、')}`);
+  }
+  if (courseProfile.overall.commonStrengthTags.length) {
+    lines.push(`- 常见优势：${courseProfile.overall.commonStrengthTags.join('、')}`);
+  }
+  if (courseProfile.overall.preferredExplanationStyle.length) {
+    lines.push(`- 偏好讲解风格：${courseProfile.overall.preferredExplanationStyle.join('、')}`);
+  }
+  if (courseProfile.overall.stablePreferences.length) {
+    lines.push(`- 稳定偏好信号：${courseProfile.overall.stablePreferences.join('、')}`);
+  }
+  if (courseProfile.overall.responseHints.length) {
+    lines.push(`- 回答提示：${courseProfile.overall.responseHints.join('；')}`);
+  }
+  if (courseProfile.overall.generationHints.length) {
+    lines.push(`- 生成提示：${courseProfile.overall.generationHints.join('；')}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function chapterProfileContext(chapterProfile: CourseProfileChapter | null): string {
+  if (!chapterProfile) {
+    return '';
+  }
+
+  const lines: string[] = [`\n当前章节画像：${chapterProfile.title}`];
+  lines.push(`- 状态：${chapterProfile.status}`);
+  if (chapterProfile.masteryPercent !== null) {
+    lines.push(`- 掌握度：${chapterProfile.masteryPercent}%`);
+  }
+  if (chapterProfile.weaknessTags.length) {
+    lines.push(`- 当前章节薄弱点：${chapterProfile.weaknessTags.join('、')}`);
+  }
+  if (chapterProfile.strengthTags.length) {
+    lines.push(`- 当前章节优势：${chapterProfile.strengthTags.join('、')}`);
+  }
+  if (chapterProfile.misconceptions.length) {
+    lines.push(`- 常见误区：${chapterProfile.misconceptions.join('；')}`);
+  }
+  if (chapterProfile.preferredScaffolding.length) {
+    lines.push(`- 讲解脚手架：${chapterProfile.preferredScaffolding.join('；')}`);
+  }
+  if (chapterProfile.answeringHints.length) {
+    lines.push(`- 回答提示：${chapterProfile.answeringHints.join('；')}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function weaknessTagContext(tags: FeedbackWeaknessTag[]): string {
+  return tags.length ? tags.join('、') : '';
+}
+
+function strengthTagContext(tags: FeedbackStrengthTag[]): string {
+  return tags.length ? tags.join('、') : '';
+}
+
 interface PromptContext {
   profile?: StudentProfile | null;
   preferences?: LearningPreferences | null;
   diagnosis?: LatestDiagnosis | null;
+  courseProfile?: CourseProfile | null;
+  chapterProfile?: CourseProfileChapter | null;
+  profileEvidenceSummary?: string;
   currentCourseTitle?: string;
   courseOutlineSummary?: string;
   materialSummary?: string;
@@ -76,6 +159,14 @@ function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, 
 
   if (ctx.profile) {
     lines.push(`请结合学生当前水平“${ctx.profile.level}”、学习目标“${ctx.profile.goals.join('、') || '暂无明确目标'}”和已完成练习量 ${ctx.profile.totalExercises} 题，调整题目的脚手架程度、应用场景和综合性。`);
+  }
+
+  if (ctx.chapterProfile?.weaknessTags.length) {
+    lines.push(`当前章节优先覆盖这些薄弱点：${weaknessTagContext(ctx.chapterProfile.weaknessTags)}。`);
+  }
+
+  if (ctx.chapterProfile?.preferredScaffolding.length) {
+    lines.push(`请遵循当前章节的脚手架偏好：${ctx.chapterProfile.preferredScaffolding.join('；')}。`);
   }
 
   if (ctx.preferences) {
@@ -102,8 +193,14 @@ function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, 
 function buildSystemBase(ctx: PromptContext): string {
   let sys = '你是一位经验丰富、耐心清晰的大学老师，正在辅导一位计算机专业大一学生。\n';
   sys += profileContext(ctx.profile ?? null);
+  sys += courseProfileContext(ctx.courseProfile ?? null);
+  sys += chapterProfileContext(ctx.chapterProfile ?? null);
   sys += preferencesContext(ctx.preferences ?? null);
   sys += diagnosisContext(ctx.diagnosis ?? null);
+
+  if (ctx.profileEvidenceSummary) {
+    sys += `\n近期课程反馈摘要：\n${ctx.profileEvidenceSummary}\n`;
+  }
 
   if (ctx.currentCourseTitle) {
     sys += `\n当前选中的课程：${ctx.currentCourseTitle}\n`;
@@ -373,11 +470,18 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
   "score": 85,
   "feedback": "详细反馈（Markdown）",
   "strengths": ["优点1"],
-  "weaknesses": ["不足1"]
+  "weaknesses": ["不足1"],
+  "strengthTags": ["clarity"],
+  "weaknessTags": ["concept"],
+  "confidence": "medium"
 }
 要求：
 - 分数范围 0 到 100
 - 反馈具体、可执行
+- strengthTags 只能从 accuracy reasoning clarity structure application other 中选择
+- weaknessTags 只能从 concept syntax logic edge-case complexity debugging other 中选择
+- confidence 只能是 low medium high
+- strengths 和 weaknesses 保持简洁，便于后续沉淀到课程 profile
 - 只输出 JSON`,
     },
     { role: 'user', content: `题目：${exercisePromptText}\n\n学生答案：${studentAnswer}` },

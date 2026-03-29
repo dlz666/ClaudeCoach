@@ -114,6 +114,9 @@ export interface GradeResult {
   feedback: string;
   strengths: string[];
   weaknesses: string[];
+  strengthTags?: FeedbackStrengthTag[];
+  weaknessTags?: FeedbackWeaknessTag[];
+  confidence?: 'low' | 'medium' | 'high';
   gradedAt: string;
 }
 
@@ -136,6 +139,89 @@ export interface StudentProfile {
   startDate: string;
   totalSessions: number;
   totalExercises: number;
+}
+
+export type FeedbackWeaknessTag =
+  | 'concept'
+  | 'syntax'
+  | 'logic'
+  | 'edge-case'
+  | 'complexity'
+  | 'debugging'
+  | 'other';
+
+export type FeedbackStrengthTag =
+  | 'accuracy'
+  | 'reasoning'
+  | 'clarity'
+  | 'structure'
+  | 'application'
+  | 'other';
+
+export type RevisionPreferenceTag =
+  | 'too-abstract'
+  | 'needs-steps'
+  | 'needs-example'
+  | 'too-verbose'
+  | 'too-brief'
+  | 'notation-confusing'
+  | 'pace-too-fast'
+  | 'pace-too-slow';
+
+export type CourseFeedbackEventType =
+  | 'grade'
+  | 'diagnosis'
+  | 'lecture-revision'
+  | 'answer-revision';
+
+export interface CourseFeedbackEvent {
+  id: string;
+  type: CourseFeedbackEventType;
+  subject: Subject;
+  topicId?: string | null;
+  lessonId?: string | null;
+  createdAt: string;
+  summary: string;
+  weaknessTags: FeedbackWeaknessTag[];
+  strengthTags: FeedbackStrengthTag[];
+  preferenceTags?: RevisionPreferenceTag[];
+  rawRefs: string[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface CourseProfileOverall {
+  learnerLevelEstimate: string;
+  preferredExplanationStyle: string[];
+  commonWeaknessTags: FeedbackWeaknessTag[];
+  commonStrengthTags: FeedbackStrengthTag[];
+  stablePreferences: RevisionPreferenceTag[];
+  responseHints: string[];
+  generationHints: string[];
+}
+
+export interface CourseProfileChapter {
+  topicId: string;
+  chapterNumber?: number;
+  title: string;
+  status: LessonMeta['status'];
+  masteryPercent: number | null;
+  gradeCount: number;
+  lastStudiedAt: string | null;
+  weaknessTags: FeedbackWeaknessTag[];
+  strengthTags: FeedbackStrengthTag[];
+  misconceptions: string[];
+  preferredScaffolding: string[];
+  answeringHints: string[];
+}
+
+export interface CourseProfile {
+  schemaVersion: number;
+  subject: Subject;
+  courseTitle: string;
+  updatedAt: string;
+  overall: CourseProfileOverall;
+  chapters: CourseProfileChapter[];
+  recentEvents: CourseFeedbackEvent[];
 }
 
 // ===== Learning Diagnosis =====
@@ -287,16 +373,8 @@ export type SidebarCommand =
   | { type: 'savePreferences'; preferences: LearningPreferences }
   | { type: 'getCourses' }
   | { type: 'getMaterials' }
-  | { type: 'getAIProfiles' }
-  | { type: 'saveAIProfile'; profile: Partial<AIProfile> & Pick<AIProfile, 'name' | 'provider' | 'baseUrl' | 'anthropicBaseUrl' | 'apiToken' | 'model' | 'contextWindow' | 'maxTokens' | 'source'> }
-  | { type: 'deleteAIProfile'; profileId: string }
-  | { type: 'duplicateAIProfile'; profileId: string }
-  | { type: 'activateAIProfile'; profileId: string }
-  | { type: 'getResolvedAIConfig' }
-  | { type: 'saveWorkspaceAIOverride'; override: AIWorkspaceOverride }
   | { type: 'importAIProfile'; source: AIImportSource }
-  | { type: 'exportAIProfile'; profileId: string; includeToken?: boolean }
-  | { type: 'testAIProfile'; profile?: Partial<AIProfile> };
+  | { type: 'getResolvedAIConfig' };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
@@ -306,7 +384,6 @@ export type SidebarResponse =
   | { type: 'preferences'; data: LearningPreferences }
   | { type: 'materials'; data: MaterialIndex }
   | { type: 'materialPreview'; data: MaterialPreview }
-  | { type: 'aiProfiles'; data: AIProfilesState }
   | { type: 'resolvedAIConfig'; data: ResolvedAIConfig; workspaceOverride: AIWorkspaceOverride }
   | { type: 'aiImportResult'; data: AIImportPreview }
   | { type: 'aiTestResult'; success: boolean; message: string }

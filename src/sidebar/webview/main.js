@@ -22,7 +22,6 @@
     chatGroundingMode: saved.chatGroundingMode || 'course',
     chatMessages: Array.isArray(saved.chatMessages) ? saved.chatMessages.slice() : [],
     activeTaskKeys: new Set(),
-    aiConfigCenterCollapsed: !!saved.aiConfigCenterCollapsed,
     resolvedAIConfig: null,
   };
 
@@ -68,12 +67,14 @@
     taskList: $('task-list'),
     dataDirPath: $('data-dir-path'),
     aiConfigCenter: $('ai-config-center'),
-    aiConfigCenterToggle: $('btn-toggle-ai-config-center'),
-    aiConfigCenterToggleLabel: document.querySelector('#btn-toggle-ai-config-center .collapse-toggle-label'),
+    btnChangeAIConfig: $('btn-change-ai-config'),
+    aiChangeMenu: $('ai-change-menu'),
     resolvedConfigSource: $('resolved-config-source'),
     resolvedWarningPills: $('resolved-warning-pills'),
     resolvedConfigName: $('resolved-config-name'),
     resolvedConfigMeta: $('resolved-config-meta'),
+    resolvedConfigProvider: $('resolved-config-provider'),
+    resolvedConfigOrigin: $('resolved-config-origin'),
     resolvedConfigUrl: $('resolved-config-url'),
     resolvedConfigContext: $('resolved-config-context'),
     resolvedConfigMaxTokens: $('resolved-config-max-tokens'),
@@ -107,7 +108,6 @@
       selectedCourseMaterialId: state.selectedCourseMaterialId,
       chatGroundingMode: state.chatGroundingMode,
       chatMessages: state.chatMessages,
-      aiConfigCenterCollapsed: state.aiConfigCenterCollapsed,
     });
   }
 
@@ -763,7 +763,8 @@
     if (!config) {
       if (els.resolvedConfigSource) els.resolvedConfigSource.textContent = '加载中...';
       els.resolvedConfigName.textContent = '-';
-      els.resolvedConfigMeta.textContent = '-';
+      if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = '-';
+      if (els.resolvedConfigOrigin) els.resolvedConfigOrigin.textContent = '-';
       els.resolvedConfigUrl.textContent = '-';
       els.resolvedConfigContext.textContent = '-';
       els.resolvedConfigMaxTokens.textContent = '-';
@@ -775,9 +776,12 @@
     if (els.resolvedConfigSource) {
       els.resolvedConfigSource.textContent = config.resolvedFrom === 'workspace' ? '当前生效：项目覆盖' : '当前生效：全局配置';
     }
-    els.resolvedConfigName.textContent = config.profileName || '-';
-    els.resolvedConfigMeta.textContent = `${config.provider || '-'} / ${config.model || '-'}`;
+    els.resolvedConfigName.textContent = config.model || config.profileName || '-';
+    els.resolvedConfigMeta.textContent = config.provider || '-';
     els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '-';
+    if (els.resolvedConfigOrigin) {
+      els.resolvedConfigOrigin.textContent = config.resolvedFrom === 'workspace' || workspaceOverride?.enabled ? '项目覆盖' : '全局配置';
+    }
     els.resolvedConfigContext.textContent = String(config.contextWindow || '-');
     els.resolvedConfigMaxTokens.textContent = String(config.maxTokens || '-');
     els.resolvedConfigHistoryBudget.textContent = String(config.availableHistoryTokens || '-');
@@ -833,7 +837,23 @@
   document.addEventListener('click', () => {
     els.ddMenu?.classList.add('hidden');
     els.editMenu?.classList.add('hidden');
+    els.aiChangeMenu?.classList.add('hidden');
     closeLessonActionMenus();
+  });
+
+  els.btnChangeAIConfig?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    els.aiChangeMenu?.classList.toggle('hidden');
+  });
+
+  els.aiChangeMenu?.querySelectorAll('[data-ai-import-source]').forEach((item) => {
+    item.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const source = item.getAttribute('data-ai-import-source');
+      if (!source) return;
+      els.aiChangeMenu?.classList.add('hidden');
+      vscode.postMessage({ type: 'importAIProfile', source });
+    });
   });
 
   els.subjectSelect?.addEventListener('change', (event) => {
@@ -1060,9 +1080,29 @@
         updateTaskBlockedState();
         break;
       }
+      case 'activateTab': {
+        if (msg.tab) {
+          activateTab(msg.tab);
+        }
+        if (msg.focus === 'ai' && els.aiConfigCenter) {
+          els.aiConfigCenter.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+        break;
+      }
       case 'resolvedAIConfig': {
         state.resolvedAIConfig = msg.data || null;
         renderResolvedAIConfig(msg.data || null, msg.workspaceOverride || null);
+        break;
+      }
+      case 'aiImportResult': {
+        const labelMap = {
+          claude: '.claude',
+          codex: '.codex',
+          package: 'config JSON',
+          manual: 'manual',
+        };
+        const importedFrom = labelMap[msg.data?.importedFrom] || 'config';
+        addLog(`已从 ${importedFrom} 导入 AI 配置：${msg.data?.profile?.name || '-'}`, 'info');
         break;
       }
       case 'log': {
@@ -1094,7 +1134,6 @@
   syncMaterialImportTargets();
   renderChatContext();
   renderResolvedAIConfig(null, null);
-  renderAIConfigCenterCollapsedState();
   updateTaskBlockedState();
 
   refreshCoursePanelData();

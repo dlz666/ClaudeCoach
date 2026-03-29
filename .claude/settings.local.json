@@ -6,7 +6,10 @@
       "Bash(npm run:*)",
       "Bash(npx tsc:*)",
       "Bash(.\"cd \"d:ClaudeCoach \")",
-      "Bash(. \"cd d:/ClaudeCoach)"
+      "Bash(. \"cd d:/ClaudeCoach)",
+      "Bash(find . -name *.css -o -name *.scss -o -name *.less)",
+      "Bash(grep -r gradient --include=*.css --include=*.scss --include=*.less .)",
+      "Bash(find . -name *.css)"
     ]
   }
 }

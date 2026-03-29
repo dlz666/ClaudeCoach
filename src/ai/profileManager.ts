@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -516,11 +516,14 @@ export class AIProfileManager {
 
   private async importFromPackage(): Promise<AIProfile> {
     const [uri] = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
       canSelectMany: false,
       filters: {
         'ClaudeCoach AI Profile': ['json'],
       },
-      title: '选择要导入的 AI 配置包',
+      openLabel: '导入 JSON 配置',
+      title: '选择要导入的 JSON AI 配置文件',
     }) ?? [];
 
     if (!uri) {

@@ -8,6 +8,7 @@ import { readJson, writeText } from '../utils/fileSystem';
 import { writeMarkdown } from '../utils/markdown';
 import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
+import { CourseProfileStore, normalizeGradeSignals } from '../progress/courseProfileStore';
 
 const GRADE_MARKER = '> **Score: ';
 
@@ -22,12 +23,14 @@ export class ExerciseScanner {
   private courseManager: CourseManager;
   private progressStore: ProgressStore;
   private prefsStore: PreferencesStore;
+  private courseProfileStore: CourseProfileStore;
 
   constructor() {
     this.ai = new AIClient();
     this.courseManager = new CourseManager();
     this.progressStore = new ProgressStore();
     this.prefsStore = new PreferencesStore();
+    this.courseProfileStore = new CourseProfileStore();
   }
 
   async scanAndGradeAll(): Promise<number> {
@@ -66,9 +69,10 @@ export class ExerciseScanner {
         continue;
       }
 
-      const [preferences, profile] = await Promise.all([
+      const [preferences, profile, courseProfileContext] = await Promise.all([
         this.prefsStore.get(),
         this.progressStore.getProfile(),
+        this.courseProfileStore.buildPromptContext(subject, topicId),
       ]);
 
       let updatedMarkdown = markdown;
@@ -81,18 +85,37 @@ export class ExerciseScanner {
           const messages = gradePrompt(exercise.prompt, section.answer, {
             profile,
             preferences,
+            ...courseProfileContext,
           });
           const result = await this.ai.chatJson<Omit<GradeResult, 'exerciseId' | 'gradedAt'>>(messages);
-          const gradeResult: GradeResult = {
+          const gradeResult: GradeResult = normalizeGradeSignals({
             ...result,
             exerciseId: exercise.id,
             gradedAt: new Date().toISOString(),
-          };
+          });
 
           updatedMarkdown = this.insertFeedback(updatedMarkdown, section.exerciseIndex, gradeResult);
-          await writeText(this.courseManager.getGradePath(subject, topicId, sessionId), JSON.stringify(gradeResult, null, 2));
-          await writeMarkdown(this.courseManager.getFeedbackPath(subject, topicId, sessionId), this.buildFeedbackMarkdown(exercise, gradeResult));
+          const gradePath = this.courseManager.getGradePath(subject, topicId, sessionId);
+          const feedbackPath = this.courseManager.getFeedbackPath(subject, topicId, sessionId);
+          await writeText(gradePath, JSON.stringify(gradeResult, null, 2));
+          await writeMarkdown(feedbackPath, this.buildFeedbackMarkdown(exercise, gradeResult));
           await this.courseManager.updateTopicSummary(subject, topicId, gradeResult.score, gradeResult.weaknesses);
+          await this.courseProfileStore.recordEvent(subject, {
+            id: `grade-${topicId}-${sessionId}-${gradeResult.gradedAt}`,
+            type: 'grade',
+            subject,
+            topicId,
+            lessonId: sessionId,
+            createdAt: gradeResult.gradedAt,
+            summary: `Score ${gradeResult.score}/100. Strengths: ${(gradeResult.strengths ?? []).slice(0, 2).join(', ') || 'none'}. Weaknesses: ${(gradeResult.weaknesses ?? []).slice(0, 3).join(', ') || 'none'}.`,
+            weaknessTags: gradeResult.weaknessTags ?? [],
+            strengthTags: gradeResult.strengthTags ?? [],
+            rawRefs: [gradePath, feedbackPath],
+            metadata: {
+              score: gradeResult.score,
+              confidence: gradeResult.confidence ?? 'medium',
+            },
+          });
           gradedForFile++;
         } catch (error) {
           console.error(`Grade failed for ${exercise.id}:`, error);

@@ -1,23 +1,38 @@
 import { AIClient } from '../ai/client';
 import { gradePrompt } from '../ai/prompts';
-import { GradeResult, Exercise, LearningPreferences, LatestDiagnosis, StudentProfile, Subject } from '../types';
+import {
+  GradeResult,
+  Exercise,
+  LearningPreferences,
+  LatestDiagnosis,
+  StudentProfile,
+  Subject,
+  CourseProfile,
+  CourseProfileChapter,
+} from '../types';
 import { CourseManager } from './courseManager';
 import { writeJson } from '../utils/fileSystem';
 import { writeMarkdownAndPreview } from '../utils/markdown';
+import { CourseProfileStore, normalizeGradeSignals } from '../progress/courseProfileStore';
 
 interface GradeContext {
   profile?: StudentProfile | null;
   preferences?: LearningPreferences | null;
   diagnosis?: LatestDiagnosis | null;
+  courseProfile?: CourseProfile | null;
+  chapterProfile?: CourseProfileChapter | null;
+  profileEvidenceSummary?: string;
 }
 
 export class Grader {
   private ai: AIClient;
   private courseManager: CourseManager;
+  private courseProfileStore: CourseProfileStore;
 
   constructor() {
     this.ai = new AIClient();
     this.courseManager = new CourseManager();
+    this.courseProfileStore = new CourseProfileStore();
   }
 
   async grade(
@@ -31,11 +46,11 @@ export class Grader {
     const messages = gradePrompt(exercise.prompt, studentAnswer, ctx);
     const result = await this.ai.chatJson<Omit<GradeResult, 'exerciseId' | 'gradedAt'>>(messages);
 
-    const gradeResult: GradeResult = {
+    const gradeResult: GradeResult = normalizeGradeSignals({
       ...result,
       exerciseId: exercise.id,
       gradedAt: new Date().toISOString(),
-    };
+    });
 
     // Save grade JSON
     const gradePath = this.courseManager.getGradePath(subject, topicId, sessionId);
@@ -52,6 +67,23 @@ export class Grader {
       gradeResult.score,
       gradeResult.weaknesses
     );
+
+    await this.courseProfileStore.recordEvent(subject, {
+      id: `grade-${topicId}-${sessionId}-${gradeResult.gradedAt}`,
+      type: 'grade',
+      subject,
+      topicId,
+      lessonId: sessionId,
+      createdAt: gradeResult.gradedAt,
+      summary: `Score ${gradeResult.score}/100. Strengths: ${(gradeResult.strengths ?? []).slice(0, 2).join(', ') || 'none'}. Weaknesses: ${(gradeResult.weaknesses ?? []).slice(0, 3).join(', ') || 'none'}.`,
+      weaknessTags: gradeResult.weaknessTags ?? [],
+      strengthTags: gradeResult.strengthTags ?? [],
+      rawRefs: [gradePath, feedbackPath],
+      metadata: {
+        score: gradeResult.score,
+        confidence: gradeResult.confidence ?? 'medium',
+      },
+    });
 
     return gradeResult;
   }
