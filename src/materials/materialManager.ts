@@ -169,12 +169,19 @@ export class MaterialManager {
     return task;
   }
 
-  async reconcileMaterials(subject?: Subject, options?: { materialId?: string }): Promise<MaterialEntry[]> {
+  async reconcileMaterials(subject?: Subject, options?: { materialId?: string; materialIds?: string[] }): Promise<MaterialEntry[]> {
     const index = await this.getIndex();
-    const candidates = index.materials.filter(material =>
-      (!subject || material.subject === subject) &&
-      (!options?.materialId || material.id === options.materialId)
-    );
+    const normalizedIds = Array.isArray(options?.materialIds)
+      ? Array.from(new Set(options.materialIds.map((item) => String(item ?? '').trim()).filter(Boolean)))
+      : undefined;
+    const candidates = normalizedIds !== undefined
+      ? normalizedIds
+          .map((materialId) => index.materials.find((material) => material.id === materialId) ?? null)
+          .filter((material): material is MaterialEntry => !!material)
+      : index.materials.filter(material =>
+          (!subject || material.subject === subject) &&
+          (!options?.materialId || material.id === options.materialId)
+        );
 
     const results: MaterialEntry[] = [];
     for (const candidate of candidates) {
@@ -272,8 +279,8 @@ export class MaterialManager {
   }
 
   /** Get material summaries relevant to a topic, for prompt injection. */
-  async getRelevantSummary(subject: Subject, topicTitle: string, options?: { materialId?: string }): Promise<string> {
-    const subjectMaterials = await this._getIndexedMaterials(subject, options?.materialId);
+  async getRelevantSummary(subject: Subject, topicTitle: string, options?: { materialId?: string; materialIds?: string[] }): Promise<string> {
+    const subjectMaterials = await this._getIndexedMaterials(subject, options);
     const keywords = this._extractSearchTerms(topicTitle);
     const exerciseFocusedQuery = /(习题|练习|题目|作业|例题|章末|复习题|综合练习)/i.test(topicTitle);
 
@@ -347,7 +354,7 @@ export class MaterialManager {
   async buildGroundingContext(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; maxExcerpts?: number }
+    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number }
   ): Promise<GroundingContext> {
     const material = options?.materialId ? await this.getMaterialById(options.materialId) : null;
     const summary = await this.getRelevantSummary(subject, query, options);
@@ -363,8 +370,8 @@ export class MaterialManager {
     };
   }
 
-  async getRelevantExerciseSummary(subject: Subject, query: string, options?: { materialId?: string }): Promise<string> {
-    const materials = await this._getIndexedMaterials(subject, options?.materialId);
+  async getRelevantExerciseSummary(subject: Subject, query: string, options?: { materialId?: string; materialIds?: string[] }): Promise<string> {
+    const materials = await this._getIndexedMaterials(subject, options);
     const keywords = this._extractSearchTerms(query);
     return this._buildRelevantExerciseSummaryText(materials, query, keywords);
     /*
@@ -430,9 +437,9 @@ export class MaterialManager {
   private async retrieveRelevantExcerpts(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; maxExcerpts?: number }
+    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number }
   ): Promise<RetrievedExcerpt[]> {
-    const materials = await this._getIndexedMaterials(subject, options?.materialId);
+    const materials = await this._getIndexedMaterials(subject, options);
     const maxExcerpts = options?.maxExcerpts ?? 4;
     const queryText = query.trim().toLowerCase();
     const keywords = this._extractSearchTerms(query);
@@ -513,12 +520,37 @@ export class MaterialManager {
     return formatted;
   }
 
-  private async _getIndexedMaterials(subject: Subject, materialId?: string): Promise<MaterialEntry[]> {
+  private _normalizeRequestedMaterialIds(options?: { materialId?: string; materialIds?: string[] }): string[] | undefined {
+    if (Array.isArray(options?.materialIds)) {
+      return Array.from(new Set(options.materialIds.map((item) => String(item ?? '').trim()).filter(Boolean)));
+    }
+
+    if (options?.materialId) {
+      return [options.materialId];
+    }
+
+    return undefined;
+  }
+
+  private _resolveRequestedMaterials(materials: MaterialEntry[], materialIds: string[]): MaterialEntry[] {
+    if (materialIds.length === 0) {
+      return [];
+    }
+
+    return materialIds
+      .map((materialId) => materials.find((material) => material.id === materialId) ?? null)
+      .filter((entry): entry is MaterialEntry => !!entry);
+  }
+
+  private async _getIndexedMaterials(
+    subject: Subject,
+    options?: { materialId?: string; materialIds?: string[] },
+  ): Promise<MaterialEntry[]> {
     const index = await this.getIndex();
-    const candidates = index.materials.filter(material =>
-      material.subject === subject &&
-      (!materialId || material.id === materialId)
-    );
+    const normalizedIds = this._normalizeRequestedMaterialIds(options);
+    const candidates = normalizedIds !== undefined
+      ? this._resolveRequestedMaterials(index.materials, normalizedIds)
+      : index.materials.filter((material) => material.subject === subject);
 
     const ready: MaterialEntry[] = [];
     for (const candidate of candidates) {
@@ -528,7 +560,7 @@ export class MaterialManager {
           ready.push(ensured);
         }
       } catch (error) {
-        if (materialId && candidate.id === materialId) {
+        if (normalizedIds !== undefined && normalizedIds.includes(candidate.id)) {
           throw error;
         }
         console.error(`Skipping unindexed material ${candidate.fileName}:`, error);

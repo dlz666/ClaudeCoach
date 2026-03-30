@@ -10,11 +10,30 @@ import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
 import { AdaptiveEngine } from '../progress/adaptiveEngine';
 import { CourseProfileStore, inferRevisionPreferenceTags } from '../progress/courseProfileStore';
-import { SidebarResponse, ChatMessage, MaterialEntry, MaterialIndex, MaterialPreview, CourseOutline, ChatGroundingMode, AIProfile, AIWorkspaceOverride, LessonMeta, Subject, TopicOutline } from '../types';
+import {
+  SidebarResponse,
+  ChatMessage,
+  MaterialEntry,
+  MaterialIndex,
+  MaterialPreview,
+  CourseOutline,
+  ChatGroundingMode,
+  AIProfile,
+  AIWorkspaceOverride,
+  LessonMeta,
+  OutlineRebuildApplyRequest,
+  OutlineRebuildImpactSummary,
+  OutlineRebuildMode,
+  OutlineRebuildPreviewRequest,
+  OutlineRebuildPreviewResult,
+  OutlineRebuildSelection,
+  Subject,
+  TopicOutline,
+} from '../types';
 import { AIClient } from '../ai/client';
 import { AIProfileManager } from '../ai/profileManager';
 import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../ai/prompts';
-import { openMarkdownPreview, reprocessMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
+import { buildCourseSummaryMd, openMarkdownPreview, reprocessMarkdown, writeMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
 import { fileExists, ensureDir } from '../utils/fileSystem';
 import { getDataDirectory } from '../config';
 
@@ -42,6 +61,19 @@ interface MarkdownPatchResult {
   content: string;
 }
 
+interface OutlineRebuildPreviewCacheEntry {
+  previewId: string;
+  subject: Subject;
+  mode: OutlineRebuildMode;
+  selection?: OutlineRebuildSelection;
+  instruction?: string;
+  materialIds: string[];
+  materialTitles: string[];
+  sourceOutlineHash: string;
+  previewOutline: CourseOutline;
+  impact: OutlineRebuildImpactSummary;
+}
+
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private contentGen = new ContentGenerator();
@@ -59,6 +91,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private chatHistory: ChatMessage[] = [];
   private lastOpenedLessonFile?: ChatEditTarget;
   private selectedMaterialId?: string;
+  private readonly outlineRebuildPreviews = new Map<string, OutlineRebuildPreviewCacheEntry>();
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -179,7 +212,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async _buildSubjectGrounding(
     subject: string | undefined,
     query: string,
-    options?: { materialId?: string; maxExcerpts?: number },
+    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number },
   ): Promise<{
     currentCourseTitle?: string;
     courseOutlineSummary?: string;
@@ -195,6 +228,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const outline = await this.courseManager.getCourseOutline(subject);
     const grounding = await this.materialManager.buildGroundingContext(subject, query, {
       materialId: options?.materialId,
+      materialIds: options?.materialIds,
       maxExcerpts: options?.maxExcerpts,
     });
 
@@ -233,6 +267,248 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return this._buildSubjectGrounding(subject, message, {
       materialId: resolvedMode === 'material' ? materialId : undefined,
       maxExcerpts: resolvedMode === 'material' ? 5 : 4,
+    });
+  }
+
+  private _normalizeMaterialIds(materialIds?: string[]): string[] {
+    return Array.from(new Set((materialIds ?? []).map((materialId) => String(materialId ?? '').trim()).filter(Boolean)));
+  }
+
+  private _hashOutline(outline: CourseOutline): string {
+    return JSON.stringify({
+      title: outline.title,
+      topics: outline.topics.map((topic) => ({
+        title: topic.title,
+        code: topic.code ?? topic.id,
+        lessons: topic.lessons.map((lesson) => ({
+          title: lesson.title,
+          code: lesson.code ?? lesson.id,
+          difficulty: lesson.difficulty,
+        })),
+      })),
+    });
+  }
+
+  private _buildOutlineRebuildRangeLabel(outline: CourseOutline, selection?: OutlineRebuildSelection): string | undefined {
+    if (!selection) {
+      return undefined;
+    }
+
+    const startTopic = outline.topics[selection.startIndex];
+    const endTopic = outline.topics[selection.endIndex];
+    if (!startTopic || !endTopic) {
+      return undefined;
+    }
+
+    return `${selection.startIndex + 1}-${selection.endIndex + 1}: ${startTopic.title} -> ${endTopic.title}`;
+  }
+
+  private _buildOutlineRebuildImpact(
+    currentOutline: CourseOutline,
+    previewOutline: CourseOutline,
+    mode: OutlineRebuildMode,
+    selection: OutlineRebuildSelection | undefined,
+    materialTitles: string[],
+    instruction?: string,
+  ): OutlineRebuildImpactSummary {
+    const replacedTopics = selection
+      ? currentOutline.topics.slice(selection.startIndex, selection.endIndex + 1)
+      : currentOutline.topics;
+    const replacementCount = mode === 'partial'
+      ? previewOutline.topics.length - (currentOutline.topics.length - replacedTopics.length)
+      : previewOutline.topics.length;
+    const renumberedTopicTitles = currentOutline.topics
+      .filter((topic, index) => {
+        if (!selection || index <= selection.endIndex) {
+          return false;
+        }
+        const shiftedIndex = index - replacedTopics.length + replacementCount;
+        const nextTopic = previewOutline.topics[shiftedIndex];
+        return !!nextTopic && topic.id !== nextTopic.id;
+      })
+      .map((topic) => topic.title);
+
+    return {
+      titleChanged: currentOutline.title !== previewOutline.title,
+      oldTitle: currentOutline.title,
+      newTitle: previewOutline.title,
+      oldTopicCount: currentOutline.topics.length,
+      newTopicCount: previewOutline.topics.length,
+      replacedTopicCount: replacedTopics.length,
+      replacementTopicCount: mode === 'partial' ? replacementCount : previewOutline.topics.length,
+      affectedRangeLabel: this._buildOutlineRebuildRangeLabel(currentOutline, selection),
+      clearedTopicTitles: replacedTopics.map((topic) => topic.title),
+      renumberedTopicTitles,
+      selectedMaterialTitles: materialTitles,
+      instruction: String(instruction ?? '').trim() || undefined,
+    };
+  }
+
+  private _validateOutlineRebuildPreviewRequest(
+    request: OutlineRebuildPreviewRequest,
+    currentOutline: CourseOutline,
+  ): OutlineRebuildSelection | undefined {
+    if (request.mode !== 'partial') {
+      return undefined;
+    }
+
+    if (!request.selection) {
+      throw new Error('部分重构必须先选择连续主题区间。');
+    }
+
+    const startIndex = Number(request.selection.startIndex);
+    const endIndex = Number(request.selection.endIndex);
+    if (!Number.isInteger(startIndex) || !Number.isInteger(endIndex) || startIndex < 0 || endIndex < startIndex) {
+      throw new Error('部分重构的主题选区无效，请重新选择。');
+    }
+    if (endIndex >= currentOutline.topics.length) {
+      throw new Error('部分重构的主题选区超出当前课程范围。');
+    }
+
+    return { startIndex, endIndex };
+  }
+
+  private async _resolveMaterialTitles(materialIds: string[]): Promise<string[]> {
+    const titles = await Promise.all(
+      materialIds.map(async (materialId) => (await this.materialManager.getMaterialById(materialId))?.fileName ?? null)
+    );
+    return titles.filter((title): title is string => !!title);
+  }
+
+  private async _previewCourseOutlineRebuild(request: OutlineRebuildPreviewRequest): Promise<void> {
+    const currentOutline = await this.courseManager.getCourseOutline(request.subject);
+    if (!currentOutline) {
+      throw new Error('当前课程大纲不存在，无法生成重构预览。');
+    }
+
+    const selection = this._validateOutlineRebuildPreviewRequest(request, currentOutline);
+    const materialIds = this._normalizeMaterialIds(request.materialIds);
+    if (materialIds.length > 0) {
+      await this.materialManager.reconcileMaterials(undefined, { materialIds });
+    }
+
+    const [prefs, diag, profile, materialTitles] = await Promise.all([
+      this.prefsStore.get(),
+      this.adaptiveEngine.getLatestDiagnosis(request.subject),
+      this.progressStore.getProfile(),
+      this._resolveMaterialTitles(materialIds),
+    ]);
+
+    const courseProfileContext = await this._buildCourseProfileContext(request.subject);
+    const grounding = await this._buildSubjectGrounding(
+      request.subject,
+      [currentOutline.title, request.instruction ?? '', 'course outline rebuild'].join(' ').trim(),
+      { materialIds, maxExcerpts: 6 },
+    );
+
+    const previewOutline = request.mode === 'full'
+      ? await this.contentGen.previewFullRebuild(request.subject, currentOutline, {
+          profile,
+          preferences: prefs,
+          diagnosis: diag,
+          ...courseProfileContext,
+          ...grounding,
+        }, request.instruction)
+      : await this.contentGen.previewPartialRebuild(request.subject, currentOutline, selection!, {
+          profile,
+          preferences: prefs,
+          diagnosis: diag,
+          ...courseProfileContext,
+          ...grounding,
+        }, request.instruction);
+
+    const previewId = `outline-preview-${Date.now()}`;
+    const impact = this._buildOutlineRebuildImpact(
+      currentOutline,
+      previewOutline,
+      request.mode,
+      selection,
+      materialTitles,
+      request.instruction,
+    );
+
+    const cacheEntry: OutlineRebuildPreviewCacheEntry = {
+      previewId,
+      subject: request.subject,
+      mode: request.mode,
+      selection,
+      instruction: String(request.instruction ?? '').trim() || undefined,
+      materialIds,
+      materialTitles,
+      sourceOutlineHash: this._hashOutline(currentOutline),
+      previewOutline,
+      impact,
+    };
+    this.outlineRebuildPreviews.set(previewId, cacheEntry);
+
+    const response: OutlineRebuildPreviewResult = {
+      previewId,
+      subject: request.subject,
+      mode: request.mode,
+      outline: previewOutline,
+      impact,
+      selection,
+      materialIds,
+      materialTitles,
+      instruction: cacheEntry.instruction,
+    };
+
+    this._post({ type: 'outlineRebuildPreview', data: response });
+    this._post({
+      type: 'log',
+      message: request.mode === 'full'
+        ? `已生成课程重构预览：${currentOutline.title}`
+        : `已生成部分重构预览：${currentOutline.title}`,
+      level: 'info',
+    });
+  }
+
+  private async _applyCourseOutlineRebuild(request: OutlineRebuildApplyRequest): Promise<void> {
+    const preview = this.outlineRebuildPreviews.get(request.previewId);
+    if (!preview) {
+      throw new Error('当前预览已失效，请重新生成预览后再应用。');
+    }
+
+    const currentOutline = await this.courseManager.getCourseOutline(preview.subject);
+    if (!currentOutline) {
+      throw new Error('当前课程大纲不存在，无法应用重构。');
+    }
+
+    if (this._hashOutline(currentOutline) !== preview.sourceOutlineHash) {
+      this.outlineRebuildPreviews.delete(request.previewId);
+      throw new Error('预览生成后课程大纲已发生变化，请重新生成预览后再应用。');
+    }
+
+    const appliedOutline = preview.mode === 'full'
+      ? await this.courseManager.applyFullRebuild(preview.subject, preview.previewOutline)
+      : await this.courseManager.applyPartialRebuild(preview.subject, currentOutline, preview.previewOutline, preview.selection!);
+
+    await writeMarkdown(
+      this.courseManager.getCourseSummaryPath(preview.subject),
+      buildCourseSummaryMd(appliedOutline.title, appliedOutline.topics),
+    );
+
+    this.outlineRebuildPreviews.delete(request.previewId);
+    this.lastOpenedLessonFile = undefined;
+    await this._refreshCourses();
+    this._post({
+      type: 'outlineRebuildApplied',
+      previewId: request.previewId,
+      mode: preview.mode,
+      outline: appliedOutline,
+    });
+    this._view?.webview.postMessage({
+      type: 'chatResponse',
+      content: preview.mode === 'full'
+        ? `已应用完整重构预览。\n\n- 课程标题：${appliedOutline.title}\n- 主题数量：${appliedOutline.topics.length}\n- 旧讲义与旧练习已按完整重构规则清理并重建结构`
+        : `已应用部分重构预览。\n\n- 课程标题保持为：${appliedOutline.title}\n- 当前主题数量：${appliedOutline.topics.length}\n- 选区旧内容已清理，未选区内容已按新编号迁移`,
+    });
+    this._post({
+      type: 'log',
+      message: preview.mode === 'full'
+        ? `已应用全量重构：${appliedOutline.title}`
+        : `已应用部分重构：${appliedOutline.title}`,
+      level: 'info',
     });
   }
 
@@ -795,6 +1071,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               content: `已按“完全重构”模式重建课程。\n\n- 课程标题：${rebuilt.title}\n- 主题数量：${rebuilt.topics.length}\n- 旧大纲、旧讲义、旧练习已清空\n- 已写入新的 \`course-outline.json\` 和 \`course-summary.md\`\n\n课程树已经刷新，你现在看到的是全新的课程结构。`,
             });
             this._post({ type: 'log', message: `课程已完全重构：${rebuilt.title}（旧课程内容已清空）`, level: 'info' });
+          });
+          break;
+        }
+
+        case 'previewRebuildCourseOutline': {
+          const request = msg.request as OutlineRebuildPreviewRequest;
+          const outline = await this.courseManager.getCourseOutline(request.subject);
+          if (!outline) {
+            throw new Error('当前课程大纲不存在，无法生成重构预览。');
+          }
+
+          this._startTask(`${outline.title} 大纲预览重构`, async () => {
+            await this._previewCourseOutlineRebuild(request);
+          });
+          break;
+        }
+
+        case 'applyRebuildCourseOutline': {
+          const request = msg.request as OutlineRebuildApplyRequest;
+          const preview = this.outlineRebuildPreviews.get(request.previewId);
+          const taskLabel = preview ? `${preview.previewOutline.title} 应用大纲重构` : '应用大纲重构';
+          this._startTask(taskLabel, async () => {
+            await this._applyCourseOutlineRebuild(request);
           });
           break;
         }

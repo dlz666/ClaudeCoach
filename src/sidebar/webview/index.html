@@ -31,15 +31,7 @@
         <div class="dropdown-menu hidden" id="course-dropdown-menu"></div>
       </div>
       <div id="new-course-panel" class="stack hidden">
-        <select id="subject-select">
-          <option value="calculus">微积分</option>
-          <option value="linear-algebra">线性代数</option>
-          <option value="discrete-math">离散数学</option>
-          <option value="react">React</option>
-          <option value="programming">编程基础</option>
-          <option value="__custom__">自定义...</option>
-        </select>
-        <input type="text" id="subject-input" placeholder="输入课程名称" class="hidden">
+        <input type="text" id="subject-input" placeholder="输入课程名称">
         <button class="btn primary" id="btn-generate-course">生成课程大纲</button>
       </div>
     </section>
@@ -103,7 +95,7 @@
           <button class="chat-mode-btn" data-chat-mode="general">普通问答</button>
         </div>
         <div id="chat-context-status" class="chat-context-status"></div>
-        <button class="btn ghost" id="btn-chat-rebuild-outline">基于资料重构当前大纲</button>
+        <button class="btn ghost" id="btn-chat-rebuild-outline">重构大纲</button>
       </div>
       <div id="chat-messages" class="chat-messages">
         <div class="chat-msg assistant">你好，我是你的 AI 学习助手。你可以让我解释概念、总结资料、调整课程结构，或直接结合当前课程回答问题。</div>
@@ -253,6 +245,81 @@
   <div id="tab-logs" class="tab-content">
     <div id="log-list" class="log-container">
       <p class="muted">暂无日志</p>
+    </div>
+  </div>
+
+  <div id="outline-rebuild-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-panel rebuild-modal" role="dialog" aria-modal="true" aria-labelledby="outline-rebuild-title">
+      <div class="modal-header">
+        <div>
+          <h3 id="outline-rebuild-title">重构界面</h3>
+          <p class="section-subtitle">先选范围、要求和参考资料，再生成预览，确认后再应用到当前课程。</p>
+        </div>
+        <button class="btn ghost small fixed" id="btn-close-outline-rebuild-modal" type="button">关闭</button>
+      </div>
+
+      <div class="modal-body">
+        <section class="modal-section">
+          <label class="section-label">重构模式</label>
+          <div class="segmented-group" id="outline-rebuild-mode-group">
+            <button class="segmented-btn active" id="btn-outline-rebuild-mode-full" type="button" data-mode="full">全量重构</button>
+            <button class="segmented-btn" id="btn-outline-rebuild-mode-partial" type="button" data-mode="partial">部分重构</button>
+          </div>
+          <div id="outline-rebuild-mode-hint" class="feedback-line muted"></div>
+        </section>
+
+        <section class="modal-section" id="outline-rebuild-selection-section">
+          <div class="modal-section-header">
+            <div>
+              <div class="section-label">连续主题选区</div>
+              <div class="hint">部分重构只支持连续区间。先点一个主题设起点，再点另一个主题扩展区间。</div>
+            </div>
+            <div class="pill warn">只清理被替换选区</div>
+          </div>
+          <div id="outline-rebuild-selection-status" class="feedback-line muted"></div>
+          <div id="outline-rebuild-topic-list" class="selection-list"></div>
+        </section>
+
+        <section class="modal-section">
+          <label class="section-label" for="outline-rebuild-instruction">本次要求</label>
+          <textarea id="outline-rebuild-instruction" rows="4" placeholder="例如：减少重复内容、把某两章合并、增加更贴近教材的练习导向"></textarea>
+        </section>
+
+        <section class="modal-section">
+          <div class="modal-section-header">
+            <div>
+              <div class="section-label">参考资料</div>
+              <div id="outline-rebuild-material-scope-hint" class="hint">默认显示当前课程资料，可切换到整个资料库。</div>
+            </div>
+            <label class="inline-check" for="outline-rebuild-show-library">
+              <input type="checkbox" id="outline-rebuild-show-library">
+              <span>切换到整个资料库</span>
+            </label>
+          </div>
+          <div id="outline-rebuild-material-list" class="selection-list"></div>
+        </section>
+
+        <section class="modal-section">
+          <div class="modal-section-header">
+            <div>
+              <div class="section-label">预览结果</div>
+              <div class="hint">预览只生成候选大纲，不会立即写入磁盘。</div>
+            </div>
+            <div class="pill danger">全量模式会清空旧讲义和练习</div>
+          </div>
+          <div id="outline-rebuild-preview-status" class="feedback-line muted">还没有预览。修改范围或要求后，先点击“生成预览”。</div>
+          <div id="outline-rebuild-impact" class="impact-grid"></div>
+          <div id="outline-rebuild-preview-tree" class="preview-tree"></div>
+        </section>
+
+        <div id="outline-rebuild-error" class="feedback-line error-text hidden"></div>
+
+        <div class="actions-row">
+          <button class="btn primary" id="btn-outline-rebuild-preview" type="button">生成预览</button>
+          <button class="btn" id="btn-outline-rebuild-apply" type="button">应用重构</button>
+          <button class="btn ghost" id="btn-outline-rebuild-cancel" type="button">取消</button>
+        </div>
+      </div>
     </div>
   </div>
 

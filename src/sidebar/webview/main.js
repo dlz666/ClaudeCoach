@@ -23,6 +23,20 @@
     chatMessages: Array.isArray(saved.chatMessages) ? saved.chatMessages.slice() : [],
     activeTaskKeys: new Set(),
     resolvedAIConfig: null,
+    rebuildModal: {
+      open: false,
+      mode: 'full',
+      selectionStart: null,
+      selectionEnd: null,
+      selectionAnchor: null,
+      instruction: '',
+      showLibrary: false,
+      selectedMaterialIds: [],
+      preview: null,
+      loadingPreview: false,
+      applyingPreview: false,
+      error: '',
+    },
   };
 
   const $ = (id) => document.getElementById(id);
@@ -32,7 +46,6 @@
     ddTrigger: $('course-dropdown-trigger'),
     ddMenu: $('course-dropdown-menu'),
     ddLabel: $('course-dropdown-label'),
-    subjectSelect: $('subject-select'),
     subjectInput: $('subject-input'),
     newCoursePanel: $('new-course-panel'),
     btnGenerateCourse: $('btn-generate-course'),
@@ -58,6 +71,25 @@
     chatContextStatus: $('chat-context-status'),
     btnChatSend: $('btn-chat-send'),
     btnChatRebuildOutline: $('btn-chat-rebuild-outline'),
+    outlineRebuildModal: $('outline-rebuild-modal'),
+    btnCloseOutlineRebuildModal: $('btn-close-outline-rebuild-modal'),
+    btnOutlineRebuildModeFull: $('btn-outline-rebuild-mode-full'),
+    btnOutlineRebuildModePartial: $('btn-outline-rebuild-mode-partial'),
+    outlineRebuildModeHint: $('outline-rebuild-mode-hint'),
+    outlineRebuildSelectionSection: $('outline-rebuild-selection-section'),
+    outlineRebuildSelectionStatus: $('outline-rebuild-selection-status'),
+    outlineRebuildTopicList: $('outline-rebuild-topic-list'),
+    outlineRebuildInstruction: $('outline-rebuild-instruction'),
+    outlineRebuildShowLibrary: $('outline-rebuild-show-library'),
+    outlineRebuildMaterialScopeHint: $('outline-rebuild-material-scope-hint'),
+    outlineRebuildMaterialList: $('outline-rebuild-material-list'),
+    outlineRebuildPreviewStatus: $('outline-rebuild-preview-status'),
+    outlineRebuildImpact: $('outline-rebuild-impact'),
+    outlineRebuildPreviewTree: $('outline-rebuild-preview-tree'),
+    outlineRebuildError: $('outline-rebuild-error'),
+    btnOutlineRebuildPreview: $('btn-outline-rebuild-preview'),
+    btnOutlineRebuildApply: $('btn-outline-rebuild-apply'),
+    btnOutlineRebuildCancel: $('btn-outline-rebuild-cancel'),
     materialSubject: $('material-subject'),
     btnImport: $('btn-import'),
     materialsList: $('materials-list'),
@@ -100,6 +132,134 @@
 
   function getCourse(subject) {
     return state.courses.find((course) => course.subject === subject) || null;
+  }
+
+  function getCourseMaterials(subject) {
+    if (!subject) return [];
+    return (state.materials.materials || []).filter((item) => item.subject === subject);
+  }
+
+  function getOutlineRebuildAvailableMaterials() {
+    if (state.rebuildModal.showLibrary) {
+      return state.materials.materials || [];
+    }
+    return getCourseMaterials(state.selectedSubject);
+  }
+
+  function clearOutlineRebuildPreview() {
+    state.rebuildModal.preview = null;
+    state.rebuildModal.error = '';
+  }
+
+  function resetOutlineRebuildSelection() {
+    state.rebuildModal.selectionStart = null;
+    state.rebuildModal.selectionEnd = null;
+    state.rebuildModal.selectionAnchor = null;
+  }
+
+  function reconcileOutlineRebuildMaterials() {
+    const allowed = new Set(getOutlineRebuildAvailableMaterials().map((item) => item.id));
+    state.rebuildModal.selectedMaterialIds = (state.rebuildModal.selectedMaterialIds || []).filter((materialId) => allowed.has(materialId));
+  }
+
+  function closeOutlineRebuildModal() {
+    state.rebuildModal.open = false;
+    state.rebuildModal.loadingPreview = false;
+    state.rebuildModal.applyingPreview = false;
+    renderOutlineRebuildModal();
+  }
+
+  function openOutlineRebuildModal() {
+    if (!state.selectedSubject || !getCourse(state.selectedSubject)) {
+      addLog('请先选择当前课程。', 'warn');
+      return;
+    }
+
+    state.rebuildModal.open = true;
+    state.rebuildModal.mode = 'full';
+    state.rebuildModal.instruction = '';
+    state.rebuildModal.showLibrary = false;
+    state.rebuildModal.selectedMaterialIds = state.selectedCourseMaterialId ? [state.selectedCourseMaterialId] : [];
+    state.rebuildModal.loadingPreview = false;
+    state.rebuildModal.applyingPreview = false;
+    clearOutlineRebuildPreview();
+    resetOutlineRebuildSelection();
+    reconcileOutlineRebuildMaterials();
+    renderOutlineRebuildModal();
+  }
+
+  function getOutlineRebuildSelection() {
+    if (state.rebuildModal.mode !== 'partial') {
+      return undefined;
+    }
+
+    if (!Number.isInteger(state.rebuildModal.selectionStart) || !Number.isInteger(state.rebuildModal.selectionEnd)) {
+      return undefined;
+    }
+
+    return {
+      startIndex: Math.min(state.rebuildModal.selectionStart, state.rebuildModal.selectionEnd),
+      endIndex: Math.max(state.rebuildModal.selectionStart, state.rebuildModal.selectionEnd),
+    };
+  }
+
+  function describeOutlineRebuildSelection(course) {
+    const selection = getOutlineRebuildSelection();
+    if (!course || !selection) {
+      return '还没有选择连续区间。';
+    }
+
+    const startTopic = course.topics?.[selection.startIndex];
+    const endTopic = course.topics?.[selection.endIndex];
+    if (!startTopic || !endTopic) {
+      return '当前选区无效，请重新选择。';
+    }
+
+    return `当前选区：第 ${selection.startIndex + 1} 到第 ${selection.endIndex + 1} 个主题，${startTopic.title} -> ${endTopic.title}`;
+  }
+
+  function toggleOutlineRebuildTopic(index) {
+    if (state.rebuildModal.mode !== 'partial') {
+      return;
+    }
+
+    const start = state.rebuildModal.selectionStart;
+    const end = state.rebuildModal.selectionEnd;
+    const anchor = state.rebuildModal.selectionAnchor;
+
+    if (!Number.isInteger(start) || !Number.isInteger(end) || !Number.isInteger(anchor)) {
+      state.rebuildModal.selectionStart = index;
+      state.rebuildModal.selectionEnd = index;
+      state.rebuildModal.selectionAnchor = index;
+      clearOutlineRebuildPreview();
+      renderOutlineRebuildModal();
+      return;
+    }
+
+    if (start === end && anchor === start && index !== anchor) {
+      state.rebuildModal.selectionStart = Math.min(anchor, index);
+      state.rebuildModal.selectionEnd = Math.max(anchor, index);
+      state.rebuildModal.selectionAnchor = null;
+    } else {
+      state.rebuildModal.selectionStart = index;
+      state.rebuildModal.selectionEnd = index;
+      state.rebuildModal.selectionAnchor = index;
+    }
+
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
+  }
+
+  function toggleOutlineRebuildMaterial(materialId) {
+    const current = new Set(state.rebuildModal.selectedMaterialIds || []);
+    if (current.has(materialId)) {
+      current.delete(materialId);
+    } else {
+      current.add(materialId);
+    }
+    state.rebuildModal.selectedMaterialIds = Array.from(current);
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
   }
 
   function persist() {
@@ -184,11 +344,14 @@
       els.btnChatRebuildOutline,
       els.btnChatSend,
       els.btnSavePrefs,
+      els.btnOutlineRebuildPreview,
+      els.btnOutlineRebuildApply,
     ].forEach((button) => {
       if (!button) return;
       button.disabled = busy;
       button.classList.toggle('is-busy', busy);
     });
+    renderOutlineRebuildModal();
   }
 
   function appendChat(role, content, save = true) {
@@ -224,10 +387,7 @@
   }
 
   function getDraftSubject() {
-    if (!els.subjectSelect) return '';
-    return els.subjectSelect.value === '__custom__'
-      ? (els.subjectInput?.value || '').trim()
-      : (els.subjectSelect.value || '').trim();
+    return (els.subjectInput?.value || '').trim();
   }
 
   function setCreateCourseMode(enabled) {
@@ -236,6 +396,11 @@
       renderDiagnosis(null);
     }
     els.newCoursePanel?.classList.toggle('hidden', !enabled);
+    if (enabled) {
+      requestAnimationFrame(() => {
+        els.subjectInput?.focus();
+      });
+    }
     renderCourseDropdown();
     renderSelectedCourse();
     renderCourseMaterials();
@@ -806,7 +971,171 @@
     els.aiConfigCenterToggleLabel.textContent = state.aiConfigCenterCollapsed ? '展开' : '收起';
   }
 
+  function renderOutlineRebuildImpact(impact) {
+    if (!els.outlineRebuildImpact) return;
+
+    if (!impact) {
+      els.outlineRebuildImpact.innerHTML = '';
+      return;
+    }
+
+    const cards = [
+      { label: '课程标题', value: impact.titleChanged ? `${impact.oldTitle} -> ${impact.newTitle}` : impact.newTitle },
+      { label: '主题数量', value: `${impact.oldTopicCount} -> ${impact.newTopicCount}` },
+      { label: '替换范围', value: impact.affectedRangeLabel || '整门课程' },
+      { label: '参考资料', value: impact.selectedMaterialTitles?.length ? impact.selectedMaterialTitles.join(' / ') : '未选择资料' },
+      { label: '用户要求', value: impact.instruction || '未填写额外要求' },
+      { label: '将清理内容', value: impact.clearedTopicTitles?.length ? impact.clearedTopicTitles.join(' / ') : '无' },
+      { label: '需迁移编号', value: impact.renumberedTopicTitles?.length ? impact.renumberedTopicTitles.join(' / ') : '无' },
+    ];
+
+    els.outlineRebuildImpact.innerHTML = cards.map((card) => `
+      <div class="impact-card">
+        <strong>${escapeHtml(card.label)}</strong>
+        <div>${escapeHtml(card.value)}</div>
+      </div>
+    `).join('');
+  }
+
+  function renderOutlineRebuildPreviewTree(outline) {
+    if (!els.outlineRebuildPreviewTree) return;
+
+    if (!outline?.topics?.length) {
+      els.outlineRebuildPreviewTree.innerHTML = '<p class="muted">预览结果会在这里显示。</p>';
+      return;
+    }
+
+    els.outlineRebuildPreviewTree.innerHTML = outline.topics.map((topic, topicIndex) => `
+      <div class="preview-topic">
+        <div class="preview-topic-title">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
+        <ul>
+          ${(topic.lessons || []).map((lesson, lessonIndex) => `
+            <li>${escapeHtml(`${topicIndex + 1}-${lessonIndex + 1} ${lesson.title}`)}<span class="muted"> / 难度 ${escapeHtml(String(lesson.difficulty || 1))}</span></li>
+          `).join('')}
+        </ul>
+      </div>
+    `).join('');
+  }
+
+  function renderOutlineRebuildModal() {
+    if (!els.outlineRebuildModal) return;
+
+    const course = state.selectedSubject ? getCourse(state.selectedSubject) : null;
+    const isOpen = Boolean(state.rebuildModal.open && course);
+    const selection = getOutlineRebuildSelection();
+    const preview = state.rebuildModal.preview;
+    const selectedMaterials = new Set(state.rebuildModal.selectedMaterialIds || []);
+    const availableMaterials = getOutlineRebuildAvailableMaterials();
+    const busy = state.activeTaskKeys.size > 0 || !!$('task-legacy');
+    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
+
+    els.outlineRebuildModal.classList.toggle('hidden', !isOpen);
+    els.outlineRebuildModal.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+
+    if (!isOpen) {
+      return;
+    }
+
+    if (els.outlineRebuildInstruction && els.outlineRebuildInstruction.value !== state.rebuildModal.instruction) {
+      els.outlineRebuildInstruction.value = state.rebuildModal.instruction || '';
+    }
+    if (els.outlineRebuildShowLibrary) {
+      els.outlineRebuildShowLibrary.checked = !!state.rebuildModal.showLibrary;
+    }
+
+    els.btnOutlineRebuildModeFull?.classList.toggle('active', state.rebuildModal.mode === 'full');
+    els.btnOutlineRebuildModePartial?.classList.toggle('active', state.rebuildModal.mode === 'partial');
+
+    if (els.outlineRebuildModeHint) {
+      els.outlineRebuildModeHint.textContent = state.rebuildModal.mode === 'full'
+        ? '全量模式会清空整门课旧讲义和旧练习，再应用新的课程结构。'
+        : '部分模式只替换连续主题选区；未选区内容会尽量保留，但后续编号可能会迁移。';
+    }
+
+    els.outlineRebuildSelectionSection?.classList.toggle('hidden', state.rebuildModal.mode !== 'partial');
+    if (els.outlineRebuildSelectionStatus) {
+      els.outlineRebuildSelectionStatus.textContent = describeOutlineRebuildSelection(course);
+    }
+
+    if (els.outlineRebuildTopicList) {
+      els.outlineRebuildTopicList.innerHTML = (course?.topics || []).map((topic, topicIndex) => {
+        const isSelected = selection && topicIndex >= selection.startIndex && topicIndex <= selection.endIndex;
+        const isAnchor = Number.isInteger(state.rebuildModal.selectionAnchor) && topicIndex === state.rebuildModal.selectionAnchor;
+        return `
+          <button class="selection-item${isSelected ? ' selected' : ''}${isAnchor ? ' anchor' : ''}" type="button" data-outline-topic-index="${topicIndex}">
+            <span class="selection-item-main">
+              <span class="selection-item-title">${escapeHtml(formatTopicTitle(topic, topicIndex))}</span>
+              <span class="selection-item-meta">${escapeHtml(`${(topic.lessons || []).length} 个课时`)}</span>
+            </span>
+          </button>
+        `;
+      }).join('') || '<p class="muted">当前课程还没有主题。</p>';
+
+      els.outlineRebuildTopicList.querySelectorAll('[data-outline-topic-index]').forEach((button) => {
+        button.addEventListener('click', () => {
+          toggleOutlineRebuildTopic(Number(button.getAttribute('data-outline-topic-index')));
+        });
+      });
+    }
+
+    if (els.outlineRebuildMaterialScopeHint) {
+      els.outlineRebuildMaterialScopeHint.textContent = state.rebuildModal.showLibrary
+        ? '当前展示整个资料库。可跨课程选择多个参考资料。'
+        : '当前展示本课程资料。未勾选任何资料时，将只基于课程结构本身重构。';
+    }
+
+    if (els.outlineRebuildMaterialList) {
+      els.outlineRebuildMaterialList.innerHTML = availableMaterials.map((material) => `
+        <button class="selection-item${selectedMaterials.has(material.id) ? ' selected' : ''}" type="button" data-outline-material-id="${escapeHtml(material.id)}">
+          <span class="selection-item-main">
+            <span class="selection-item-title">${escapeHtml(material.fileName)}</span>
+            <span class="selection-item-meta">${escapeHtml(`${subjectLabel(material.subject)} / ${labels[material.status] || material.status}`)}</span>
+          </span>
+        </button>
+      `).join('') || '<p class="muted">当前范围内没有可选资料。</p>';
+
+      els.outlineRebuildMaterialList.querySelectorAll('[data-outline-material-id]').forEach((button) => {
+        button.addEventListener('click', () => {
+          toggleOutlineRebuildMaterial(button.getAttribute('data-outline-material-id'));
+        });
+      });
+    }
+
+    if (els.outlineRebuildPreviewStatus) {
+      els.outlineRebuildPreviewStatus.textContent = state.rebuildModal.loadingPreview
+        ? '正在生成预览，请稍候...'
+        : state.rebuildModal.applyingPreview
+          ? '正在应用重构，请稍候...'
+          : preview
+            ? `预览已生成：${preview.mode === 'full' ? '全量重构' : '部分重构'} / ${preview.outline.topics.length} 个主题`
+            : '还没有预览。修改范围或要求后，先点击“生成预览”。';
+    }
+
+    renderOutlineRebuildImpact(preview?.impact || null);
+    renderOutlineRebuildPreviewTree(preview?.outline || null);
+
+    if (els.outlineRebuildError) {
+      const hasError = Boolean(state.rebuildModal.error);
+      els.outlineRebuildError.classList.toggle('hidden', !hasError);
+      els.outlineRebuildError.textContent = state.rebuildModal.error || '';
+    }
+
+    if (els.btnOutlineRebuildPreview) {
+      els.btnOutlineRebuildPreview.disabled = busy || (state.rebuildModal.mode === 'partial' && !selection);
+    }
+    if (els.btnOutlineRebuildApply) {
+      els.btnOutlineRebuildApply.disabled = busy || !preview?.previewId;
+    }
+  }
+
   function onCourseSelected() {
+    if (state.rebuildModal.open) {
+      reconcileOutlineRebuildMaterials();
+      if (state.rebuildModal.preview?.subject && state.rebuildModal.preview.subject !== state.selectedSubject) {
+        clearOutlineRebuildPreview();
+        resetOutlineRebuildSelection();
+      }
+    }
     renderCourseDropdown();
     renderSelectedCourse();
     renderCourseMaterials();
@@ -814,6 +1143,7 @@
     requestDiagnosis(false);
     renderChatContext();
     syncMaterialImportTargets();
+    renderOutlineRebuildModal();
     persist();
   }
 
@@ -854,12 +1184,6 @@
       els.aiChangeMenu?.classList.add('hidden');
       vscode.postMessage({ type: 'importAIProfile', source });
     });
-  });
-
-  els.subjectSelect?.addEventListener('change', (event) => {
-    const isCustom = event.target.value === '__custom__';
-    els.subjectInput?.classList.toggle('hidden', !isCustom);
-    setCreateCourseMode(true);
   });
 
   els.subjectInput?.addEventListener('input', () => {
@@ -922,14 +1246,101 @@
   });
 
   els.btnChatRebuildOutline?.addEventListener('click', () => {
-    if (!state.selectedSubject) {
-      addLog('请先选择课程。', 'warn');
+    openOutlineRebuildModal();
+  });
+
+  els.btnCloseOutlineRebuildModal?.addEventListener('click', () => {
+    closeOutlineRebuildModal();
+  });
+
+  els.btnOutlineRebuildCancel?.addEventListener('click', () => {
+    closeOutlineRebuildModal();
+  });
+
+  els.outlineRebuildModal?.addEventListener('click', (event) => {
+    if (event.target === els.outlineRebuildModal) {
+      closeOutlineRebuildModal();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.rebuildModal.open) {
+      closeOutlineRebuildModal();
+    }
+  });
+
+  els.btnOutlineRebuildModeFull?.addEventListener('click', () => {
+    state.rebuildModal.mode = 'full';
+    resetOutlineRebuildSelection();
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
+  });
+
+  els.btnOutlineRebuildModePartial?.addEventListener('click', () => {
+    state.rebuildModal.mode = 'partial';
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
+  });
+
+  els.outlineRebuildInstruction?.addEventListener('input', () => {
+    state.rebuildModal.instruction = els.outlineRebuildInstruction.value || '';
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
+  });
+
+  els.outlineRebuildShowLibrary?.addEventListener('change', () => {
+    state.rebuildModal.showLibrary = !!els.outlineRebuildShowLibrary.checked;
+    reconcileOutlineRebuildMaterials();
+    clearOutlineRebuildPreview();
+    renderOutlineRebuildModal();
+  });
+
+  els.btnOutlineRebuildPreview?.addEventListener('click', () => {
+    const course = getCourse(state.selectedSubject);
+    if (!course || !state.selectedSubject) {
+      addLog('请先选择当前课程。', 'warn');
       return;
     }
+
+    const selection = getOutlineRebuildSelection();
+    if (state.rebuildModal.mode === 'partial' && !selection) {
+      state.rebuildModal.error = '部分重构必须先选择连续主题区间。';
+      renderOutlineRebuildModal();
+      return;
+    }
+
+    state.rebuildModal.error = '';
+    state.rebuildModal.preview = null;
+    state.rebuildModal.loadingPreview = true;
+    renderOutlineRebuildModal();
+
     vscode.postMessage({
-      type: 'rebuildCourseOutline',
-      subject: state.selectedSubject,
-      materialId: state.selectedCourseMaterialId || undefined,
+      type: 'previewRebuildCourseOutline',
+      request: {
+        subject: state.selectedSubject,
+        mode: state.rebuildModal.mode,
+        selection,
+        instruction: state.rebuildModal.instruction,
+        materialIds: state.rebuildModal.selectedMaterialIds || [],
+      },
+    });
+  });
+
+  els.btnOutlineRebuildApply?.addEventListener('click', () => {
+    const previewId = state.rebuildModal.preview?.previewId;
+    if (!previewId) {
+      state.rebuildModal.error = '请先生成预览。';
+      renderOutlineRebuildModal();
+      return;
+    }
+
+    state.rebuildModal.error = '';
+    state.rebuildModal.applyingPreview = true;
+    renderOutlineRebuildModal();
+
+    vscode.postMessage({
+      type: 'applyRebuildCourseOutline',
+      request: { previewId },
     });
   });
 
@@ -1032,10 +1443,12 @@
           }
           persist();
         }
+        reconcileOutlineRebuildMaterials();
         syncMaterialImportTargets();
         renderMaterials();
         renderCourseMaterials();
         renderChatContext();
+        renderOutlineRebuildModal();
         break;
       }
       case 'materialPreview': {
@@ -1043,7 +1456,26 @@
         state.selectedCourseMaterialId = state.currentCourseMaterialPreview?.materialId || null;
         renderCourseMaterials();
         renderChatContext();
+        renderOutlineRebuildModal();
         persist();
+        break;
+      }
+      case 'outlineRebuildPreview': {
+        state.rebuildModal.loadingPreview = false;
+        state.rebuildModal.applyingPreview = false;
+        state.rebuildModal.error = '';
+        state.rebuildModal.preview = msg.data || null;
+        renderOutlineRebuildModal();
+        break;
+      }
+      case 'outlineRebuildApplied': {
+        state.rebuildModal.loadingPreview = false;
+        state.rebuildModal.applyingPreview = false;
+        state.rebuildModal.error = '';
+        state.rebuildModal.preview = null;
+        renderOutlineRebuildModal();
+        closeOutlineRebuildModal();
+        addLog('大纲重构已应用。', 'info');
         break;
       }
       case 'preferences': {
@@ -1110,6 +1542,12 @@
         break;
       }
       case 'error': {
+        if (state.rebuildModal.loadingPreview || state.rebuildModal.applyingPreview) {
+          state.rebuildModal.loadingPreview = false;
+          state.rebuildModal.applyingPreview = false;
+          state.rebuildModal.error = msg.message || '重构请求失败，请稍后重试。';
+          renderOutlineRebuildModal();
+        }
         addLog(msg.message, 'error');
         break;
       }
@@ -1134,6 +1572,7 @@
   syncMaterialImportTargets();
   renderChatContext();
   renderResolvedAIConfig(null, null);
+  renderOutlineRebuildModal();
   updateTaskBlockedState();
 
   refreshCoursePanelData();

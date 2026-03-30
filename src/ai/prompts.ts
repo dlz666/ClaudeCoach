@@ -410,6 +410,85 @@ export function strictRebuildCourseOutlinePrompt(subject: Subject, currentOutlin
   ];
 }
 
+export function strictFullRebuildCourseOutlinePrompt(
+  subject: Subject,
+  currentOutline: CourseOutline,
+  ctx: PromptContext,
+  instruction?: string,
+): ChatMessage[] {
+  const messages = strictRebuildCourseOutlinePrompt(subject, currentOutline, ctx);
+  const normalizedInstruction = String(instruction ?? '').trim();
+  if (!normalizedInstruction) {
+    return messages;
+  }
+
+  return [
+    messages[0],
+    {
+      role: 'user',
+      content: `${messages[1].content}\n\n本次额外要求：${normalizedInstruction}`,
+    },
+  ];
+}
+
+export function strictPartialRebuildCourseOutlinePrompt(
+  subject: Subject,
+  currentOutline: CourseOutline,
+  selection: { startIndex: number; endIndex: number },
+  ctx: PromptContext,
+  instruction?: string,
+): ChatMessage[] {
+  const subjectName = subjectLabel(subject);
+  const selectedTopics = currentOutline.topics
+    .slice(selection.startIndex, selection.endIndex + 1)
+    .map((topic) => ({
+      title: topic.title,
+      lessons: topic.lessons.map((lesson) => ({
+        title: lesson.title,
+        difficulty: lesson.difficulty,
+      })),
+    }));
+  const selectedOutlineJson = JSON.stringify(selectedTopics, null, 2);
+  const normalizedInstruction = String(instruction ?? '').trim();
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(ctx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次部分重构。输出纯 JSON，格式如下：
+{
+  "topics": [
+    {
+      "id": "topic-01",
+      "title": "主题名称",
+      "lessons": [
+        { "id": "lesson-01", "title": "课时名称", "difficulty": 1 }
+      ]
+    }
+  ]
+}
+要求：
+- 只输出 JSON，不要额外解释
+- 你只负责重写被选中的连续主题区间，不要返回整门课大纲
+- 不允许修改课程标题
+- 允许合并、拆分、增删被选区内的主题和课时
+- 未被选中的前后主题会由本地系统保留并重新拼接
+- 主题标题和课时标题保持简洁、中文、无公式、无 LaTeX
+- difficulty 使用 1 到 5`,
+    },
+    {
+      role: 'user',
+      content: `当前课程标题：${currentOutline.title}
+
+本次只重构第 ${selection.startIndex + 1} 到第 ${selection.endIndex + 1} 个主题。
+
+被替换选区 JSON：
+${selectedOutlineJson}
+
+${normalizedInstruction ? `本次额外要求：${normalizedInstruction}\n\n` : ''}请只输出替换选区的新 topics JSON。`,
+    },
+  ];
+}
+
 export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: string, difficulty: number, ctx: PromptContext): ChatMessage[] {
   return [
     {

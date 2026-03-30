@@ -105,6 +105,147 @@ export class CourseManager {
     await fs.rm(this.paths.courseSubjectDir(subject), { recursive: true, force: true });
   }
 
+  async applyFullRebuild(subject: Subject, nextOutline: CourseOutline): Promise<CourseOutline> {
+    const normalizedNext = this.normalizeOutline(subject, nextOutline);
+    await this.clearCourseContent(subject);
+    await this.saveCourseOutline(subject, normalizedNext);
+    return normalizedNext;
+  }
+
+  async applyPartialRebuild(
+    subject: Subject,
+    currentOutline: CourseOutline,
+    nextOutline: CourseOutline,
+    selection: { startIndex: number; endIndex: number },
+  ): Promise<CourseOutline> {
+    const normalizedCurrent = this.normalizeOutline(subject, currentOutline);
+    const normalizedNext = this.normalizeOutline(subject, nextOutline);
+
+    const replacedTopics = normalizedCurrent.topics.slice(selection.startIndex, selection.endIndex + 1);
+    for (const topic of replacedTopics) {
+      await fs.rm(this.paths.courseTopicDir(subject, topic.id), { recursive: true, force: true });
+    }
+
+    const replacementCount = normalizedNext.topics.length - (normalizedCurrent.topics.length - replacedTopics.length);
+    const retainedMappings: Array<{ oldTopic: TopicOutline; newTopic: TopicOutline }> = [];
+
+    for (let index = 0; index < selection.startIndex; index += 1) {
+      const oldTopic = normalizedCurrent.topics[index];
+      const newTopic = normalizedNext.topics[index];
+      if (oldTopic && newTopic) {
+        retainedMappings.push({ oldTopic, newTopic });
+      }
+    }
+
+    const newSuffixStart = selection.startIndex + replacementCount;
+    for (
+      let oldIndex = selection.endIndex + 1, newIndex = newSuffixStart;
+      oldIndex < normalizedCurrent.topics.length && newIndex < normalizedNext.topics.length;
+      oldIndex += 1, newIndex += 1
+    ) {
+      const oldTopic = normalizedCurrent.topics[oldIndex];
+      const newTopic = normalizedNext.topics[newIndex];
+      if (oldTopic && newTopic) {
+        retainedMappings.push({ oldTopic, newTopic });
+      }
+    }
+
+    const stagedTopicMappings = [];
+    for (const [index, mapping] of retainedMappings.entries()) {
+      const currentTopicDir = mapping.oldTopic.id === mapping.newTopic.id
+        ? this.paths.courseTopicDir(subject, mapping.oldTopic.id)
+        : await this.stagePathIfNeeded(
+            this.paths.courseTopicDir(subject, mapping.oldTopic.id),
+            `topic-${index}-${mapping.oldTopic.id}`,
+          );
+      stagedTopicMappings.push({ ...mapping, currentTopicDir });
+    }
+
+    for (const mapping of stagedTopicMappings) {
+      await this.movePathIfNeeded(mapping.currentTopicDir, this.paths.courseTopicDir(subject, mapping.newTopic.id));
+      await this.migrateRetainedTopicArtifacts(subject, mapping.oldTopic, mapping.newTopic);
+    }
+
+    await this.saveCourseOutline(subject, normalizedNext);
+    return normalizedNext;
+  }
+
+  private buildStagingPath(sourcePath: string, label: string): string {
+    const directory = path.dirname(sourcePath);
+    const baseName = path.basename(sourcePath);
+    const safeLabel = label.replace(/[^a-z0-9-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'move';
+    return path.join(directory, `.__cc-stage__${safeLabel}__${baseName}`);
+  }
+
+  private async stagePathIfNeeded(sourcePath: string, label: string): Promise<string> {
+    if (!await fileExists(sourcePath)) {
+      return sourcePath;
+    }
+
+    const stagedPath = this.buildStagingPath(sourcePath, label);
+    await fs.rm(stagedPath, { recursive: true, force: true });
+    await fs.rename(sourcePath, stagedPath);
+    return stagedPath;
+  }
+
+  private async movePathIfNeeded(sourcePath: string, targetPath: string): Promise<void> {
+    if (sourcePath === targetPath || !await fileExists(sourcePath)) {
+      return;
+    }
+
+    await ensureDir(path.dirname(targetPath));
+    await fs.rm(targetPath, { recursive: true, force: true });
+    await fs.rename(sourcePath, targetPath);
+  }
+
+  private async migrateRetainedTopicArtifacts(subject: Subject, oldTopic: TopicOutline, newTopic: TopicOutline): Promise<void> {
+    const lessonsDir = this.paths.courseLessonsDir(subject, newTopic.id);
+    const exercisesDir = this.paths.courseExercisesDir(subject, newTopic.id);
+
+    await ensureDir(this.paths.courseTopicDir(subject, newTopic.id));
+    await ensureDir(lessonsDir);
+    await ensureDir(exercisesDir);
+
+    const lessonPairs = oldTopic.lessons.map((oldLesson, index) => ({
+      oldLesson,
+      newLesson: newTopic.lessons[index] ?? null,
+    })).filter((pair): pair is { oldLesson: LessonMeta; newLesson: LessonMeta } => !!pair.newLesson);
+
+    const stagedLessonPaths = new Map<string, string>();
+    const stagedExerciseDirs = new Map<string, string>();
+
+    for (const [index, { oldLesson, newLesson }] of lessonPairs.entries()) {
+      if (oldLesson.id === newLesson.id) {
+        continue;
+      }
+
+      stagedLessonPaths.set(
+        oldLesson.id,
+        await this.stagePathIfNeeded(
+          path.join(lessonsDir, `${oldLesson.id}.md`),
+          `lesson-${newTopic.id}-${index}-${oldLesson.id}`,
+        ),
+      );
+      stagedExerciseDirs.set(
+        oldLesson.id,
+        await this.stagePathIfNeeded(
+          path.join(exercisesDir, oldLesson.id),
+          `exercise-${newTopic.id}-${index}-${oldLesson.id}`,
+        ),
+      );
+    }
+
+    for (const { oldLesson, newLesson } of lessonPairs) {
+      const sourceLessonPath = stagedLessonPaths.get(oldLesson.id) ?? path.join(lessonsDir, `${oldLesson.id}.md`);
+      const targetLessonPath = path.join(lessonsDir, `${newLesson.id}.md`);
+      await this.movePathIfNeeded(sourceLessonPath, targetLessonPath);
+
+      const sourceExerciseDir = stagedExerciseDirs.get(oldLesson.id) ?? path.join(exercisesDir, oldLesson.id);
+      const targetExerciseDir = path.join(exercisesDir, newLesson.id);
+      await this.movePathIfNeeded(sourceExerciseDir, targetExerciseDir);
+    }
+  }
+
   private async copyLegacyFileIfMissing(sourcePath: string, targetPath: string): Promise<void> {
     if (!await fileExists(sourcePath) || await fileExists(targetPath)) {
       return;

@@ -1,14 +1,23 @@
 import { AIClient } from '../ai/client';
-import { strictCourseOutlinePrompt, strictRebuildCourseOutlinePrompt, lessonPrompt, exercisePrompt } from '../ai/prompts';
+import {
+  strictCourseOutlinePrompt,
+  strictFullRebuildCourseOutlinePrompt,
+  strictPartialRebuildCourseOutlinePrompt,
+  strictRebuildCourseOutlinePrompt,
+  lessonPrompt,
+  exercisePrompt,
+} from '../ai/prompts';
 import {
   CourseOutline,
   Subject,
   Exercise,
   LearningPreferences,
   LatestDiagnosis,
+  OutlineRebuildSelection,
   StudentProfile,
   CourseProfile,
   CourseProfileChapter,
+  TopicOutline,
   subjectLabel,
 } from '../types';
 import { CourseManager } from './courseManager';
@@ -77,6 +86,51 @@ export class ContentGenerator {
       title: data.title,
       topics: freshTopics,
       createdAt: new Date().toISOString(),
+    });
+  }
+
+  async previewFullRebuild(
+    subject: Subject,
+    currentOutline: CourseOutline,
+    ctx: GenerationContext,
+    instruction?: string,
+  ): Promise<CourseOutline> {
+    const messages = strictFullRebuildCourseOutlinePrompt(subject, currentOutline, ctx, instruction);
+    const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+
+    return this.buildPreviewOutline(subject, {
+      id: `course-${subject}-${Date.now()}`,
+      subject,
+      title: data.title,
+      topics: data.topics ?? [],
+      createdAt: currentOutline.createdAt || new Date().toISOString(),
+    });
+  }
+
+  async previewPartialRebuild(
+    subject: Subject,
+    currentOutline: CourseOutline,
+    selection: OutlineRebuildSelection,
+    ctx: GenerationContext,
+    instruction?: string,
+  ): Promise<CourseOutline> {
+    const messages = strictPartialRebuildCourseOutlinePrompt(subject, currentOutline, selection, ctx, instruction);
+    const data = await this.ai.chatJson<{ topics: CourseOutline['topics'] }>(messages);
+
+    const prefixTopics = currentOutline.topics
+      .slice(0, selection.startIndex)
+      .map((topic) => this.prepareExistingTopicForPreview(topic));
+    const suffixTopics = currentOutline.topics
+      .slice(selection.endIndex + 1)
+      .map((topic) => this.prepareExistingTopicForPreview(topic));
+    const replacementTopics = (data.topics ?? []).map((topic) => this.prepareGeneratedTopicForPreview(topic));
+
+    return this.buildPreviewOutline(subject, {
+      id: currentOutline.id,
+      subject,
+      title: currentOutline.title,
+      topics: [...prefixTopics, ...replacementTopics, ...suffixTopics],
+      createdAt: currentOutline.createdAt || new Date().toISOString(),
     });
   }
 
@@ -174,6 +228,59 @@ export class ContentGenerator {
     await writeMarkdownAndPreview(this.courseManager.getCourseSummaryPath(subject), summaryMd);
 
     return outline;
+  }
+
+  private buildPreviewOutline(
+    subject: Subject,
+    outlineData: Pick<CourseOutline, 'id' | 'subject' | 'title' | 'topics' | 'createdAt'>,
+  ): CourseOutline {
+    const cleanedOutlineData = this.sanitizeOutlineData(subject, outlineData);
+    return this.courseManager.normalizeOutline(subject, {
+      id: cleanedOutlineData.id,
+      subject,
+      title: cleanedOutlineData.title,
+      topics: cleanedOutlineData.topics.map((topic) => this.prepareExistingTopicForPreview(topic)),
+      createdAt: cleanedOutlineData.createdAt,
+    });
+  }
+
+  private prepareExistingTopicForPreview(topic: TopicOutline): TopicOutline {
+    return {
+      ...topic,
+      id: '',
+      code: undefined,
+      chapterNumber: undefined,
+      slug: undefined,
+      lessons: (topic.lessons ?? []).map((lesson) => ({
+        ...lesson,
+        id: '',
+        code: undefined,
+        chapterNumber: undefined,
+        lessonNumber: undefined,
+        slug: undefined,
+        filePath: '',
+      })),
+    };
+  }
+
+  private prepareGeneratedTopicForPreview(topic: TopicOutline): TopicOutline {
+    return {
+      ...topic,
+      id: '',
+      code: undefined,
+      chapterNumber: undefined,
+      slug: undefined,
+      lessons: (topic.lessons ?? []).map((lesson) => ({
+        ...lesson,
+        id: '',
+        code: undefined,
+        chapterNumber: undefined,
+        lessonNumber: undefined,
+        slug: undefined,
+        status: lesson.status ?? 'not-started',
+        filePath: '',
+      })),
+    };
   }
 
   private sanitizeOutlineData(
