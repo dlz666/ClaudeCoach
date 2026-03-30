@@ -111,6 +111,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [
         vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'webview'),
         vscode.Uri.joinPath(this._extensionUri, 'out', 'sidebar', 'webview'),
+        vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
       ],
     };
     webviewView.webview.html = this._getHtml(webviewView.webview);
@@ -1522,7 +1523,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             });
             this._recordChatTurn(userMessage, reply);
             this._view?.webview.postMessage({ type: 'chatResponse', content: reply });
-            this._post({ type: 'log', message: `AI 鍥炲瀹屾垚锛?{reply.length} 瀛楋級`, level: 'info' });
+            this._post({ type: 'log', message: `AI 回复完成（${reply.length} 字）`, level: 'info' });
           });
           return;
           /*
@@ -1637,6 +1638,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'webview', 'style.css')
     );
+    const katexStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'katex', 'dist', 'katex.min.css')
+    );
+    const markdownItUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'markdown-it', 'dist', 'markdown-it.min.js')
+    );
+    const katexScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'katex', 'dist', 'katex.min.js')
+    );
+    const katexAutoRenderUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'katex', 'dist', 'contrib', 'auto-render.min.js')
+    );
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'webview', 'main.js')
     );
@@ -1646,6 +1659,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const fs = require('fs');
       let html = fs.readFileSync(htmlPath, 'utf-8');
       html = html.replace('{{styleUri}}', styleUri.toString());
+      html = html.replace('{{katexStyleUri}}', katexStyleUri.toString());
+      html = html.replace('{{markdownItUri}}', markdownItUri.toString());
+      html = html.replace('{{katexScriptUri}}', katexScriptUri.toString());
+      html = html.replace('{{katexAutoRenderUri}}', katexAutoRenderUri.toString());
       html = html.replace('{{scriptUri}}', scriptUri.toString());
       return html;
     } catch {
@@ -1653,8 +1670,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <link rel="stylesheet" href="${styleUri}">
+<link rel="stylesheet" href="${katexStyleUri}">
 </head><body>
 <p>加载侧边栏失败，请重新加载窗口。</p>
+<script src="${markdownItUri}"></script>
+<script src="${katexScriptUri}"></script>
+<script src="${katexAutoRenderUri}"></script>
 <script src="${scriptUri}"></script>
 </body></html>`;
     }

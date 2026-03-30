@@ -4,7 +4,7 @@ import { getAIConfig } from '../config';
 const ANTHROPIC_VERSION = '2023-06-01';
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504, 524]);
 const MAX_RETRIES = 2;
-const REQUEST_TIMEOUT_MS = 120000;
+const REQUEST_TIMEOUT_MS = 180000;
 
 export class AIClient {
   private config?: AIConfig;

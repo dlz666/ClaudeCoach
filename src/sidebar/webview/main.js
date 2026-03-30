@@ -290,7 +290,37 @@
       .replace(/"/g, '&quot;');
   }
 
-  function renderMarkdown(text) {
+  const markdownRenderer = typeof window.markdownit === 'function'
+    ? window.markdownit({
+        html: false,
+        breaks: true,
+        linkify: true,
+        typographer: false,
+      })
+    : null;
+
+  if (markdownRenderer) {
+    const defaultLinkOpen = markdownRenderer.renderer.rules.link_open
+      || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+    markdownRenderer.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+      tokens[idx].attrSet('target', '_blank');
+      tokens[idx].attrSet('rel', 'noopener noreferrer');
+      return defaultLinkOpen(tokens, idx, options, env, self);
+    };
+  }
+
+  const mathRenderOptions = {
+    delimiters: [
+      { left: '$$', right: '$$', display: true },
+      { left: '\\[', right: '\\]', display: true },
+      { left: '$', right: '$', display: false },
+      { left: '\\(', right: '\\)', display: false },
+    ],
+    throwOnError: false,
+    strict: 'ignore',
+  };
+
+  function renderMarkdownFallback(text) {
     return String(text || '')
       .split('\n')
       .map((line) => {
@@ -306,6 +336,32 @@
       })
       .join('')
       .replace(/(<li>.*?<\/li>)+/g, (match) => `<ul>${match}</ul>`);
+  }
+
+  function renderMarkdown(text) {
+    const source = String(text || '');
+    if (!markdownRenderer) {
+      return renderMarkdownFallback(source);
+    }
+
+    try {
+      return markdownRenderer.render(source);
+    } catch (error) {
+      console.warn('Markdown render failed, falling back to plain renderer.', error);
+      return renderMarkdownFallback(source);
+    }
+  }
+
+  function renderMath(element) {
+    if (!element || typeof window.renderMathInElement !== 'function') {
+      return;
+    }
+
+    try {
+      window.renderMathInElement(element, mathRenderOptions);
+    } catch (error) {
+      console.warn('KaTeX render failed.', error);
+    }
   }
 
   function addLog(message, level = 'info') {
@@ -336,13 +392,13 @@
 
   function updateTaskBlockedState() {
     const busy = state.activeTaskKeys.size > 0 || !!$('task-legacy');
+    const chatBusy = state.activeTaskKeys.has('AI 对话') || state.activeTaskKeys.has('修改讲义');
     [
       els.btnGenerateCourse,
       els.btnDiagnosis,
       els.btnImport,
       els.btnImportCourseMaterial,
       els.btnChatRebuildOutline,
-      els.btnChatSend,
       els.btnSavePrefs,
       els.btnOutlineRebuildPreview,
       els.btnOutlineRebuildApply,
@@ -351,6 +407,10 @@
       button.disabled = busy;
       button.classList.toggle('is-busy', busy);
     });
+    if (els.btnChatSend) {
+      els.btnChatSend.disabled = chatBusy;
+      els.btnChatSend.classList.toggle('is-busy', chatBusy);
+    }
     renderOutlineRebuildModal();
   }
 
@@ -360,6 +420,7 @@
     el.className = `chat-msg ${role}`;
     if (role === 'assistant') {
       el.innerHTML = renderMarkdown(content);
+      renderMath(el);
     } else {
       el.textContent = content;
     }
