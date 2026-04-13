@@ -22,6 +22,11 @@ interface ClaudeSettings {
   env?: Record<string, string>;
 }
 
+interface CodexProviderConfig {
+  baseUrl?: string;
+  wireApi?: 'chat_completions' | 'responses';
+}
+
 interface ExportedAIProfilePackage {
   schemaVersion: number;
   type: 'claudecoach-ai-profile';
@@ -239,6 +244,8 @@ export class AIProfileManager {
       anthropicBaseUrl: resolvedProfile.anthropicBaseUrl,
       apiToken: resolvedProfile.apiToken,
       model: resolvedProfile.model,
+      wireApi: resolvedProfile.wireApi,
+      reasoningEffort: resolvedProfile.reasoningEffort,
       maxTokens: resolvedProfile.maxTokens,
       contextWindow: resolvedProfile.contextWindow,
       profileId: baseProfile.id,
@@ -309,6 +316,8 @@ export class AIProfileManager {
         anthropicBaseUrl: profile.anthropicBaseUrl,
         apiToken: includeToken ? profile.apiToken : '',
         model: profile.model,
+        wireApi: profile.wireApi,
+        reasoningEffort: profile.reasoningEffort,
         contextWindow: profile.contextWindow,
         maxTokens: profile.maxTokens,
         notes: profile.notes,
@@ -338,6 +347,8 @@ export class AIProfileManager {
       anthropicBaseUrl: resolved.anthropicBaseUrl,
       apiToken: resolved.apiToken,
       model: resolved.model,
+      wireApi: resolved.wireApi,
+      reasoningEffort: resolved.reasoningEffort,
       maxTokens: Math.min(resolved.maxTokens ?? 32, 32),
       contextWindow: resolved.contextWindow,
     });
@@ -369,6 +380,8 @@ export class AIProfileManager {
       anthropicBaseUrl: legacy.anthropicBaseUrl,
       apiToken: legacy.apiToken,
       model: legacy.model,
+      wireApi: legacy.wireApi ?? 'chat_completions',
+      reasoningEffort: legacy.reasoningEffort,
       contextWindow: legacy.contextWindow,
       maxTokens: legacy.maxTokens ?? 4096,
       notes: '从旧版单套 ClaudeCoach AI 配置自动迁移。',
@@ -389,6 +402,8 @@ export class AIProfileManager {
       anthropicBaseUrl: input.anthropicBaseUrl?.trim() || fallback.anthropicBaseUrl,
       apiToken: input.apiToken ?? '',
       model: input.model?.trim() || fallback.model,
+      wireApi: this.normalizeWireApi(input.wireApi, fallback.wireApi),
+      reasoningEffort: input.reasoningEffort?.trim() || fallback.reasoningEffort,
       contextWindow: Number.isFinite(input.contextWindow) ? Number(input.contextWindow) : fallback.contextWindow,
       maxTokens: Number.isFinite(input.maxTokens) ? Number(input.maxTokens) : (fallback.maxTokens ?? 4096),
       notes: input.notes?.trim() || '',
@@ -408,6 +423,8 @@ export class AIProfileManager {
         anthropicBaseUrl: input?.overrides?.anthropicBaseUrl?.trim() || undefined,
         apiToken: input?.overrides?.apiToken ?? undefined,
         model: input?.overrides?.model?.trim() || undefined,
+        wireApi: this.normalizeWireApi(input?.overrides?.wireApi, undefined),
+        reasoningEffort: input?.overrides?.reasoningEffort?.trim() || undefined,
         contextWindow: Number.isFinite(input?.overrides?.contextWindow) ? Number(input?.overrides?.contextWindow) : undefined,
         maxTokens: Number.isFinite(input?.overrides?.maxTokens) ? Number(input?.overrides?.maxTokens) : undefined,
         notes: input?.overrides?.notes?.trim() || undefined,
@@ -445,6 +462,8 @@ export class AIProfileManager {
       anthropicBaseUrl: normalized.anthropicBaseUrl,
       apiToken: normalized.apiToken,
       model: normalized.model,
+      wireApi: normalized.wireApi,
+      reasoningEffort: normalized.reasoningEffort,
       maxTokens: normalized.maxTokens,
       contextWindow: normalized.contextWindow,
       profileId: normalized.id,
@@ -476,6 +495,7 @@ export class AIProfileManager {
       anthropicBaseUrl: env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
       apiToken: env.ANTHROPIC_AUTH_TOKEN || '',
       model: env.ANTHROPIC_MODEL || 'gpt-4o',
+      wireApi: 'chat_completions',
       contextWindow: 128000,
       maxTokens: 4096,
       notes: '从 ~/.claude/settings.json 导入。',
@@ -491,8 +511,10 @@ export class AIProfileManager {
     }
 
     const toml = fs.readFileSync(configPath, 'utf-8');
-    const baseUrlMatch = toml.match(/base_url\s*=\s*"([^"]+)"/);
-    const modelMatch = toml.match(/model\s*=\s*"([^"]+)"/);
+    const modelProvider = this.parseTomlString(toml, 'model_provider');
+    const providerConfig = this.parseCodexProviderConfig(toml, modelProvider);
+    const model = this.parseTomlString(toml, 'model') || 'gpt-4o';
+    const reasoningEffort = this.parseTomlString(toml, 'model_reasoning_effort');
     let apiKey = '';
 
     if (fs.existsSync(authPath)) {
@@ -501,12 +523,14 @@ export class AIProfileManager {
     }
 
     return this.saveProfile({
-      name: modelMatch?.[1] ? `${modelMatch[1]} (.codex)` : 'Codex 导入配置',
+      name: model ? `${model} (.codex)` : 'Codex 导入配置',
       provider: 'openai',
-      baseUrl: baseUrlMatch?.[1]?.replace(/\/+$/, '') || 'https://api.openai.com/v1',
+      baseUrl: providerConfig.baseUrl || 'https://api.openai.com/v1',
       anthropicBaseUrl: 'https://api.anthropic.com',
       apiToken: apiKey,
-      model: modelMatch?.[1] || 'gpt-4o',
+      model,
+      wireApi: providerConfig.wireApi ?? 'chat_completions',
+      reasoningEffort,
       contextWindow: 128000,
       maxTokens: 4096,
       notes: '从 ~/.codex/config.toml 与 auth.json 导入。',
@@ -545,6 +569,8 @@ export class AIProfileManager {
       anthropicBaseUrl: profileData.anthropicBaseUrl || 'https://api.anthropic.com',
       apiToken: profileData.apiToken || '',
       model: profileData.model,
+      wireApi: this.normalizeWireApi(profileData.wireApi, 'chat_completions'),
+      reasoningEffort: profileData.reasoningEffort,
       contextWindow: profileData.contextWindow ?? 128000,
       maxTokens: profileData.maxTokens ?? 4096,
       notes: profileData.notes || '从 ClaudeCoach 配置包导入。',
@@ -554,6 +580,62 @@ export class AIProfileManager {
 
   private createProfileId(): string {
     return `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private normalizeWireApi(
+    wireApi: AIProfile['wireApi'] | string | undefined,
+    fallback: AIProfile['wireApi'] | undefined,
+  ): AIProfile['wireApi'] {
+    if (wireApi === 'responses') {
+      return 'responses';
+    }
+    if (wireApi === 'chat_completions') {
+      return 'chat_completions';
+    }
+    return fallback ?? 'chat_completions';
+  }
+
+  private parseCodexProviderConfig(toml: string, providerId: string | undefined): CodexProviderConfig {
+    const genericBaseUrl = this.parseTomlString(toml, 'base_url')?.replace(/\/+$/, '');
+    if (!providerId) {
+      return {
+        baseUrl: genericBaseUrl,
+        wireApi: 'chat_completions',
+      };
+    }
+
+    const sectionBody = this.readTomlSectionBody(toml, `[model_providers.${providerId}]`);
+    if (!sectionBody) {
+      return {
+        baseUrl: genericBaseUrl,
+        wireApi: 'chat_completions',
+      };
+    }
+
+    return {
+      baseUrl: this.parseTomlString(sectionBody, 'base_url')?.replace(/\/+$/, '') || genericBaseUrl,
+      wireApi: this.normalizeWireApi(this.parseTomlString(sectionBody, 'wire_api'), 'chat_completions'),
+    };
+  }
+
+  private readTomlSectionBody(toml: string, header: string): string | undefined {
+    const startIndex = toml.indexOf(header);
+    if (startIndex < 0) {
+      return undefined;
+    }
+
+    const afterHeader = toml.slice(startIndex + header.length);
+    const nextSectionIndex = afterHeader.search(/\n\[[^\n]+\]/);
+    return nextSectionIndex >= 0 ? afterHeader.slice(0, nextSectionIndex) : afterHeader;
+  }
+
+  private parseTomlString(source: string, key: string): string | undefined {
+    const match = source.match(new RegExp(`^\\s*${this.escapeRegExp(key)}\\s*=\\s*"([^"]*)"`, 'm'));
+    return match?.[1]?.trim() || undefined;
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private slugify(value: string): string {

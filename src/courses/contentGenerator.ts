@@ -51,6 +51,7 @@ export class ContentGenerator {
   async generateCourse(subject: Subject, ctx: GenerationContext): Promise<CourseOutline> {
     const messages = strictCourseOutlinePrompt(subject, ctx);
     const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+    this.assertOutlinePayload(data, '课程大纲');
 
     return this.persistOutline(subject, {
       id: `course-${subject}-${Date.now()}`,
@@ -68,6 +69,7 @@ export class ContentGenerator {
   ): Promise<CourseOutline> {
     const messages = strictRebuildCourseOutlinePrompt(subject, currentOutline, ctx);
     const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+    this.assertOutlinePayload(data, '重构课程大纲');
 
     const freshTopics = (data.topics ?? []).map(topic => ({
       ...topic,
@@ -97,6 +99,7 @@ export class ContentGenerator {
   ): Promise<CourseOutline> {
     const messages = strictFullRebuildCourseOutlinePrompt(subject, currentOutline, ctx, instruction);
     const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+    this.assertOutlinePayload(data, '重构预览');
 
     return this.buildPreviewOutline(subject, {
       id: `course-${subject}-${Date.now()}`,
@@ -116,6 +119,7 @@ export class ContentGenerator {
   ): Promise<CourseOutline> {
     const messages = strictPartialRebuildCourseOutlinePrompt(subject, currentOutline, selection, ctx, instruction);
     const data = await this.ai.chatJson<{ topics: CourseOutline['topics'] }>(messages);
+    this.assertOutlinePayload({ title: currentOutline.title, topics: data.topics }, '部分重构预览');
 
     const prefixTopics = currentOutline.topics
       .slice(0, selection.startIndex)
@@ -308,6 +312,24 @@ export class ContentGenerator {
       title: cleanCourseTitle,
       topics: cleanTopics,
     };
+  }
+
+  private assertOutlinePayload(
+    data: { title?: string; topics?: CourseOutline['topics'] | null },
+    label: string,
+  ): void {
+    const topics = Array.isArray(data.topics) ? data.topics : [];
+    if (topics.length === 0) {
+      throw new Error(`${label}为空：模型没有返回任何主题。请重试，或切换到更稳定的 API 提供方。`);
+    }
+
+    const invalidTopicIndex = topics.findIndex((topic) => {
+      const lessons = Array.isArray(topic?.lessons) ? topic.lessons : [];
+      return lessons.length === 0;
+    });
+    if (invalidTopicIndex >= 0) {
+      throw new Error(`${label}不完整：第 ${invalidTopicIndex + 1} 个主题没有任何课时。请重试。`);
+    }
   }
 
   private sanitizeOutlineTitle(raw: string, fallback: string, maxChars: number): string {

@@ -1003,7 +1003,8 @@
       els.resolvedConfigSource.textContent = config.resolvedFrom === 'workspace' ? '当前生效：项目覆盖' : '当前生效：全局配置';
     }
     els.resolvedConfigName.textContent = config.model || config.profileName || '-';
-    els.resolvedConfigMeta.textContent = config.provider || '-';
+    const wireApi = config.wireApi ? ` / ${config.wireApi}` : '';
+    els.resolvedConfigMeta.textContent = `${config.provider || '-'}${wireApi}`;
     els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '-';
     if (els.resolvedConfigOrigin) {
       els.resolvedConfigOrigin.textContent = config.resolvedFrom === 'workspace' || workspaceOverride?.enabled ? '项目覆盖' : '全局配置';

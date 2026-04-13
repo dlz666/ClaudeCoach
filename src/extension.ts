@@ -31,6 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBar.tooltip = [
       `Profile: ${resolved.profileName}`,
       `Provider: ${resolved.provider}`,
+      `Wire API: ${resolved.wireApi ?? 'chat_completions'}`,
       `Model: ${resolved.model}`,
       `Base URL: ${resolved.effectiveBaseUrl}`,
       resolved.warnings.length ? `Warnings: ${resolved.warnings.join(', ')}` : 'Warnings: none',

@@ -933,11 +933,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           ...editGrounding,
         }
       );
-      const patchRaw = await this.aiClient.chatCompletion(patchMessages, {
+      const patch = await this.aiClient.chatJson<MarkdownPatchResult>(patchMessages, {
         temperature: 0.2,
         maxTokens: 1800,
       });
-      const patch = JSON.parse(this._stripMarkdownFence(patchRaw)) as MarkdownPatchResult;
       revisedContent = this._applyMarkdownPatch(currentContent, sections, patch);
     } else {
       const reviseMessages = reviseMarkdownPrompt(userMessage, currentContent, target.label, {
@@ -1033,6 +1032,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const outline = await this.contentGen.generateCourse(msg.subject, {
               profile, preferences: prefs, diagnosis: diag, materialSummary, ...courseProfileContext,
             });
+            await this._refreshCourses();
             this._post({ type: 'courseGenerated', outline });
             this._post({ type: 'log', message: `课程已生成：${outline.title}`, level: 'info' });
           });
@@ -1328,6 +1328,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             anthropicBaseUrl: msg.profile.anthropicBaseUrl,
             apiToken: msg.profile.apiToken ?? '',
             model: msg.profile.model,
+            wireApi: msg.profile.wireApi,
+            reasoningEffort: msg.profile.reasoningEffort,
             contextWindow: msg.profile.contextWindow,
             maxTokens: msg.profile.maxTokens ?? 4096,
             notes: msg.profile.notes ?? '',

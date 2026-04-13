@@ -1,6 +1,7 @@
 // ===== AI Layer =====
 export type APIProvider = 'openai' | 'anthropic';
 export type AIImportSource = 'manual' | 'claude' | 'codex' | 'package';
+export type AIWireApi = 'chat_completions' | 'responses';
 
 export interface AIConfig {
   provider: APIProvider;
@@ -8,6 +9,8 @@ export interface AIConfig {
   anthropicBaseUrl: string;
   apiToken: string;
   model: string;
+  wireApi?: AIWireApi;
+  reasoningEffort?: string;
   maxTokens?: number;
   contextWindow: number;
 }
@@ -30,7 +33,7 @@ export interface AIProfilesState {
 export interface AIWorkspaceOverride {
   enabled: boolean;
   baseProfileId?: string;
-  overrides?: Partial<Pick<AIProfile, 'provider' | 'baseUrl' | 'anthropicBaseUrl' | 'apiToken' | 'model' | 'contextWindow' | 'maxTokens' | 'notes'>>;
+  overrides?: Partial<Pick<AIProfile, 'provider' | 'baseUrl' | 'anthropicBaseUrl' | 'apiToken' | 'model' | 'wireApi' | 'reasoningEffort' | 'contextWindow' | 'maxTokens' | 'notes'>>;
 }
 
 export interface ResolvedAIConfig extends AIConfig {

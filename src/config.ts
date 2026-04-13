@@ -10,6 +10,7 @@ export function getLegacyAIConfig(): AIConfig {
     anthropicBaseUrl: config.get<string>('anthropicBaseUrl', 'https://api.anthropic.com'),
     apiToken: config.get<string>('apiToken', ''),
     model: config.get<string>('model', 'gpt-4o'),
+    wireApi: 'chat_completions',
     maxTokens: config.get<number>('maxTokens', 4096),
     contextWindow: config.get<number>('modelContextWindow', 128000),
   };
