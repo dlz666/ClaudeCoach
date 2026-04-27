@@ -1330,9 +1330,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           const lPath = this.courseManager.getLessonPath(msg.subject, msg.topicId, msg.lessonId);
           if (await fileExists(lPath)) {
             this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
-            await openMarkdownPreview(lPath);
+            const prefs = await this.prefsStore.get();
+            const viewerMode = prefs.coach?.lecture?.viewerMode ?? 'lecture-webview';
+            if (viewerMode === 'lecture-webview' || viewerMode === 'split-both') {
+              await vscode.commands.executeCommand('claudeCoach.openLectureViewer', {
+                filePath: lPath,
+                subject: msg.subject,
+                topicId: msg.topicId,
+                topicTitle: msg.topicTitle,
+                lessonId: msg.lessonId,
+                lessonTitle: msg.lessonTitle,
+              });
+              if (viewerMode === 'split-both') {
+                await openMarkdownPreview(lPath, 'native-preview');
+              }
+            } else {
+              await openMarkdownPreview(lPath, 'native-preview');
+            }
+            this.coachDeps?.coachEventBus.emit({
+              kind: 'lesson-opened',
+              at: new Date().toISOString(),
+              subject: msg.subject,
+              topicId: msg.topicId,
+              lessonId: msg.lessonId,
+            });
           } else {
-            vscode.window.showInformationMessage('该小节尚未生成讲义，请点击“讲义”按钮生成。');
+            vscode.window.showInformationMessage('该小节尚未生成讲义，请点击"讲义"按钮生成。');
           }
           break;
         }
