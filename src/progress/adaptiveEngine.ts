@@ -1,6 +1,6 @@
 import { AIClient } from '../ai/client';
 import { diagnosisPrompt } from '../ai/prompts';
-import { LatestDiagnosis, TopicSummary, GradeResult, Subject } from '../types';
+import { LatestDiagnosis, TopicSummary, GradeResult, Subject, AdaptiveTriggerState, AdaptiveTriggerReason } from '../types';
 import { createBudget, selectHistoryForPrompt } from '../ai/tokenBudget';
 import { getAIConfig } from '../config';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
@@ -214,6 +214,9 @@ export class AdaptiveEngine {
     // Save new latest
     await writeJson(this.getLatestPath(subject), diagnosis);
 
+    // Reset adaptive trigger state so manual diagnosis also clears the counter
+    await this._resetTriggerStateAfterRun(subject, diagnosis.updatedAt);
+
     const snapshot = diagnosis.subjectSnapshots[0];
     const topicId = await this._resolveDiagnosisTopicId(subject, diagnosis);
     await this.courseProfileStore.recordEvent(subject, {
@@ -262,5 +265,87 @@ export class AdaptiveEngine {
     diag.nextSteps.forEach((step, i) => { md += `${i + 1}. ${step}\n`; });
 
     await writeMarkdownAndPreview(this.getReportPath(subject), md);
+  }
+
+  // ===== Adaptive trigger state =====
+
+  private buildEmptyTriggerState(subject: Subject): AdaptiveTriggerState {
+    return {
+      schemaVersion: 1,
+      subject,
+      gradesSinceLastDiagnosis: 0,
+      lastDiagnosisAt: null,
+      lastAutoRunAt: null,
+    };
+  }
+
+  async getTriggerState(subject: Subject): Promise<AdaptiveTriggerState> {
+    const stored = await readJson<AdaptiveTriggerState>(this.paths.adaptiveTriggerPath(subject));
+    if (stored) {
+      return {
+        schemaVersion: stored.schemaVersion ?? 1,
+        subject: stored.subject ?? subject,
+        gradesSinceLastDiagnosis: Number.isFinite(stored.gradesSinceLastDiagnosis)
+          ? stored.gradesSinceLastDiagnosis
+          : 0,
+        lastDiagnosisAt: stored.lastDiagnosisAt ?? null,
+        lastAutoRunAt: stored.lastAutoRunAt ?? null,
+      };
+    }
+    return this.buildEmptyTriggerState(subject);
+  }
+
+  private async saveTriggerState(subject: Subject, state: AdaptiveTriggerState): Promise<void> {
+    await writeJson(this.paths.adaptiveTriggerPath(subject), {
+      ...state,
+      schemaVersion: state.schemaVersion ?? 1,
+      subject,
+    });
+  }
+
+  private async _resetTriggerStateAfterRun(subject: Subject, diagnosedAt: string, isAutoRun = false): Promise<void> {
+    const state = await this.getTriggerState(subject);
+    state.gradesSinceLastDiagnosis = 0;
+    state.lastDiagnosisAt = diagnosedAt || new Date().toISOString();
+    if (isAutoRun) {
+      state.lastAutoRunAt = state.lastDiagnosisAt;
+    }
+    await this.saveTriggerState(subject, state);
+  }
+
+  async recordGradeForAdaptive(subject: Subject): Promise<{ shouldRun: boolean; reason: AdaptiveTriggerReason | null }> {
+    const state = await this.getTriggerState(subject);
+    state.gradesSinceLastDiagnosis = (state.gradesSinceLastDiagnosis ?? 0) + 1;
+
+    let reason: AdaptiveTriggerReason | null = null;
+
+    if (state.lastDiagnosisAt === null && state.gradesSinceLastDiagnosis >= 1) {
+      reason = 'first-time';
+    } else if (state.gradesSinceLastDiagnosis >= 3) {
+      reason = 'grade-threshold';
+    } else if (state.lastDiagnosisAt && state.gradesSinceLastDiagnosis >= 1) {
+      const last = Date.parse(state.lastDiagnosisAt);
+      if (Number.isFinite(last) && Date.now() - last > 24 * 60 * 60 * 1000) {
+        reason = 'time-elapsed';
+      }
+    }
+
+    await this.saveTriggerState(subject, state);
+    return { shouldRun: reason !== null, reason };
+  }
+
+  async maybeAutoRunDiagnosis(subject: Subject): Promise<{ ran: boolean; reason: AdaptiveTriggerReason | null; diagnosis: LatestDiagnosis | null }> {
+    const { shouldRun, reason } = await this.recordGradeForAdaptive(subject);
+    if (!shouldRun) {
+      return { ran: false, reason: null, diagnosis: null };
+    }
+
+    const diagnosis = await this.runDiagnosis(subject);
+    // runDiagnosis already resets the counter and lastDiagnosisAt; mark this as an auto-run.
+    const state = await this.getTriggerState(subject);
+    state.lastAutoRunAt = diagnosis.updatedAt || new Date().toISOString();
+    await this.saveTriggerState(subject, state);
+
+    return { ran: true, reason, diagnosis };
   }
 }

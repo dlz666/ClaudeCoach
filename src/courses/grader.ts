@@ -9,6 +9,7 @@ import {
   Subject,
   CourseProfile,
   CourseProfileChapter,
+  WrongQuestion,
 } from '../types';
 import { CourseManager } from './courseManager';
 import { writeJson } from '../utils/fileSystem';
@@ -41,7 +42,8 @@ export class Grader {
     subject: Subject,
     topicId: string,
     sessionId: string,
-    ctx: GradeContext
+    ctx: GradeContext,
+    meta?: { topicTitle?: string; lessonTitle?: string; lessonId?: string }
   ): Promise<GradeResult> {
     const messages = gradePrompt(exercise.prompt, studentAnswer, ctx);
     const result = await this.ai.chatJson<Omit<GradeResult, 'exerciseId' | 'gradedAt'>>(messages);
@@ -85,7 +87,64 @@ export class Grader {
       },
     });
 
+    await this._maybeUpdateWrongQuestionBook(exercise, studentAnswer, subject, topicId, sessionId, gradeResult, meta);
+
     return gradeResult;
+  }
+
+  private async _maybeUpdateWrongQuestionBook(
+    exercise: Exercise,
+    studentAnswer: string,
+    subject: Subject,
+    topicId: string,
+    sessionId: string,
+    gradeResult: GradeResult,
+    meta?: { topicTitle?: string; lessonTitle?: string; lessonId?: string }
+  ): Promise<void> {
+    const lessonId = meta?.lessonId ?? sessionId;
+    const topicTitle = meta?.topicTitle ?? topicId;
+    const lessonTitle = meta?.lessonTitle ?? sessionId;
+    const wrongId = `wrong-${subject}-${topicId}-${sessionId}-${exercise.id}`;
+    const score = Number(gradeResult.score) || 0;
+    const weaknesses = gradeResult.weaknesses ?? [];
+
+    const isWrong = score < 60 || weaknesses.length > 0;
+
+    if (isWrong) {
+      const wq: WrongQuestion = {
+        id: wrongId,
+        exerciseId: exercise.id,
+        subject,
+        topicId,
+        topicTitle,
+        lessonId,
+        lessonTitle,
+        prompt: exercise.prompt,
+        studentAnswer,
+        score,
+        feedback: gradeResult.feedback,
+        weaknesses,
+        weaknessTags: gradeResult.weaknessTags ?? [],
+        attempts: 1,
+        firstFailedAt: gradeResult.gradedAt,
+        lastAttemptedAt: gradeResult.gradedAt,
+        resolved: false,
+      };
+      await this.courseManager.upsertWrongQuestion(subject, wq);
+      return;
+    }
+
+    if (score >= 90) {
+      const existing = await this.courseManager.listWrongQuestions(subject, {
+        topicId,
+        lessonId,
+        onlyUnresolved: true,
+      });
+      const match = existing.find(q => q.id === wrongId || q.exerciseId === exercise.id);
+      if (match) {
+        await this.courseManager.resolveWrongQuestion(subject, match.id);
+      }
+    }
   }
 
   private _buildFeedbackMd(exercise: Exercise, result: GradeResult): string {

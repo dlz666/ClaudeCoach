@@ -29,7 +29,12 @@ import {
   OutlineRebuildSelection,
   Subject,
   TopicOutline,
+  WrongQuestion,
+  AnswerSubmission,
+  Exercise,
+  GradeResult,
 } from '../types';
+import { readJson } from '../utils/fileSystem';
 import { AIClient } from '../ai/client';
 import { AIProfileManager } from '../ai/profileManager';
 import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../ai/prompts';
@@ -134,6 +139,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this._post({ type: 'courses', data: courses });
   }
 
+  private async _refreshWrongQuestions(subject: Subject) {
+    try {
+      const list = await this.courseManager.listWrongQuestions(subject, { onlyUnresolved: true, limit: 50 });
+      this._post({ type: 'wrongQuestions', subject, data: list });
+    } catch (error) {
+      console.error('Refresh wrong questions failed:', error);
+    }
+  }
+
   private async _refreshMaterials() {
     const index = await this.materialManager.getIndex();
     this._post({ type: 'materials', data: index });
@@ -221,9 +235,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     materialExerciseSummary?: string;
     retrievedExcerpts?: string;
     selectedMaterialTitle?: string;
+    sources: import('../types').GroundingSource[];
   }> {
     if (!subject) {
-      return {};
+      return { sources: [] };
     }
 
     const outline = await this.courseManager.getCourseOutline(subject);
@@ -240,6 +255,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       materialExerciseSummary: grounding.exerciseSummary,
       retrievedExcerpts: grounding.excerpts,
       selectedMaterialTitle: grounding.materialTitle,
+      sources: (grounding as any).sources ?? [],
     };
   }
 
@@ -255,14 +271,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     materialExerciseSummary?: string;
     retrievedExcerpts?: string;
     selectedMaterialTitle?: string;
+    sources: import('../types').GroundingSource[];
   }> {
     if (!subject) {
-      return {};
+      return { sources: [] };
     }
 
     const resolvedMode: ChatGroundingMode = mode ?? 'course';
     if (resolvedMode === 'general') {
-      return {};
+      return { sources: [] };
     }
 
     return this._buildSubjectGrounding(subject, message, {
@@ -850,6 +867,83 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return this.courseProfileStore.buildPromptContext(subject, topicId);
   }
 
+  private async _loadLessonExercises(subject: Subject, topicId: string, lessonId: string): Promise<Exercise[]> {
+    const sessionId = await this.courseManager.getDeterministicSessionId(subject, topicId, lessonId);
+    const jsonPath = this.courseManager.getExerciseJsonPath(subject, topicId, sessionId);
+    const exercises = await readJson<Exercise[]>(jsonPath);
+    return Array.isArray(exercises) ? exercises : [];
+  }
+
+  private async _gradeOneAnswer(args: {
+    subject: Subject;
+    topicId: string;
+    topicTitle: string;
+    lessonId: string;
+    lessonTitle: string;
+    exercise: Exercise;
+    answer: string;
+  }): Promise<GradeResult> {
+    const [prefs, diag, profile, courseProfileContext] = await Promise.all([
+      this.prefsStore.get(),
+      this.adaptiveEngine.getLatestDiagnosis(args.subject),
+      this.progressStore.getProfile(),
+      this._buildCourseProfileContext(args.subject, args.topicId),
+    ]);
+
+    const sessionId = await this.courseManager.getDeterministicSessionId(args.subject, args.topicId, args.lessonId);
+    const result = await this.grader.grade(
+      args.exercise,
+      args.answer,
+      args.subject,
+      args.topicId,
+      sessionId,
+      { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext },
+      { topicTitle: args.topicTitle, lessonTitle: args.lessonTitle, lessonId: args.lessonId },
+    );
+
+    return result;
+  }
+
+  /**
+   * Fire-and-forget 风格：如果触发器命中，启动一个独立 "自动诊断" task。
+   * 不阻塞调用方，让批改任务能立即完成。
+   */
+  private _scheduleAutoDiagnosis(subject: Subject): void {
+    void (async () => {
+      try {
+        const trigger = await this.adaptiveEngine.getTriggerState(subject);
+        // 提前判断是否需要：避免无意义启动 task
+        if (trigger.gradesSinceLastDiagnosis < 1) {
+          return;
+        }
+
+        this._startTask('自动诊断', async () => {
+          const outcome = await this.adaptiveEngine.maybeAutoRunDiagnosis(subject);
+          if (outcome.ran && outcome.diagnosis) {
+            this._view?.webview.postMessage({
+              type: 'autoDiagnosisRan',
+              subject,
+              reason: outcome.reason ?? 'manual',
+            });
+            this._post({ type: 'diagnosis', data: outcome.diagnosis });
+            await this._refreshCourses();
+            this._post({
+              type: 'log',
+              message: `已自动重新诊断（${outcome.reason ?? 'manual'}）`,
+              level: 'info',
+            });
+          }
+        });
+      } catch (error) {
+        console.error('Auto diagnosis schedule failed:', error);
+      }
+    })();
+  }
+
+  private async _maybeRunAutoDiagnosis(subject: Subject): Promise<void> {
+    this._scheduleAutoDiagnosis(subject);
+  }
+
   private async _recordRevisionFeedbackEvent(options: {
     type: 'lecture-revision' | 'answer-revision';
     subject?: Subject;
@@ -1121,10 +1215,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (choice !== '重新生成') { break; }
           }
           this._startTask(msg.lessonTitle + ' 讲义', async () => {
-            const [prefs, diag, profile] = await Promise.all([
+            const [prefs, diag, profile, lessonWrongs] = await Promise.all([
               this.prefsStore.get(),
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
+              this.courseManager.listWrongQuestions(msg.subject, {
+                topicId: msg.topicId,
+                lessonId: msg.lessonId,
+                onlyUnresolved: true,
+                limit: 4,
+              }),
             ]);
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
@@ -1135,6 +1235,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             await this.contentGen.generateLesson(
               msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle, msg.difficulty,
               { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              lessonWrongs,
             );
             this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
             this._post({ type: 'log', message: `讲义已生成：${msg.lessonTitle}`, level: 'info' });
@@ -1174,10 +1275,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
 
           this._startTask(msg.lessonTitle + ' 练习', async () => {
-            const [prefs, diag, profile] = await Promise.all([
+            const [prefs, diag, profile, lessonWrongs] = await Promise.all([
               this.prefsStore.get(),
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
+              this.courseManager.listWrongQuestions(msg.subject, {
+                topicId: msg.topicId,
+                lessonId: msg.lessonId,
+                onlyUnresolved: true,
+                limit: 5,
+              }),
             ]);
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
@@ -1188,10 +1295,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             await this.contentGen.generateExercises(
               msg.subject, msg.topicId, msg.lessonId, msg.lessonTitle, msg.count, msg.difficulty,
               { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              lessonWrongs,
             );
             await this.progressStore.incrementSession();
             await this._refreshCourses();
-            this._post({ type: 'log', message: `已生成 ${msg.count} 道练习题`, level: 'info' });
+            this._post({
+              type: 'log',
+              message: lessonWrongs.length > 0
+                ? `已生成 ${msg.count} 道练习题（已结合 ${lessonWrongs.length} 道历史错题）`
+                : `已生成 ${msg.count} 道练习题`,
+              level: 'info',
+            });
           });
           break;
         }
@@ -1213,20 +1327,113 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'submitAnswer': {
-          this._startTask('批改', async () => {
-            const [prefs, diag, profile] = await Promise.all([
-              this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
-              this.progressStore.getProfile(),
-            ]);
-            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
-            const result = await this.grader.grade(
-              msg.exercise, msg.answer, msg.subject, msg.topicId, msg.sessionId,
-              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext },
-            );
+          const subject = msg.subject as Subject;
+          const topicId = String(msg.topicId ?? '');
+          const lessonId = String(msg.lessonId ?? '');
+          const exerciseId = String(msg.exerciseId ?? '');
+          const answer = String(msg.answer ?? '').trim();
+          const topicTitle = String(msg.topicTitle ?? topicId);
+          const lessonTitle = String(msg.lessonTitle ?? lessonId);
+
+          if (!subject || !topicId || !lessonId || !exerciseId || !answer) {
+            this._post({ type: 'log', message: '提交答案缺少必要参数', level: 'warn' });
+            break;
+          }
+
+          this._startTask(`批改 ${lessonTitle}`, async () => {
+            const exercises = await this._loadLessonExercises(subject, topicId, lessonId);
+            const exercise = exercises.find((item) => item.id === exerciseId);
+            if (!exercise) {
+              throw new Error(`未在练习 JSON 中找到 ${exerciseId}`);
+            }
+            const result = await this._gradeOneAnswer({
+              subject, topicId, topicTitle, lessonId, lessonTitle, exercise, answer,
+            });
             await this.progressStore.incrementExercises(1);
             this._post({ type: 'gradeResult', result });
             this._post({ type: 'log', message: `批改完成，得分 ${result.score}/100`, level: 'info' });
+            await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
+            await this._refreshCourses();
+            await this._maybeRunAutoDiagnosis(subject);
+          });
+          break;
+        }
+
+        case 'submitAllAnswers': {
+          const subject = msg.subject as Subject;
+          const topicId = String(msg.topicId ?? '');
+          const lessonId = String(msg.lessonId ?? '');
+          const topicTitle = String(msg.topicTitle ?? topicId);
+          const lessonTitle = String(msg.lessonTitle ?? lessonId);
+          const submissions: AnswerSubmission[] = Array.isArray(msg.answers) ? msg.answers : [];
+          const valid = submissions
+            .map((item) => ({ exerciseId: String(item?.exerciseId ?? '').trim(), answer: String(item?.answer ?? '').trim() }))
+            .filter((item) => item.exerciseId && item.answer);
+
+          if (!subject || !topicId || !lessonId || valid.length === 0) {
+            this._post({ type: 'log', message: '没有可提交的答案', level: 'warn' });
+            break;
+          }
+
+          this._startTask(`批改 ${lessonTitle}`, async () => {
+            const exercises = await this._loadLessonExercises(subject, topicId, lessonId);
+            const total = valid.length;
+            let succeeded = 0;
+            let lastResult: GradeResult | null = null;
+            const scores: number[] = [];
+
+            for (let index = 0; index < valid.length; index += 1) {
+              const submission = valid[index];
+              const exercise = exercises.find((item) => item.id === submission.exerciseId);
+              if (!exercise) {
+                this._post({ type: 'log', message: `跳过未匹配的练习 ${submission.exerciseId}`, level: 'warn' });
+                continue;
+              }
+              this._view?.webview.postMessage({
+                type: 'gradingProgress',
+                current: index + 1,
+                total,
+                lessonTitle,
+              });
+              try {
+                lastResult = await this._gradeOneAnswer({
+                  subject, topicId, topicTitle, lessonId, lessonTitle, exercise, answer: submission.answer,
+                });
+                scores.push(lastResult.score);
+                this._post({ type: 'gradeResult', result: lastResult });
+                succeeded += 1;
+              } catch (error: any) {
+                this._post({
+                  type: 'log',
+                  message: `批改失败 ${submission.exerciseId}：${error?.message || error}`,
+                  level: 'error',
+                });
+              }
+            }
+
+            if (succeeded > 0) {
+              await this.progressStore.incrementExercises(succeeded);
+              const avg = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : 0;
+              this._post({
+                type: 'log',
+                message: `批改 ${succeeded}/${total} 道完成，平均分 ${avg}`,
+                level: 'info',
+              });
+              await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
+              await this._refreshCourses();
+              await this._refreshWrongQuestions(subject);
+              // 触发器计数 +succeeded：先静默 record (succeeded-1) 次，最后一次走 maybeAutoRun（自带 +1）
+              for (let extraIndex = 0; extraIndex < succeeded - 1; extraIndex += 1) {
+                try {
+                  await this.adaptiveEngine.recordGradeForAdaptive(subject);
+                } catch (error) {
+                  console.error('Recording adaptive grade failed:', error);
+                }
+              }
+              this._scheduleAutoDiagnosis(subject);
+            } else {
+              this._post({ type: 'log', message: '本次批改未成功完成任何一题', level: 'warn' });
+            }
           });
           break;
         }
@@ -1251,12 +1458,114 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case 'scanExercises': {
+        case 'scanExercises':
+        case 'scanAllExercises': {
           this._startTask('扫描练习', async () => {
             const count = await this.exerciseScanner.scanAndGradeAll();
             await this.courseManager.syncLessonStatuses();
             await this._refreshCourses();
             this._post({ type: 'log', message: count > 0 ? `自动批改 ${count} 道练习` : '没有发现未批改的练习', level: 'info' });
+            if (count > 0 && msg.subject) {
+              await this._maybeRunAutoDiagnosis(msg.subject as Subject);
+            } else if (count > 0 && this.lastOpenedLessonFile?.subject) {
+              await this._maybeRunAutoDiagnosis(this.lastOpenedLessonFile.subject);
+            }
+          });
+          break;
+        }
+
+        case 'retryMaterial': {
+          const materialId = String(msg.materialId ?? '');
+          if (!materialId) {
+            this._post({ type: 'log', message: '缺少要重试的资料 ID', level: 'warn' });
+            break;
+          }
+          this._startTask('重试资料索引', async () => {
+            const entries = await this.materialManager.reconcileMaterials(undefined, { materialId });
+            const refreshed = entries.find((entry) => entry.id === materialId);
+            this._post({
+              type: 'log',
+              message: refreshed
+                ? `资料已重新处理：${refreshed.fileName}（状态 ${refreshed.status}）`
+                : `资料 ${materialId} 未找到或处理失败`,
+              level: refreshed?.status === 'failed' ? 'warn' : 'info',
+            });
+            await this._refreshMaterials();
+          });
+          break;
+        }
+
+        case 'getWrongQuestions': {
+          const subject = (msg.subject ?? this.lastOpenedLessonFile?.subject) as Subject | undefined;
+          if (!subject) {
+            this._post({ type: 'wrongQuestions', subject: undefined, data: [] });
+            break;
+          }
+          await this._refreshWrongQuestions(subject);
+          break;
+        }
+
+        case 'resolveWrongQuestion': {
+          const subject = msg.subject as Subject;
+          const questionId = String(msg.questionId ?? '');
+          if (!subject || !questionId) {
+            this._post({ type: 'log', message: '缺少错题信息', level: 'warn' });
+            break;
+          }
+          await this.courseManager.resolveWrongQuestion(subject, questionId);
+          this._post({ type: 'log', message: '已标记错题为已解决', level: 'info' });
+          await this._refreshWrongQuestions(subject);
+          break;
+        }
+
+        case 'practiceWrongQuestions': {
+          const subject = msg.subject as Subject;
+          const topicId = String(msg.topicId ?? '');
+          const lessonId = String(msg.lessonId ?? '');
+          const lessonTitle = String(msg.lessonTitle ?? lessonId);
+          const count = Number.isFinite(Number(msg.count)) ? Number(msg.count) : 5;
+
+          if (!subject || !topicId || !lessonId) {
+            this._post({ type: 'log', message: '请先在课程树中点开任一课时再触发针对错题再练', level: 'warn' });
+            break;
+          }
+
+          this._startTask(`错题再练 ${lessonTitle}`, async () => {
+            const wrongs = await this.courseManager.listWrongQuestions(subject, {
+              onlyUnresolved: true,
+              limit: 8,
+            });
+            if (wrongs.length === 0) {
+              this._post({ type: 'log', message: '错题本为空，无需再练', level: 'info' });
+              return;
+            }
+
+            const lessonWrongs = wrongs.filter((item) => item.lessonId === lessonId);
+            const focusedWrongs = (lessonWrongs.length ? lessonWrongs : wrongs).slice(0, 3);
+
+            const [prefs, diag, profile] = await Promise.all([
+              this.prefsStore.get(),
+              this.adaptiveEngine.getLatestDiagnosis(subject),
+              this.progressStore.getProfile(),
+            ]);
+            const grounding = await this._buildSubjectGrounding(
+              subject,
+              [lessonTitle, '错题再练', '薄弱点强化'].join(' '),
+              { maxExcerpts: 4 },
+            );
+            const courseProfileContext = await this._buildCourseProfileContext(subject, topicId);
+
+            await this.contentGen.generateExercises(
+              subject, topicId, lessonId, lessonTitle, count, 3,
+              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              focusedWrongs,
+            );
+            await this._refreshCourses();
+            this._post({
+              type: 'log',
+              message: `已基于 ${focusedWrongs.length} 道错题为 ${lessonTitle} 再出 ${count} 道练习`,
+              level: 'info',
+            });
           });
           break;
         }
@@ -1487,6 +1796,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             break;
           }
 
+          const turnId = String(msg.turnId ?? `turn-${Date.now()}`);
           const shouldTryEdit = this._isChatEditIntent(userMessage) && (!!msg.subject || !!this.lastOpenedLessonFile);
           const diagnosisSubject = shouldTryEdit ? (msg.subject ?? this.lastOpenedLessonFile?.subject) : msg.subject;
           this._startTask(shouldTryEdit ? '修改讲义' : 'AI 对话', async () => {
@@ -1524,7 +1834,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               summaryTarget: 'chat-answer',
             });
             this._recordChatTurn(userMessage, reply);
-            this._view?.webview.postMessage({ type: 'chatResponse', content: reply });
+            this._view?.webview.postMessage({ type: 'chatResponse', content: reply, turnId });
+            if (grounding.sources && grounding.sources.length > 0) {
+              this._view?.webview.postMessage({
+                type: 'groundingSources',
+                turnId,
+                sources: grounding.sources,
+              });
+            }
             this._post({ type: 'log', message: `AI 回复完成（${reply.length} 字）`, level: 'info' });
           });
           return;

@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { CourseOutline, LessonMeta, Subject, TopicOutline, TopicSummary } from '../types';
+import { CourseOutline, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
 import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver } from '../storage/pathResolver';
 
@@ -627,5 +627,121 @@ export class CourseManager {
 
   async lessonExists(subject: Subject, topicId: string, lessonId: string): Promise<boolean> {
     return fileExists(this.getLessonPath(subject, topicId, lessonId));
+  }
+
+  // ===== Wrong question book =====
+
+  private buildEmptyWrongQuestionBook(subject: Subject): WrongQuestionBook {
+    return {
+      schemaVersion: 1,
+      subject,
+      questions: [],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  async getWrongQuestionBook(subject: Subject): Promise<WrongQuestionBook> {
+    const stored = await readJson<WrongQuestionBook>(this.paths.wrongQuestionsPath(subject));
+    if (stored && Array.isArray(stored.questions)) {
+      return {
+        schemaVersion: stored.schemaVersion ?? 1,
+        subject: stored.subject ?? subject,
+        questions: stored.questions,
+        updatedAt: stored.updatedAt ?? new Date().toISOString(),
+      };
+    }
+    return this.buildEmptyWrongQuestionBook(subject);
+  }
+
+  private async saveWrongQuestionBook(subject: Subject, book: WrongQuestionBook): Promise<void> {
+    const next: WrongQuestionBook = {
+      ...book,
+      schemaVersion: book.schemaVersion ?? 1,
+      subject,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJson(this.paths.wrongQuestionsPath(subject), next);
+  }
+
+  async upsertWrongQuestion(subject: Subject, question: WrongQuestion): Promise<void> {
+    const book = await this.getWrongQuestionBook(subject);
+    const existingIndex = book.questions.findIndex(q =>
+      q.exerciseId === question.exerciseId
+      && q.lessonId === question.lessonId
+      && q.topicId === question.topicId
+    );
+
+    if (existingIndex >= 0) {
+      const existing = book.questions[existingIndex];
+      book.questions[existingIndex] = {
+        ...existing,
+        ...question,
+        // preserve original first-failure metadata
+        firstFailedAt: existing.firstFailedAt || question.firstFailedAt,
+        attempts: (existing.attempts ?? 0) + 1,
+        lastAttemptedAt: question.lastAttemptedAt || new Date().toISOString(),
+        resolved: false,
+        resolvedAt: undefined,
+      };
+    } else {
+      book.questions.push({
+        ...question,
+        attempts: question.attempts ?? 1,
+        resolved: false,
+      });
+    }
+
+    await this.saveWrongQuestionBook(subject, book);
+  }
+
+  async resolveWrongQuestion(subject: Subject, questionId: string): Promise<void> {
+    const book = await this.getWrongQuestionBook(subject);
+    const target = book.questions.find(q => q.id === questionId);
+    if (!target || target.resolved) {
+      return;
+    }
+    target.resolved = true;
+    target.resolvedAt = new Date().toISOString();
+    await this.saveWrongQuestionBook(subject, book);
+  }
+
+  async listWrongQuestions(
+    subject: Subject,
+    options?: { topicId?: string; lessonId?: string; onlyUnresolved?: boolean; limit?: number }
+  ): Promise<WrongQuestion[]> {
+    const book = await this.getWrongQuestionBook(subject);
+    const onlyUnresolved = options?.onlyUnresolved ?? true;
+
+    let filtered = book.questions.filter(q => {
+      if (onlyUnresolved && q.resolved) {
+        return false;
+      }
+      if (options?.topicId && q.topicId !== options.topicId) {
+        return false;
+      }
+      if (options?.lessonId && q.lessonId !== options.lessonId) {
+        return false;
+      }
+      return true;
+    });
+
+    // Most recent failures first
+    filtered.sort((a, b) => (b.lastAttemptedAt || '').localeCompare(a.lastAttemptedAt || ''));
+
+    if (typeof options?.limit === 'number' && options.limit >= 0) {
+      filtered = filtered.slice(0, options.limit);
+    }
+
+    return filtered;
+  }
+
+  async clearResolvedWrongQuestions(subject: Subject): Promise<void> {
+    const book = await this.getWrongQuestionBook(subject);
+    const before = book.questions.length;
+    book.questions = book.questions.filter(q => !q.resolved);
+    if (book.questions.length === before) {
+      return;
+    }
+    await this.saveWrongQuestionBook(subject, book);
   }
 }

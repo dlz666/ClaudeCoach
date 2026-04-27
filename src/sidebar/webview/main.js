@@ -23,6 +23,10 @@
     chatMessages: Array.isArray(saved.chatMessages) ? saved.chatMessages.slice() : [],
     activeTaskKeys: new Set(),
     resolvedAIConfig: null,
+    wrongQuestions: [],
+    lastChatTurnId: null,
+    answerSubmitContext: null,
+    lastOpenedLesson: saved.lastOpenedLesson || null,
     rebuildModal: {
       open: false,
       mode: 'full',
@@ -120,6 +124,18 @@
     prefReview: $('pref-review'),
     prefLangContent: $('pref-lang-content'),
     prefLangCode: $('pref-lang-code'),
+    wrongQuestionsSection: $('wrong-questions-section'),
+    btnRefreshWrongQuestions: $('btn-refresh-wrong-questions'),
+    wrongQuestionsActions: $('wrong-questions-actions'),
+    btnPracticeWrongQuestions: $('btn-practice-wrong-questions'),
+    wrongQuestionsList: $('wrong-questions-list'),
+    answerSubmitModal: $('answer-submit-modal'),
+    btnCloseAnswerSubmitModal: $('btn-close-answer-submit-modal'),
+    answerSubmitLessonInfo: $('answer-submit-lesson-info'),
+    answerSubmitTextarea: $('answer-submit-textarea'),
+    answerSubmitError: $('answer-submit-error'),
+    btnAnswerSubmitConfirm: $('btn-answer-submit-confirm'),
+    btnAnswerSubmitCancel: $('btn-answer-submit-cancel'),
   };
 
   function subjectLabel(subject) {
@@ -268,6 +284,7 @@
       selectedCourseMaterialId: state.selectedCourseMaterialId,
       chatGroundingMode: state.chatGroundingMode,
       chatMessages: state.chatMessages,
+      lastOpenedLesson: state.lastOpenedLesson,
     });
   }
 
@@ -616,6 +633,14 @@
         lessonId: d.lessonId,
         lessonTitle: d.lessonTitle,
       });
+      state.lastOpenedLesson = {
+        subject: d.subject,
+        topicId: d.topicId,
+        topicTitle: d.topicTitle,
+        lessonId: d.lessonId,
+        lessonTitle: d.lessonTitle,
+      };
+      persist();
     };
 
     els.courseTree.querySelectorAll('.tree-lesson-open').forEach((row) => {
@@ -643,6 +668,14 @@
           lessonTitle: d.lessonTitle,
           difficulty: Number(d.difficulty) || 1,
         });
+        state.lastOpenedLesson = {
+          subject: d.subject,
+          topicId: d.topicId,
+          topicTitle: d.topicTitle,
+          lessonId: d.lessonId,
+          lessonTitle: d.lessonTitle,
+        };
+        persist();
       });
     });
 
@@ -664,6 +697,7 @@
       popover.className = 'lesson-menu-popover';
       popover.setAttribute('role', 'menu');
       popover.innerHTML = `
+        <button class="lesson-menu-action" type="button" role="menuitem" data-action="answer">答题与批改</button>
         <button class="lesson-menu-action" type="button" role="menuitem" data-action="exercise">练习</button>
         <button class="lesson-menu-action" type="button" role="menuitem" data-action="reset">重新学习</button>
         <button class="lesson-menu-action" type="button" role="menuitem" data-action="complete">已完成</button>
@@ -692,6 +726,17 @@
           const d = button.dataset;
           const action = actionButton.dataset.action;
 
+          if (action === 'answer') {
+            openAnswerSubmitModal({
+              subject: d.subject,
+              topicId: d.topicId,
+              topicTitle: d.topicTitle,
+              lessonId: d.lessonId,
+              lessonTitle: d.lessonTitle,
+            });
+            return;
+          }
+
           if (action === 'exercise') {
             vscode.postMessage({
               type: 'openOrGenerateExercises',
@@ -703,6 +748,14 @@
               count: state.preferences?.pace?.exercisesPerSession || 5,
               difficulty: Number(d.difficulty) || 1,
             });
+            state.lastOpenedLesson = {
+              subject: d.subject,
+              topicId: d.topicId,
+              topicTitle: d.topicTitle,
+              lessonId: d.lessonId,
+              lessonTitle: d.lessonTitle,
+            };
+            persist();
             return;
           }
 
@@ -757,12 +810,13 @@
       return;
     }
 
-    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引' };
+    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
     els.courseMaterialsList.innerHTML = materials.map((item) => `
       <div class="material-item clickable course-material-item${item.id === state.selectedCourseMaterialId ? ' active' : ''}" data-id="${escapeHtml(item.id)}">
         <span class="material-name">${escapeHtml(item.fileName)}</span>
         <span class="material-right">
           <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
+          ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
           <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
         </span>
       </div>
@@ -771,6 +825,13 @@
     els.courseMaterialsList.querySelectorAll('.course-material-item').forEach((item) => {
       item.addEventListener('click', () => {
         vscode.postMessage({ type: 'previewMaterial', materialId: item.getAttribute('data-id') });
+      });
+    });
+
+    els.courseMaterialsList.querySelectorAll('.material-retry-btn').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: 'retryMaterial', materialId: button.getAttribute('data-id') });
       });
     });
 
@@ -812,7 +873,7 @@
       grouped[item.subject].push(item);
     });
 
-    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引' };
+    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
       <div class="material-group">
         <div class="material-group-title">${escapeHtml(subjectLabel(subject))}</div>
@@ -821,6 +882,7 @@
             <span class="material-name">${escapeHtml(item.fileName)}</span>
             <span class="material-right">
               <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
+              ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
               <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
             </span>
           </div>
@@ -834,6 +896,13 @@
         onCourseSelected();
         activateTab('learn');
         vscode.postMessage({ type: 'previewMaterial', materialId: item.getAttribute('data-id') });
+      });
+    });
+
+    els.materialsList.querySelectorAll('.material-retry-btn').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: 'retryMaterial', materialId: button.getAttribute('data-id') });
       });
     });
 
@@ -888,6 +957,122 @@
     }
 
     vscode.postMessage({ type: 'getDiagnosis', subject: state.selectedSubject, run });
+  }
+
+  function renderWrongQuestions() {
+    if (!els.wrongQuestionsSection || !els.wrongQuestionsList) return;
+
+    if (!state.selectedSubject) {
+      els.wrongQuestionsSection.classList.add('hidden');
+      return;
+    }
+
+    els.wrongQuestionsSection.classList.remove('hidden');
+
+    const items = Array.isArray(state.wrongQuestions) ? state.wrongQuestions : [];
+    if (!items.length) {
+      els.wrongQuestionsList.innerHTML = '<p class="muted">暂无错题。回答练习题后，未掌握的题会出现在这里。</p>';
+      els.wrongQuestionsActions?.classList.add('hidden');
+      return;
+    }
+
+    const grouped = {};
+    items.forEach((item) => {
+      const key = item.lessonTitle || '未命名讲义';
+      grouped[key] = grouped[key] || [];
+      grouped[key].push(item);
+    });
+
+    els.wrongQuestionsList.innerHTML = Object.entries(grouped).map(([lessonTitle, list]) => `
+      <div class="wrong-questions-group">
+        <div class="wrong-questions-group-title">${escapeHtml(lessonTitle)}</div>
+        <ul class="wrong-questions-list-ul">
+          ${list.map((item) => {
+            const text = String(item.questionText || '');
+            const truncated = text.length > 100 ? `${text.slice(0, 100)}...` : text;
+            const weakness = Array.isArray(item.weaknessTags) ? item.weaknessTags : [];
+            const score = Number(item.score);
+            return `
+              <li class="wrong-question-item" data-id="${escapeHtml(item.id)}">
+                <div class="wrong-question-text">${escapeHtml(truncated)}</div>
+                ${weakness.length ? `<div class="wrong-question-tags">${weakness.map((tag) => `<span class="wrong-question-tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+                <div class="wrong-question-meta">
+                  ${Number.isFinite(score) ? `<span class="wrong-question-score">${escapeHtml(String(score))}</span>` : ''}
+                  <button class="wrong-question-resolve" type="button" data-id="${escapeHtml(item.id)}">已解决</button>
+                </div>
+              </li>
+            `;
+          }).join('')}
+        </ul>
+      </div>
+    `).join('');
+
+    els.wrongQuestionsActions?.classList.remove('hidden');
+
+    els.wrongQuestionsList.querySelectorAll('.wrong-question-resolve').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (!state.selectedSubject) return;
+        vscode.postMessage({
+          type: 'resolveWrongQuestion',
+          subject: state.selectedSubject,
+          questionId: button.getAttribute('data-id'),
+        });
+      });
+    });
+  }
+
+  function requestWrongQuestions() {
+    if (!state.selectedSubject) return;
+    vscode.postMessage({ type: 'getWrongQuestions', subject: state.selectedSubject });
+  }
+
+  function openAnswerSubmitModal(ctx) {
+    state.answerSubmitContext = ctx;
+    if (els.answerSubmitLessonInfo) {
+      els.answerSubmitLessonInfo.textContent = `当前讲义：${ctx.lessonTitle}`;
+    }
+    if (els.answerSubmitTextarea) {
+      els.answerSubmitTextarea.value = '';
+    }
+    if (els.answerSubmitError) {
+      els.answerSubmitError.classList.add('hidden');
+      els.answerSubmitError.textContent = '';
+    }
+    els.answerSubmitModal?.classList.remove('hidden');
+    els.answerSubmitModal?.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => els.answerSubmitTextarea?.focus());
+  }
+
+  function closeAnswerSubmitModal() {
+    state.answerSubmitContext = null;
+    els.answerSubmitModal?.classList.add('hidden');
+    els.answerSubmitModal?.setAttribute('aria-hidden', 'true');
+  }
+
+  function parseAnswerSubmissions(rawText) {
+    const text = String(rawText || '').replace(/\r\n/g, '\n').trim();
+    if (!text) return [];
+    const headerRegex = /^##\s*第?\s*(\d+)\s*题[^\n]*\n/gm;
+    const parts = [];
+    let match;
+    let lastIndex = 0;
+    let lastNumber = null;
+    while ((match = headerRegex.exec(text)) !== null) {
+      if (lastNumber !== null) {
+        parts.push({ number: lastNumber, body: text.slice(lastIndex, match.index).trim() });
+      }
+      lastNumber = parseInt(match[1], 10);
+      lastIndex = headerRegex.lastIndex;
+    }
+    if (lastNumber !== null) {
+      parts.push({ number: lastNumber, body: text.slice(lastIndex).trim() });
+    } else {
+      parts.push({ number: 1, body: text });
+    }
+    return parts
+      .filter((part) => part.body.length > 0)
+      .map((part) => ({ exerciseId: `ex-${part.number}`, answer: part.body }));
   }
 
   function syncMaterialImportTargets() {
@@ -1206,7 +1391,9 @@
     renderChatContext();
     syncMaterialImportTargets();
     renderOutlineRebuildModal();
+    renderWrongQuestions();
     persist();
+    requestWrongQuestions();
   }
 
   function activateTab(tabName) {
@@ -1286,17 +1473,69 @@
     vscode.postMessage({ type: 'importMaterial', subject: state.selectedSubject });
   });
 
+  els.btnRefreshWrongQuestions?.addEventListener('click', () => requestWrongQuestions());
+
+  els.btnPracticeWrongQuestions?.addEventListener('click', () => {
+    const last = state.lastOpenedLesson;
+    if (!state.selectedSubject) { addLog('请先选择课程。', 'warn'); return; }
+    if (!last || last.subject !== state.selectedSubject) {
+      addLog('请先在课程树中点开任一课时（讲义或练习），再使用错题再练。', 'warn');
+      return;
+    }
+    vscode.postMessage({
+      type: 'practiceWrongQuestions',
+      subject: state.selectedSubject,
+      topicId: last.topicId,
+      lessonId: last.lessonId,
+      lessonTitle: last.lessonTitle,
+      count: 5,
+    });
+  });
+
+  els.btnCloseAnswerSubmitModal?.addEventListener('click', closeAnswerSubmitModal);
+  els.btnAnswerSubmitCancel?.addEventListener('click', closeAnswerSubmitModal);
+  els.answerSubmitModal?.addEventListener('click', (event) => {
+    if (event.target === els.answerSubmitModal) closeAnswerSubmitModal();
+  });
+
+  els.btnAnswerSubmitConfirm?.addEventListener('click', () => {
+    const ctx = state.answerSubmitContext;
+    if (!ctx) { closeAnswerSubmitModal(); return; }
+    const submissions = parseAnswerSubmissions(els.answerSubmitTextarea?.value);
+    if (submissions.length === 0) {
+      if (els.answerSubmitError) {
+        els.answerSubmitError.textContent = '没有解析到任何答案。请按"## 第 N 题"格式粘贴。';
+        els.answerSubmitError.classList.remove('hidden');
+      }
+      return;
+    }
+    vscode.postMessage({
+      type: 'submitAllAnswers',
+      subject: ctx.subject,
+      topicId: ctx.topicId,
+      topicTitle: ctx.topicTitle,
+      lessonId: ctx.lessonId,
+      lessonTitle: ctx.lessonTitle,
+      answers: submissions,
+    });
+    closeAnswerSubmitModal();
+    addLog(`已提交 ${submissions.length} 道答案进入批改队列`, 'info');
+  });
+
   els.btnChatSend?.addEventListener('click', () => {
     const text = (els.chatInput?.value || '').trim();
     if (!text) return;
     appendChat('user', text);
     els.chatInput.value = '';
+    const turnId = `turn-${Date.now()}`;
+    state.lastChatTurnId = turnId;
     vscode.postMessage({
       type: 'chat',
       message: text,
       subject: state.chatGroundingMode === 'general' ? undefined : state.selectedSubject,
       mode: state.chatGroundingMode,
       materialId: state.chatGroundingMode === 'material' ? state.selectedCourseMaterialId : undefined,
+      turnId,
     });
   });
 
@@ -1328,6 +1567,9 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && state.rebuildModal.open) {
       closeOutlineRebuildModal();
+    }
+    if (event.key === 'Escape' && !els.answerSubmitModal?.classList.contains('hidden')) {
+      closeAnswerSubmitModal();
     }
   });
 
@@ -1620,6 +1862,89 @@
         }
         break;
       }
+      case 'wrongQuestions': {
+        state.wrongQuestions = Array.isArray(msg.data) ? msg.data : [];
+        renderWrongQuestions();
+        break;
+      }
+      case 'gradingProgress': {
+        addLog(`批改中 ${msg.current}/${msg.total}：${msg.lessonTitle || ''}`, 'info');
+        break;
+      }
+      case 'autoDiagnosisRan': {
+        const reasonLabel = {
+          'grade-threshold': '完成多次练习',
+          'time-elapsed': '距上次诊断已超 24h',
+          'first-time': '首次诊断',
+          'manual': '手动触发',
+        }[msg.reason] || msg.reason || '';
+        addLog(`🤖 已自动重新诊断（${reasonLabel}）`, 'info');
+        requestDiagnosis(false);
+        break;
+      }
+      case 'groundingSources': {
+        const sources = Array.isArray(msg.sources) ? msg.sources : [];
+        if (!sources.length || !els.chatMessages) break;
+        const lastAssistant = els.chatMessages.querySelector('.chat-msg.assistant:last-child');
+        if (!lastAssistant) break;
+        if (lastAssistant.querySelector('.chat-grounding-sources')) break;
+        const details = document.createElement('details');
+        details.className = 'chat-grounding-sources';
+        const summary = document.createElement('summary');
+        summary.textContent = `参考资料 (${sources.length} 条)`;
+        details.appendChild(summary);
+        sources.forEach((source) => {
+          const item = document.createElement('div');
+          item.className = 'chat-grounding-source';
+          const header = document.createElement('div');
+          header.className = 'chat-grounding-source-header';
+          header.textContent = source.sectionLabel
+            ? `${source.fileName} · ${source.sectionLabel}`
+            : source.fileName;
+          const excerpt = document.createElement('div');
+          excerpt.className = 'chat-grounding-source-excerpt';
+          excerpt.textContent = String(source.excerpt || '').slice(0, 200);
+          item.appendChild(header);
+          item.appendChild(excerpt);
+          details.appendChild(item);
+        });
+        lastAssistant.appendChild(details);
+        break;
+      }
+      case 'triggerGenerateCourse': {
+        activateTab('learn');
+        setCreateCourseMode(true);
+        break;
+      }
+      case 'triggerGenerateLesson': {
+        activateTab('learn');
+        addLog('请在课程树中点击对应课时的"讲义"按钮。', 'info');
+        break;
+      }
+      case 'triggerGenerateExercises': {
+        activateTab('learn');
+        addLog('请在课程树中展开课时的"…"菜单，选择"练习"。', 'info');
+        break;
+      }
+      case 'triggerGradeAnswer': {
+        activateTab('learn');
+        addLog('请在课程树中展开课时菜单，选择"答题与批改"。', 'info');
+        break;
+      }
+      case 'triggerDiagnosis': {
+        activateTab('learn');
+        requestDiagnosis(true);
+        break;
+      }
+      case 'triggerImportMaterial': {
+        if (state.selectedSubject) {
+          vscode.postMessage({ type: 'importMaterial', subject: state.selectedSubject });
+        } else {
+          activateTab('materials');
+          addLog('请先选择目标课程，再导入资料。', 'info');
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1635,9 +1960,14 @@
   renderChatContext();
   renderResolvedAIConfig(null, null);
   renderOutlineRebuildModal();
+  renderWrongQuestions();
   updateTaskBlockedState();
 
   refreshCoursePanelData();
+  renderWrongQuestions();
+  if (state.selectedSubject) {
+    requestWrongQuestions();
+  }
   vscode.postMessage({ type: 'getPreferences' });
   vscode.postMessage({ type: 'getDataDir' });
   vscode.postMessage({ type: 'getResolvedAIConfig' });

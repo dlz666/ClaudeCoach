@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { MaterialEntry, MaterialExerciseMapping, MaterialIndex, MaterialSectionMapping, MaterialSummary, Subject } from '../types';
+import { GroundingSource, MaterialEntry, MaterialExerciseMapping, MaterialIndex, MaterialSectionMapping, MaterialSummary, Subject } from '../types';
 import { readJson, writeJson, ensureDir, writeText, fileExists } from '../utils/fileSystem';
 import { extractTextFromFile } from './textExtractor';
 import { StoragePathResolver, getStoragePathResolver } from '../storage/pathResolver';
@@ -13,13 +13,27 @@ interface RetrievedExcerpt {
   sourceLabel: string;
   excerpt: string;
   score: number;
+  sectionLabel?: string;
 }
 
-interface GroundingContext {
+interface LocatedSection {
+  materialId: string;
+  sectionLabel: string;
+  anchorTerms: string[];
+}
+
+/**
+ * v2 grounding context. Adds detailed `sources` so the front-end can render
+ * which file/section/excerpt actually fed the prompt.
+ *
+ * `sourceLabels` 仍然保留，便于现有调用方平滑切换。
+ */
+interface GroundingContextV2 {
   summary: string;
   exerciseSummary?: string;
   excerpts: string;
   sourceLabels: string[];
+  sources: GroundingSource[];
   materialTitle?: string;
 }
 
@@ -355,17 +369,26 @@ export class MaterialManager {
     subject: Subject,
     query: string,
     options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number }
-  ): Promise<GroundingContext> {
+  ): Promise<GroundingContextV2> {
     const material = options?.materialId ? await this.getMaterialById(options.materialId) : null;
     const summary = await this.getRelevantSummary(subject, query, options);
     const exerciseSummary = await this.getRelevantExerciseSummary(subject, query, options);
     const excerpts = await this.retrieveRelevantExcerpts(subject, query, options);
+
+    const sources: GroundingSource[] = excerpts.map(item => ({
+      materialId: item.materialId,
+      fileName: item.fileName,
+      excerpt: item.excerpt.slice(0, 240),
+      score: item.score,
+      sectionLabel: item.sectionLabel,
+    }));
 
     return {
       summary,
       exerciseSummary,
       excerpts: this._formatExcerpts(excerpts),
       sourceLabels: Array.from(new Set(excerpts.map(item => item.fileName))),
+      sources,
       materialTitle: material?.fileName,
     };
   }
@@ -771,50 +794,18 @@ export class MaterialManager {
       const sections = summary.sectionMappings || [];
       const exercises = summary.exerciseMappings || [];
 
+      // Lightweight fallback marker: 1 行说明，不再注入完整章节/示例习题列表。
+      const fallbackTag = keywords.length
+        ? '（未命中关键词）'
+        : '';
       fallback.push({
         order: order++,
         score: 1,
         text: [
           `资料：${mat.fileName}`,
-          `- 结构概览：章 ${chapters.length} / 节 ${sections.length} / 习题 ${exercises.length}`,
+          `- 结构概览：章 ${chapters.length} / 节 ${sections.length} / 习题 ${exercises.length}${fallbackTag}`,
         ].join('\n'),
       });
-
-      const coverageChapters = chapters.length
-        ? chapters
-        : this._sampleDistributed(sections, 6).map(section => ({
-            chapterNumber: section.chapterNumber,
-            title: this._formatSectionLabel(section),
-            summary: section.summary,
-            keyPoints: section.keyPoints,
-            topicMapping: section.topicMapping,
-            sectionNumbers: section.sectionNumber ? [section.sectionNumber] : [],
-            relatedExerciseTitles: section.relatedExerciseTitles,
-          }));
-
-      for (const chapter of coverageChapters) {
-        fallback.push({
-          order: order++,
-          score: 1,
-          text: [
-            `资料：${mat.fileName}`,
-            `- ${this._formatChapterLabel(chapter)}：${this._compactText(chapter.summary, 120)}`,
-            `知识点：${this._compactList(chapter.keyPoints, 120)}`,
-          ].join('\n'),
-        });
-      }
-
-      for (const exercise of this._sampleDistributed(exercises, 4)) {
-        fallback.push({
-          order: order++,
-          score: 1,
-          text: [
-            `资料：${mat.fileName}`,
-            `- ${this._formatExerciseLabel(exercise)}：${this._compactText(exercise.summary, 110)}`,
-            `考点：${this._compactList(exercise.keyPoints, 100)}`,
-          ].join('\n'),
-        });
-      }
 
       if (!queryText && !keywords.length) {
         continue;
@@ -917,6 +908,11 @@ export class MaterialManager {
       }
     }
 
+    // 关键词非空且没命中：返回空字符串，避免 fallback 污染上下文。
+    if (keywords.length && !matched.length) {
+      return '';
+    }
+
     return this._selectBudgetedText(matched, 4200, fallback);
   }
 
@@ -942,17 +938,18 @@ export class MaterialManager {
         continue;
       }
 
-      for (const item of this._sampleDistributed(exercises, 6)) {
-        fallback.push({
-          order: order++,
-          score: 1,
-          text: [
-            `资料习题参考：${mat.fileName}`,
-            `- ${this._formatExerciseLabel(item)}：${this._compactText(item.summary, 120)}`,
-            `考点：${this._compactList(item.keyPoints, 100)}`,
-          ].join('\n'),
-        });
-      }
+      // 仅在“无关键词全局生成”场景下保留 fallback 提示：单行结构概览。
+      const fallbackTag = keywords.length
+        ? '（未命中关键词）'
+        : '';
+      fallback.push({
+        order: order++,
+        score: 1,
+        text: [
+          `资料习题参考：${mat.fileName}`,
+          `- 结构概览：习题 ${exercises.length}${fallbackTag}`,
+        ].join('\n'),
+      });
 
       if (!queryText && !keywords.length) {
         continue;
@@ -995,6 +992,11 @@ export class MaterialManager {
       }
     }
 
+    // 关键词非空且没命中：返回空字符串，避免 fallback 凑数污染。
+    if (keywords.length && !matched.length) {
+      return '';
+    }
+
     return this._selectBudgetedText(matched, 3200, fallback);
   }
 
@@ -1008,37 +1010,193 @@ export class MaterialManager {
       return this._buildDistributedFallbackExcerpts(materials, maxExcerpts);
     }
 
-    const results: RetrievedExcerpt[] = [];
+    // === 第一阶段：定位候选章节（两阶段检索） ===
+    const locatedSections = await this._locateRelevantSections(materials, keywords);
+    const locatedByMaterial = new Map<string, LocatedSection[]>();
+    for (const located of locatedSections) {
+      const list = locatedByMaterial.get(located.materialId) ?? [];
+      list.push(located);
+      locatedByMaterial.set(located.materialId, list);
+    }
 
+    // === 收集所有 chunks 并预计算 document frequency 表（IDF） ===
+    const materialChunks: Array<{ material: MaterialEntry; chunks: string[] }> = [];
     for (const material of materials) {
       const text = await this._readMaterialText(material);
       if (!text) {
         continue;
       }
-
       const chunks = this._chunkText(text);
+      if (chunks.length) {
+        materialChunks.push({ material, chunks });
+      }
+    }
+
+    const totalChunks = materialChunks.reduce((sum, item) => sum + item.chunks.length, 0);
+    const dfMap = this._computeDocumentFrequency(materialChunks.flatMap(item => item.chunks), keywords);
+
+    // === 第二阶段：在 chunks 上打分；命中候选 section 的 chunks 额外加分 ===
+    const results: RetrievedExcerpt[] = [];
+
+    for (const { material, chunks } of materialChunks) {
+      const candidates = locatedByMaterial.get(material.id) ?? [];
+      // 把候选 section 的 anchor terms 与 sectionLabel 拆成可匹配字符串
+      const anchorBag = new Set<string>();
+      const sectionLabelBag: string[] = [];
+      for (const candidate of candidates) {
+        sectionLabelBag.push(candidate.sectionLabel.toLowerCase());
+        for (const anchor of candidate.anchorTerms) {
+          const normalized = anchor.trim().toLowerCase();
+          if (normalized) {
+            anchorBag.add(normalized);
+          }
+        }
+      }
+
       chunks.forEach((chunk, index) => {
-        const score = this._scoreChunk(chunk.toLowerCase(), queryText, keywords);
+        const lowered = chunk.toLowerCase();
+        let score = this._scoreChunkWithIDF(lowered, queryText, keywords, dfMap, totalChunks);
+
+        // 第一阶段命中加成
+        let matchedSectionLabel: string | undefined;
+        for (const label of sectionLabelBag) {
+          if (label && lowered.includes(label)) {
+            score += 5;
+            matchedSectionLabel = label;
+            break;
+          }
+        }
+        if (!matchedSectionLabel) {
+          for (const anchor of anchorBag) {
+            if (lowered.includes(anchor)) {
+              score += 5;
+              // 优先把对应 section label 挂上
+              const found = candidates.find(c => c.anchorTerms.some(t => t.toLowerCase() === anchor));
+              if (found) {
+                matchedSectionLabel = found.sectionLabel;
+              }
+              break;
+            }
+          }
+        }
+
         if (score <= 0) {
           return;
         }
+
         results.push({
           materialId: material.id,
           fileName: material.fileName,
           sourceLabel: `${material.fileName} / 片段 ${index + 1}`,
           excerpt: chunk,
           score,
+          sectionLabel: matchedSectionLabel,
         });
       });
     }
 
+    // 关键词非空但没有命中任何 chunk：返回 []，不再调 fallback 凑数。
     if (!results.length) {
-      return this._buildDistributedFallbackExcerpts(materials, maxExcerpts);
+      return [];
     }
 
     return results
       .sort((left, right) => right.score - left.score || left.excerpt.length - right.excerpt.length)
       .slice(0, maxExcerpts);
+  }
+
+  /**
+   * 第一阶段：基于 sectionMappings + chapters 的关键词命中，返回候选 section。
+   * 按命中关键词数量降序排序，最多 5 条。
+   */
+  private async _locateRelevantSections(
+    materials: MaterialEntry[],
+    keywords: string[],
+  ): Promise<LocatedSection[]> {
+    if (!keywords.length) {
+      return [];
+    }
+
+    const located: Array<LocatedSection & { hitCount: number }> = [];
+
+    for (const material of materials) {
+      const summary = await this._loadMaterialSummary(material);
+      if (!summary) {
+        continue;
+      }
+
+      for (const section of summary.sectionMappings || []) {
+        const haystack = [
+          section.chapterNumber,
+          section.chapterTitle,
+          section.sectionNumber,
+          section.sectionTitle,
+          section.summary,
+          (section.keyPoints || []).join(' '),
+          (section.topicMapping || []).join(' '),
+          (section.anchorTerms || []).join(' '),
+        ].join(' ').toLowerCase();
+        const hitCount = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0);
+        if (hitCount === 0) {
+          continue;
+        }
+        located.push({
+          materialId: material.id,
+          sectionLabel: this._formatSectionLabel(section),
+          anchorTerms: [
+            ...(section.anchorTerms || []),
+            section.sectionTitle,
+          ].filter((value): value is string => !!value && value.trim().length > 1),
+          hitCount,
+        });
+      }
+
+      for (const chapter of summary.chapters || []) {
+        const haystack = [
+          chapter.chapterNumber,
+          chapter.title,
+          chapter.summary,
+          (chapter.keyPoints || []).join(' '),
+          (chapter.topicMapping || []).join(' '),
+        ].join(' ').toLowerCase();
+        const hitCount = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0);
+        if (hitCount === 0) {
+          continue;
+        }
+        located.push({
+          materialId: material.id,
+          sectionLabel: this._formatChapterLabel(chapter),
+          anchorTerms: [chapter.title].filter((value): value is string => !!value && value.trim().length > 1),
+          hitCount,
+        });
+      }
+    }
+
+    return located
+      .sort((left, right) => right.hitCount - left.hitCount)
+      .slice(0, 5)
+      .map(({ materialId, sectionLabel, anchorTerms }) => ({ materialId, sectionLabel, anchorTerms }));
+  }
+
+  /** 预计算每个 keyword 在 chunks 集合内出现的文档数（chunk count）。 */
+  private _computeDocumentFrequency(chunks: string[], keywords: string[]): Map<string, number> {
+    const dfMap = new Map<string, number>();
+    if (!keywords.length || !chunks.length) {
+      return dfMap;
+    }
+
+    const lowered = chunks.map(chunk => chunk.toLowerCase());
+    for (const keyword of keywords) {
+      let df = 0;
+      for (const chunk of lowered) {
+        if (chunk.includes(keyword)) {
+          df += 1;
+        }
+      }
+      dfMap.set(keyword, df);
+    }
+
+    return dfMap;
   }
 
   private async _buildDistributedFallbackExcerpts(
@@ -1219,21 +1377,59 @@ export class MaterialManager {
 
     for (const keyword of keywords) {
       if (!chunk.includes(keyword)) { continue; }
-      if (keyword.length >= 6) {
-        score += 10;
-      } else if (keyword.length >= 4) {
-        score += 7;
-      } else if (keyword.length >= 3) {
-        score += 4;
-      } else {
-        score += 2;
-      }
+      score += this._keywordLengthWeight(keyword);
     }
 
-    if (!keywords.length && chunk.length > 0) {
-      score = 1;
+    if (!keywords.length) {
+      // 短 chunk 略优先（归一化）
+      const length = chunk.length;
+      if (length === 0) { return 0; }
+      score = Math.max(0.5, 1 - Math.min(1, length / 1500));
     }
 
     return score;
+  }
+
+  /**
+   * 在 _scoreChunk 基础上叠加 IDF 权重：常见词权重低、稀有词权重高。
+   * IDF = log((totalChunks + 1) / (df + 1))
+   */
+  private _scoreChunkWithIDF(
+    chunk: string,
+    query: string,
+    keywords: string[],
+    dfMap: Map<string, number>,
+    totalChunks: number,
+  ): number {
+    let score = 0;
+
+    if (query.length > 3 && chunk.includes(query)) {
+      score += 30;
+    }
+
+    for (const keyword of keywords) {
+      if (!chunk.includes(keyword)) { continue; }
+      const lengthWeight = this._keywordLengthWeight(keyword);
+      const df = dfMap.get(keyword) ?? 0;
+      const idf = Math.log((totalChunks + 1) / (df + 1));
+      // idf 范围视语料而定；clamp 到 [0.2, ~3] 避免极端权重
+      const idfFactor = Math.max(0.2, Math.min(3, idf));
+      score += lengthWeight * idfFactor;
+    }
+
+    if (!keywords.length) {
+      const length = chunk.length;
+      if (length === 0) { return 0; }
+      score = Math.max(0.5, 1 - Math.min(1, length / 1500));
+    }
+
+    return score;
+  }
+
+  private _keywordLengthWeight(keyword: string): number {
+    if (keyword.length >= 6) { return 12; }
+    if (keyword.length >= 4) { return 7; }
+    if (keyword.length >= 3) { return 4; }
+    return 2;
   }
 }

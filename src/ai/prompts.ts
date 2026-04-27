@@ -11,6 +11,7 @@ import {
   FeedbackWeaknessTag,
   subjectLabel,
 } from '../types';
+import { PromptContextScope } from '../types';
 
 function preferencesContext(prefs: LearningPreferences | null): string {
   if (!prefs) { return ''; }
@@ -147,6 +148,65 @@ interface PromptContext {
   materialExerciseSummary?: string;
   retrievedExcerpts?: string;
   selectedMaterialTitle?: string;
+  scope?: PromptContextScope;
+}
+
+type PromptInjectField =
+  | 'profile'
+  | 'courseProfile'
+  | 'chapterProfile'
+  | 'preferences'
+  | 'diagnosis'
+  | 'diagnosisStrategyOnly'
+  | 'profileEvidenceSummary'
+  | 'currentCourseTitle'
+  | 'courseOutlineSummary'
+  | 'selectedMaterialTitle'
+  | 'materialSummary'
+  | 'materialExerciseSummary'
+  | 'retrievedExcerpts';
+
+function shouldInclude(field: PromptInjectField, scope: PromptContextScope): boolean {
+  switch (scope) {
+    case 'chat':
+      return true;
+    case 'lesson-gen':
+      // 不注入 diagnosis 全文（只保留一行 overallStrategy 摘要）、不注入 materialExerciseSummary
+      if (field === 'diagnosis') { return false; }
+      if (field === 'materialExerciseSummary') { return false; }
+      return true;
+    case 'exercise-gen':
+      // 不注入 diagnosis 全文
+      if (field === 'diagnosis') { return false; }
+      return true;
+    case 'grade':
+      // profile + chapterProfile + preferences + 公式规则
+      return field === 'profile'
+        || field === 'chapterProfile'
+        || field === 'preferences';
+    case 'diagnosis':
+      // profile + courseProfile + preferences + 公式规则
+      return field === 'profile'
+        || field === 'courseProfile'
+        || field === 'preferences'
+        || field === 'profileEvidenceSummary';
+    case 'outline-gen':
+      // profile + preferences + materialSummary + 公式规则
+      return field === 'profile'
+        || field === 'preferences'
+        || field === 'currentCourseTitle'
+        || field === 'selectedMaterialTitle'
+        || field === 'materialSummary';
+    case 'lecture-edit':
+      // profile + chapterProfile + preferences + courseOutlineSummary + 公式规则
+      return field === 'profile'
+        || field === 'chapterProfile'
+        || field === 'preferences'
+        || field === 'currentCourseTitle'
+        || field === 'courseOutlineSummary';
+    default:
+      return true;
+  }
 }
 
 function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, count: number): string {
@@ -191,38 +251,54 @@ function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, 
 }
 
 function buildSystemBase(ctx: PromptContext): string {
+  const scope: PromptContextScope = ctx.scope ?? 'chat';
   let sys = '你是一位经验丰富、耐心清晰的大学老师，正在辅导一位计算机专业大一学生。\n';
-  sys += profileContext(ctx.profile ?? null);
-  sys += courseProfileContext(ctx.courseProfile ?? null);
-  sys += chapterProfileContext(ctx.chapterProfile ?? null);
-  sys += preferencesContext(ctx.preferences ?? null);
-  sys += diagnosisContext(ctx.diagnosis ?? null);
 
-  if (ctx.profileEvidenceSummary) {
+  if (shouldInclude('profile', scope)) {
+    sys += profileContext(ctx.profile ?? null);
+  }
+  if (shouldInclude('courseProfile', scope)) {
+    sys += courseProfileContext(ctx.courseProfile ?? null);
+  }
+  if (shouldInclude('chapterProfile', scope)) {
+    sys += chapterProfileContext(ctx.chapterProfile ?? null);
+  }
+  if (shouldInclude('preferences', scope)) {
+    sys += preferencesContext(ctx.preferences ?? null);
+  }
+
+  if (shouldInclude('diagnosis', scope)) {
+    sys += diagnosisContext(ctx.diagnosis ?? null);
+  } else if (scope === 'lesson-gen' && ctx.diagnosis?.overallStrategy) {
+    // lesson-gen 仅保留一行 overallStrategy 摘要
+    sys += `\n学习诊断整体策略：${ctx.diagnosis.overallStrategy}\n`;
+  }
+
+  if (shouldInclude('profileEvidenceSummary', scope) && ctx.profileEvidenceSummary) {
     sys += `\n近期课程反馈摘要：\n${ctx.profileEvidenceSummary}\n`;
   }
 
-  if (ctx.currentCourseTitle) {
+  if (shouldInclude('currentCourseTitle', scope) && ctx.currentCourseTitle) {
     sys += `\n当前选中的课程：${ctx.currentCourseTitle}\n`;
   }
 
-  if (ctx.courseOutlineSummary) {
+  if (shouldInclude('courseOutlineSummary', scope) && ctx.courseOutlineSummary) {
     sys += `\n当前课程大纲：\n${ctx.courseOutlineSummary}\n`;
   }
 
-  if (ctx.selectedMaterialTitle) {
+  if (shouldInclude('selectedMaterialTitle', scope) && ctx.selectedMaterialTitle) {
     sys += `\n当前锁定资料：${ctx.selectedMaterialTitle}\n`;
   }
 
-  if (ctx.materialSummary) {
+  if (shouldInclude('materialSummary', scope) && ctx.materialSummary) {
     sys += `\n资料摘要：\n${ctx.materialSummary}\n`;
   }
 
-  if (ctx.materialExerciseSummary) {
+  if (shouldInclude('materialExerciseSummary', scope) && ctx.materialExerciseSummary) {
     sys += `\n资料中的参考习题与题型：\n${ctx.materialExerciseSummary}\n`;
   }
 
-  if (ctx.retrievedExcerpts) {
+  if (shouldInclude('retrievedExcerpts', scope) && ctx.retrievedExcerpts) {
     sys += `\n与当前问题最相关的资料片段：\n${ctx.retrievedExcerpts}\n`;
     sys += '以上资料摘要和资料片段就是你当前已经“看过”的资料库内容。除非用户要求逐字引用原文、读取尚未导入的文件，或者查看外部系统里的新资料，否则不要说你看不到资料库。';
     sys += '\n如果你的回答明显依赖某份资料，请尽量在答案末尾列出“参考资料：文件名”。';
@@ -240,10 +316,11 @@ function buildSystemBase(ctx: PromptContext): string {
 
 export function courseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
 {
   "title": "课程标题",
   "topics": [
@@ -268,6 +345,7 @@ export function courseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatM
 
 export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: CourseOutline, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
   const currentOutlineJson = JSON.stringify({
     title: currentOutline.title,
     topics: currentOutline.topics.map(topic => ({
@@ -284,7 +362,7 @@ export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: Cou
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次完整重构。
+      content: buildSystemBase(scopedCtx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次完整重构。
 输出纯 JSON，格式如下：
 {
   "title": "课程标题",
@@ -315,10 +393,11 @@ export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: Cou
 
 export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请为“${subjectName}”生成一个结构化课程大纲。输出纯 JSON，格式如下：
 {
   "title": "课程标题",
   "topics": [
@@ -334,14 +413,12 @@ export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext):
 要求：
 - 包含 5 到 8 个主题
 - 每个主题 3 到 5 节课
-- 课程标题 主题标题 课时标题必须全中文
-- 无论学生内容语言偏好是什么 大纲标题都必须全中文
+- 课程标题、主题标题、课时标题以中文为主，但编程语言名、技术框架名（如 React、Python、SQL、HTTP）允许保留英文
 - 大纲标题只能写一个短句
 - 不要出现公式
 - 不要出现 LaTeX
-- 不要出现英文字母
-- 不要出现阿拉伯数字
-- 不要使用逗号 句号 顿号 分号 冒号 括号 斜杠 连字符等标点
+- 尽量避免阿拉伯数字编号，主题与课时之间用空格或“与”连接
+- 标点尽量精简，避免长句
 - 标题只表达一个核心概念 保持干练
 - 大纲只负责列课程结构 不要在标题里展开解释
 - difficulty 使用 1 到 5 逐步递进
@@ -356,6 +433,7 @@ export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext):
 
 export function strictRebuildCourseOutlinePrompt(subject: Subject, currentOutline: CourseOutline, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
   const currentOutlineJson = JSON.stringify({
     title: currentOutline.title,
     topics: currentOutline.topics.map(topic => ({
@@ -372,7 +450,7 @@ export function strictRebuildCourseOutlinePrompt(subject: Subject, currentOutlin
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请基于当前课程大纲 资料摘要和命中的资料片段 对“${subjectName}”执行一次完整重构。输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请基于当前课程大纲 资料摘要和命中的资料片段 对“${subjectName}”执行一次完整重构。输出纯 JSON，格式如下：
 {
   "title": "课程标题",
   "topics": [
@@ -392,15 +470,13 @@ export function strictRebuildCourseOutlinePrompt(subject: Subject, currentOutlin
 - 保持结构清晰 主题顺序合理
 - 如果资料显示当前大纲缺少关键内容 可以补充
 - 如果内容重复或顺序不合理 可以直接重构
-- 课程标题 主题标题 课时标题必须全中文
-- 无论学生内容语言偏好是什么 大纲标题都必须全中文
+- 课程标题、主题标题、课时标题以中文为主，但编程语言名、技术框架名（如 React、Python、SQL、HTTP）允许保留英文
 - 大纲标题只能写一个短句
 - 不要出现公式
 - 不要出现 LaTeX
-- 不要出现英文字母
-- 不要出现阿拉伯数字
-- 不要使用逗号 句号 顿号 分号 冒号 括号 斜杠 连字符等标点
-- 如果当前大纲里有英文 公式 或夹杂符号 需要在新大纲中改写成简洁中文标题
+- 尽量避免阿拉伯数字编号，主题与课时之间用空格或“与”连接
+- 标点尽量精简，避免长句
+- 如果当前大纲里有公式或夹杂多余符号 需要在新大纲中改写成简洁标题
 - difficulty 使用 1 到 5`,
     },
     {
@@ -450,11 +526,12 @@ export function strictPartialRebuildCourseOutlinePrompt(
     }));
   const selectedOutlineJson = JSON.stringify(selectedTopics, null, 2);
   const normalizedInstruction = String(instruction ?? '').trim();
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
 
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次部分重构。输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请基于当前课程大纲、资料摘要和命中的资料片段，对“${subjectName}”执行一次部分重构。输出纯 JSON，格式如下：
 {
   "topics": [
     {
@@ -472,7 +549,8 @@ export function strictPartialRebuildCourseOutlinePrompt(
 - 不允许修改课程标题
 - 允许合并、拆分、增删被选区内的主题和课时
 - 未被选中的前后主题会由本地系统保留并重新拼接
-- 主题标题和课时标题保持简洁、中文、无公式、无 LaTeX
+- 主题标题和课时标题保持简洁、以中文为主（编程语言名、技术框架名等术语允许保留英文）、无公式、无 LaTeX
+- 标点尽量精简，避免长句
 - difficulty 使用 1 到 5`,
     },
     {
@@ -490,10 +568,11 @@ ${normalizedInstruction ? `本次额外要求：${normalizedInstruction}\n\n` : 
 }
 
 export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: string, difficulty: number, ctx: PromptContext): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lesson-gen' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请用 Markdown 写一篇详细讲义。
+      content: buildSystemBase(scopedCtx) + `\n请用 Markdown 写一篇详细讲义。
 要求：
 - 开头先写“关键概念摘要”
 - 包含循序渐进的讲解、例题和解析
@@ -506,10 +585,11 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
 }
 
 export function exercisePrompt(subject: Subject, lessonTitle: string, count: number, difficulty: number, ctx: PromptContext): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'exercise-gen' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + exercisePersonalizationContext(ctx, difficulty, count) + `\n请生成练习题。输出纯 JSON 数组，格式如下：
+      content: buildSystemBase(scopedCtx) + exercisePersonalizationContext(ctx, difficulty, count) + `\n请生成练习题。输出纯 JSON 数组，格式如下：
 [
   {
     "id": "ex-01",
@@ -541,10 +621,11 @@ export function exercisePrompt(subject: Subject, lessonTitle: string, count: num
 }
 
 export function gradePrompt(exercisePromptText: string, studentAnswer: string, ctx: PromptContext): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'grade' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请批改学生答案。输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请批改学生答案。输出纯 JSON，格式如下：
 {
   "score": 85,
   "feedback": "详细反馈（Markdown）",
@@ -573,10 +654,11 @@ export function diagnosisPrompt(
   recentGrades: string,
   ctx: PromptContext
 ): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'diagnosis' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n请分析学生当前的学习情况，输出纯 JSON，格式如下：
+      content: buildSystemBase(scopedCtx) + `\n请分析学生当前的学习情况，输出纯 JSON，格式如下：
 {
   "subjectSnapshots": [
     {
@@ -699,9 +781,10 @@ ${text.slice(0, 12000)}`,
 }
 
 export function chatPrompt(userMessage: string, history: ChatMessage[], ctx: PromptContext): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'chat' };
   const system: ChatMessage = {
     role: 'system',
-    content: buildSystemBase(ctx) + `\n你现在是学生的 AI 学习助手，可以回答学习相关的任何问题。
+    content: buildSystemBase(scopedCtx) + `\n你现在是学生的 AI 学习助手，可以回答学习相关的任何问题。
 要求：
 - 优先基于当前课程大纲、资料摘要和命中的资料片段回答
 - 如果答案里包含推断，请明确说明“这是根据现有资料做的推断”
@@ -718,10 +801,11 @@ export function reviseMarkdownPrompt(
   targetLabel: string,
   ctx: PromptContext
 ): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lecture-edit' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\n你正在直接修改一份现有的课程讲义 Markdown 文件，系统会把你的输出直接写回磁盘。
+      content: buildSystemBase(scopedCtx) + `\n你正在直接修改一份现有的课程讲义 Markdown 文件，系统会把你的输出直接写回磁盘。
 要求：
 - 必须根据用户反馈修改“当前 Markdown 内容”
 - 输出完整的修订后 Markdown，不要只输出片段
@@ -752,10 +836,11 @@ export function reviseMarkdownPatchPrompt(
   relevantSections: string,
   ctx: PromptContext
 ): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lecture-edit' };
   return [
     {
       role: 'system',
-      content: buildSystemBase(ctx) + `\nYou are editing an existing lecture markdown file. To keep the response small and fast, do not rewrite the whole document unless absolutely necessary. Return pure JSON only in this schema:
+      content: buildSystemBase(scopedCtx) + `\nYou are editing an existing lecture markdown file. To keep the response small and fast, do not rewrite the whole document unless absolutely necessary. Return pure JSON only in this schema:
 {
   "action": "replace_section" | "insert_after_section" | "insert_before_section" | "append_document",
   "targetHeading": "exact heading line from DOCUMENT OUTLINE, empty when action is append_document",

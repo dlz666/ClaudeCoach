@@ -75,6 +75,20 @@
       </div>
     </section>
 
+    <section class="panel hidden" id="wrong-questions-section">
+      <div class="panel-header">
+        <div>
+          <h3>错题本</h3>
+          <p class="section-subtitle">未掌握的题目集中在这里。可以一键基于错题再出一组练习。</p>
+        </div>
+        <button class="btn ghost small" id="btn-refresh-wrong-questions">刷新</button>
+      </div>
+      <div id="wrong-questions-actions" class="wrong-questions-actions hidden">
+        <button class="btn small" id="btn-practice-wrong-questions">基于错题再出 5 题</button>
+      </div>
+      <div id="wrong-questions-list" class="muted">暂无错题</div>
+    </section>
+
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -201,6 +215,7 @@
             <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
             <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
             <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
+            <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
           </div>
         </div>
       </div>
@@ -319,6 +334,35 @@
           <button class="btn primary" id="btn-outline-rebuild-preview" type="button">生成预览</button>
           <button class="btn" id="btn-outline-rebuild-apply" type="button">应用重构</button>
           <button class="btn ghost" id="btn-outline-rebuild-cancel" type="button">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="answer-submit-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-panel answer-submit-modal" role="dialog" aria-modal="true" aria-labelledby="answer-submit-title">
+      <div class="modal-header">
+        <div>
+          <h3 id="answer-submit-title">答题与批改</h3>
+          <p class="section-subtitle" id="answer-submit-subtitle">粘贴你为本节练习写的答案，系统会按题号匹配并提交。</p>
+        </div>
+        <button class="btn ghost small fixed" id="btn-close-answer-submit-modal" type="button">关闭</button>
+      </div>
+      <div class="modal-body">
+        <section class="modal-section">
+          <div class="section-label" id="answer-submit-lesson-info">当前讲义：-</div>
+          <div class="hint">提示：请按"## 第 N 题"格式粘贴你的答案。系统会按题号匹配并提交批改。空答案的题不会发送。</div>
+          <textarea id="answer-submit-textarea" rows="12" placeholder="例如：
+## 第 1 题
+你的答案...
+
+## 第 2 题
+你的答案..."></textarea>
+        </section>
+        <div id="answer-submit-error" class="feedback-line error-text hidden"></div>
+        <div class="actions-row">
+          <button class="btn primary" id="btn-answer-submit-confirm" type="button">提交批改</button>
+          <button class="btn ghost" id="btn-answer-submit-cancel" type="button">取消</button>
         </div>
       </div>
     </div>

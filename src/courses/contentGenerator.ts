@@ -18,6 +18,7 @@ import {
   CourseProfile,
   CourseProfileChapter,
   TopicOutline,
+  WrongQuestion,
   subjectLabel,
 } from '../types';
 import { CourseManager } from './courseManager';
@@ -145,9 +146,15 @@ export class ContentGenerator {
     lessonId: string,
     lessonTitle: string,
     difficulty: number,
-    ctx: GenerationContext
+    ctx: GenerationContext,
+    wrongQuestions?: WrongQuestion[]
   ): Promise<string> {
-    const messages = lessonPrompt(subject, topicTitle, lessonTitle, difficulty, ctx);
+    const focused = (wrongQuestions ?? []).slice(0, 2);
+    const enrichedCtx = focused.length > 0
+      ? this.injectWrongQuestionContext(ctx, focused, '最近错题反馈（讲义请覆盖这些薄弱点）')
+      : ctx;
+
+    const messages = lessonPrompt(subject, topicTitle, lessonTitle, difficulty, enrichedCtx);
     const content = await this.ai.chatCompletion(messages);
 
     const filePath = this.courseManager.getLessonPath(subject, topicId, lessonId);
@@ -164,9 +171,16 @@ export class ContentGenerator {
     lessonTitle: string,
     count: number,
     difficulty: number,
-    ctx: GenerationContext
+    ctx: GenerationContext,
+    wrongQuestions?: WrongQuestion[]
   ): Promise<{ exercises: Exercise[]; filePath: string }> {
-    const messages = exercisePrompt(subject, lessonTitle, count, difficulty, ctx);
+    const adaptiveDifficulty = this.computeAdaptiveDifficulty(difficulty, ctx);
+    const focused = (wrongQuestions ?? []).slice(0, 3);
+    const enrichedCtx = focused.length > 0
+      ? this.injectWrongQuestionContext(ctx, focused, '最近错题与对应薄弱点（请出题时覆盖这些考点的"变体"，不要照抄题面）')
+      : ctx;
+
+    const messages = exercisePrompt(subject, lessonTitle, count, adaptiveDifficulty, enrichedCtx);
     const exercises = await this.ai.chatJson<Exercise[]>(messages);
 
     // Assign lesson IDs
@@ -200,6 +214,60 @@ export class ContentGenerator {
     await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
 
     return { exercises, filePath };
+  }
+
+  private computeAdaptiveDifficulty(requestedDifficulty: number, ctx: GenerationContext): number {
+    const base = Number.isFinite(requestedDifficulty) ? Math.round(requestedDifficulty) : 1;
+    const clampedBase = Math.max(1, Math.min(5, base));
+
+    const mastery = ctx.chapterProfile?.masteryPercent;
+    if (mastery === null || mastery === undefined || !Number.isFinite(mastery)) {
+      return clampedBase;
+    }
+
+    let next = clampedBase;
+    if (mastery < 50) {
+      next = clampedBase - 1;
+    } else if (mastery <= 70) {
+      next = clampedBase;
+    } else if (mastery <= 85) {
+      next = clampedBase + 1;
+    } else {
+      next = clampedBase + 2;
+    }
+
+    return Math.max(1, Math.min(5, next));
+  }
+
+  private injectWrongQuestionContext(
+    ctx: GenerationContext,
+    wrongQuestions: WrongQuestion[],
+    heading: string
+  ): GenerationContext {
+    if (wrongQuestions.length === 0) {
+      return ctx;
+    }
+
+    const truncate = (text: string, max: number): string => {
+      const trimmed = (text ?? '').replace(/\s+/g, ' ').trim();
+      return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+    };
+
+    const lines = wrongQuestions.map((q, idx) => {
+      const promptSnippet = truncate(q.prompt, 80);
+      const weaknessText = (q.weaknesses ?? []).filter(Boolean).join('、') || '未标注';
+      const feedbackSnippet = truncate(q.feedback ?? '', 100);
+      return `- 题${idx + 1}：${promptSnippet}。薄弱点：${weaknessText}。AI 反馈：${feedbackSnippet}`;
+    });
+
+    const block = `${heading}：\n${lines.join('\n')}`;
+    const existing = (ctx.profileEvidenceSummary ?? '').trim();
+    const merged = existing ? `${existing}\n\n${block}` : block;
+
+    return {
+      ...ctx,
+      profileEvidenceSummary: merged,
+    };
   }
 
   private async persistOutline(

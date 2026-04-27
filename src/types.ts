@@ -399,6 +399,79 @@ export interface TokenBudget {
   availableForHistory: number;
 }
 
+// ===== Adaptive Learning =====
+
+/** 一道未掌握的练习题，用于错题本 + 后续重出。 */
+export interface WrongQuestion {
+  id: string;
+  exerciseId: string;
+  subject: Subject;
+  topicId: string;
+  topicTitle: string;
+  lessonId: string;
+  lessonTitle: string;
+  prompt: string;
+  studentAnswer: string;
+  score: number;
+  feedback: string;
+  weaknesses: string[];
+  weaknessTags: FeedbackWeaknessTag[];
+  attempts: number;
+  firstFailedAt: string;
+  lastAttemptedAt: string;
+  resolved: boolean;
+  resolvedAt?: string;
+}
+
+export interface WrongQuestionBook {
+  schemaVersion: number;
+  subject: Subject;
+  questions: WrongQuestion[];
+  updatedAt: string;
+}
+
+/** 自动诊断触发器状态。 */
+export interface AdaptiveTriggerState {
+  schemaVersion: number;
+  subject: Subject;
+  gradesSinceLastDiagnosis: number;
+  lastDiagnosisAt: string | null;
+  lastAutoRunAt: string | null;
+}
+
+export type AdaptiveTriggerReason =
+  | 'grade-threshold'
+  | 'time-elapsed'
+  | 'manual'
+  | 'first-time';
+
+/** 一次"答题提交"携带的所有信息，用于批改 + 错题本写入。 */
+export interface AnswerSubmission {
+  exerciseId: string;
+  answer: string;
+}
+
+// ===== Grounding Sources =====
+
+/** 一段被检索到、并且真正注入 prompt 的资料片段，用于前端来源回显。 */
+export interface GroundingSource {
+  materialId: string;
+  fileName: string;
+  excerpt: string;
+  score: number;
+  sectionLabel?: string;
+}
+
+/** prompt 上下文的注入范围。`buildSystemBase` 按这个 scope 裁剪。 */
+export type PromptContextScope =
+  | 'chat'
+  | 'lesson-gen'
+  | 'exercise-gen'
+  | 'grade'
+  | 'diagnosis'
+  | 'outline-gen'
+  | 'lecture-edit';
+
 // ===== Sidebar Messages =====
 export type SidebarCommand =
   | { type: 'generateCourse'; subject: Subject }
@@ -412,7 +485,14 @@ export type SidebarCommand =
   | { type: 'openOrGenerateExercises'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; count: number; difficulty: number }
   | { type: 'resetLessonProgress'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string }
   | { type: 'markLessonCompleted'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string }
-  | { type: 'submitAnswer'; exerciseId: string; answer: string }
+  | { type: 'submitAnswer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; exerciseId: string; answer: string }
+  | { type: 'submitAllAnswers'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; answers: AnswerSubmission[] }
+  | { type: 'scanAllExercises' }
+  | { type: 'reprocessAllMarkdown' }
+  | { type: 'retryMaterial'; materialId: string }
+  | { type: 'getWrongQuestions'; subject?: Subject }
+  | { type: 'practiceWrongQuestions'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string; count?: number }
+  | { type: 'resolveWrongQuestion'; subject: Subject; questionId: string }
   | { type: 'chat'; message: string; subject?: Subject; mode?: ChatGroundingMode; materialId?: string }
   | { type: 'getProgress' }
   | { type: 'getDiagnosis'; subject?: Subject; run?: boolean }
@@ -439,6 +519,10 @@ export type SidebarResponse =
   | { type: 'resolvedAIConfig'; data: ResolvedAIConfig; workspaceOverride: AIWorkspaceOverride }
   | { type: 'aiImportResult'; data: AIImportPreview }
   | { type: 'aiTestResult'; success: boolean; message: string }
+  | { type: 'wrongQuestions'; subject?: Subject; data: WrongQuestion[] }
+  | { type: 'gradingProgress'; current: number; total: number; lessonTitle?: string }
+  | { type: 'autoDiagnosisRan'; subject: Subject; reason: AdaptiveTriggerReason }
+  | { type: 'groundingSources'; turnId: string; sources: GroundingSource[] }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };

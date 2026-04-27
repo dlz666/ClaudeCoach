@@ -242,6 +242,16 @@ export class StoragePathResolver {
     return path.join(this.courseSubjectDir(subject), 'profile.json');
   }
 
+  /** Per-subject 错题本：未掌握题目集合，用于复习 + 出题注入。 */
+  wrongQuestionsPath(subject: Subject): string {
+    return path.join(this.courseSubjectDir(subject), 'wrong-questions.json');
+  }
+
+  /** Per-subject 自适应触发器状态：记录"距上次诊断的批改数"，用于阈值触发。 */
+  adaptiveTriggerPath(subject: Subject): string {
+    return path.join(this.courseSubjectDir(subject), 'adaptive-trigger.json');
+  }
+
   courseTopicsDir(subject: Subject): string {
     return path.join(this.courseSubjectDir(subject), 'topics');
   }

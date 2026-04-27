@@ -286,17 +286,30 @@ export class AIClient {
     options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     const url = `${config.anthropicBaseUrl.replace(/\/+$/, '')}/v1/messages`;
-    const anthropicMessages = messages.map((message) => ({
-      role: message.role === 'system' ? 'user' : message.role,
-      content: message.content,
-    }));
 
-    const body = {
+    const systemPrompt = messages
+      .filter((message) => message.role === 'system' && message.content.trim())
+      .map((message) => message.content.trim())
+      .join('\n\n')
+      .trim();
+    const conversation = messages.filter((message) => message.role !== 'system');
+
+    const anthropicMessages = (conversation.length > 0 ? conversation : [{ role: 'user' as const, content: 'Continue.' }])
+      .map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        content: message.content,
+      }));
+
+    const body: Record<string, unknown> = {
       model: config.model,
       messages: anthropicMessages,
       temperature: options?.temperature ?? 0.7,
       max_tokens: options?.maxTokens ?? config.maxTokens ?? 4096,
     };
+
+    if (systemPrompt) {
+      body.system = systemPrompt;
+    }
 
     const resp = await this.fetchWithRetry(url, {
       method: 'POST',
