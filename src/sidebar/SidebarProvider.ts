@@ -41,6 +41,7 @@ import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../
 import { buildCourseSummaryMd, openMarkdownPreview, reprocessMarkdown, writeMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
 import { fileExists, ensureDir } from '../utils/fileSystem';
 import { getDataDirectory } from '../config';
+import { recordGradeForCoach } from '../coach/streakHook';
 
 interface ChatEditTarget {
   subject: Subject;
@@ -961,6 +962,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * 批改完成后让 Coach（streak / 跨课时 weakness / loop fanout）联动一次。
+   * Fire-and-forget：失败不影响批改主流程。
+   */
+  private _coachAfterGrade(args: {
+    subject: Subject;
+    topicId: string;
+    topicTitle: string;
+    lessonId: string;
+    lessonTitle: string;
+    result: GradeResult;
+  }): void {
+    if (!this.coachDeps || !this.coachAgent) {
+      return;
+    }
+    const bus = this.coachDeps.coachEventBus;
+    const agent = this.coachAgent;
+    const adaptiveEngine = this.adaptiveEngine;
+    void (async () => {
+      try {
+        const outline = await this.courseManager.getCourseOutline(args.subject).catch(() => null);
+        await recordGradeForCoach({
+          subject: args.subject,
+          topicId: args.topicId,
+          topicTitle: args.topicTitle,
+          lessonId: args.lessonId,
+          lessonTitle: args.lessonTitle,
+          score: args.result.score,
+          weaknessTags: args.result.weaknessTags ?? [],
+          adaptiveEngine,
+          bus,
+          agent,
+          outline,
+        });
+      } catch (err) {
+        console.error('[SidebarProvider] _coachAfterGrade error:', err);
+      }
+    })();
+  }
+
+  /**
    * Fire-and-forget 风格：如果触发器命中，启动一个独立 "自动诊断" task。
    * 不阻塞调用方，让批改任务能立即完成。
    */
@@ -1460,6 +1501,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'log', message: `批改完成，得分 ${result.score}/100`, level: 'info' });
             await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
             await this._refreshCourses();
+            this._coachAfterGrade({ subject, topicId, topicTitle, lessonId, lessonTitle, result });
             await this._maybeRunAutoDiagnosis(subject);
           });
           break;
@@ -1509,6 +1551,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 scores.push(lastResult.score);
                 this._post({ type: 'gradeResult', result: lastResult });
                 succeeded += 1;
+                this._coachAfterGrade({
+                  subject, topicId, topicTitle, lessonId, lessonTitle, result: lastResult,
+                });
               } catch (error: any) {
                 this._post({
                   type: 'log',

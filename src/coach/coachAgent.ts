@@ -118,9 +118,11 @@ export class CoachAgent implements vscode.Disposable {
       }),
     );
 
-    // 2) 把 grade-submitted 转发给所有 loop（onEvent 是可选的）
+    // 2) 把所有事件转发给所有 loop（onEvent 是可选的）。
+    //    Phase 3 的多个 Loop 关心不同事件（grade-submitted / webview-visibility-changed / editor-typing / lesson-opened ...），
+    //    所以这里直接订阅 onAny。SessionLogger 已经独立通过自己的 onAny 订阅，不会冲突。
     this.disposables.push(
-      this.deps.bus.on('grade-submitted', async (event) => {
+      this.deps.bus.onAny(async (event) => {
         await this.fanOutEvent(event);
       }),
     );
@@ -133,6 +135,15 @@ export class CoachAgent implements vscode.Disposable {
     }, TICK_INTERVAL_MS);
     if (typeof this.tickTimer.unref === 'function') {
       this.tickTimer.unref();
+    }
+
+    // 4) 自动注册 Phase 3 的 5 个 Loop。延迟 require 避开循环依赖。
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { registerAllLoops } = require('./loops/index') as typeof import('./loops/index');
+      registerAllLoops(this);
+    } catch (err) {
+      console.error('[CoachAgent] registerAllLoops error:', err);
     }
 
     console.log('[CoachAgent] started, tick=5min, loops=%d', this.loops.length);
