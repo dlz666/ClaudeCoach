@@ -11,6 +11,85 @@
     programming: '编程基础',
   };
 
+  // ========== 默认偏好（用于"恢复默认"按钮） ==========
+  const DEFAULT_PREFS = {
+    difficulty: {
+      global: 'basic',
+      perSubject: {},
+      exerciseMix: { easy: 30, medium: 50, hard: 20 },
+    },
+    pace: {
+      dailyGoalMinutes: 45,
+      exercisesPerSession: 5,
+      speed: 'medium',
+      reviewEveryNLessons: 3,
+      restDays: [0, 6],
+      studyTimeSlots: ['evening'],
+    },
+    language: {
+      content: 'zh',
+      exercises: 'zh',
+      codeComments: 'zh',
+    },
+    aiStyle: {
+      lessonDetail: 'standard',
+      feedbackTone: 'encouraging',
+      explanationStyles: ['example-first'],
+      mathSymbol: 'latex',
+      exerciseTypeMix: { multipleChoice: 40, freeResponse: 40, code: 20 },
+      includeProofs: false,
+      includeHistory: false,
+    },
+    retrieval: {
+      defaultGrounding: false,
+      strictness: 'balanced',
+      citeSources: true,
+      maxExcerpts: 4,
+    },
+    ui: {
+      fontSize: 13,
+      defaultTab: 'learn',
+      expandCourseTree: true,
+      showEmoji: true,
+      theme: 'auto',
+    },
+    coach: {
+      active: true,
+      loops: { dailyBrief: true, idle: true, sr: true, metacog: true, drift: true },
+      notifications: { toastLevel: 'high-only', quietHoursStart: '22:00', quietHoursEnd: '08:00' },
+      throttle: { maxToastsPerHour: 3, maxBannersPerHour: 12 },
+      doNotDisturbUntil: null,
+      idleThresholdMinutes: 8,
+      sr: { variantStrategy: 'reuse' },
+      dailyBrief: { cacheStrategy: 'per-day' },
+      lecture: {
+        viewerMode: 'lecture-webview',
+        applyMode: 'preview-confirm',
+        syncSourceEditor: true,
+        highlightChangesMs: 3000,
+      },
+    },
+  };
+
+  function deepClone(obj) {
+    return JSON.parse(JSON.stringify(obj));
+  }
+
+  function deepMerge(base, override) {
+    if (!override || typeof override !== 'object') return base;
+    const result = Array.isArray(base) ? base.slice() : { ...base };
+    Object.keys(override).forEach((key) => {
+      const a = result[key];
+      const b = override[key];
+      if (b && typeof b === 'object' && !Array.isArray(b) && a && typeof a === 'object' && !Array.isArray(a)) {
+        result[key] = deepMerge(a, b);
+      } else {
+        result[key] = b;
+      }
+    });
+    return result;
+  }
+
   const state = {
     courses: [],
     materials: { materials: [] },
@@ -27,6 +106,15 @@
     lastChatTurnId: null,
     answerSubmitContext: null,
     lastOpenedLesson: saved.lastOpenedLesson || null,
+    aiProfiles: [],
+    activeProfileId: null,
+    workspaceAIOverride: null,
+    learningPlan: null,
+    coachSuggestions: [],
+    dailyBrief: null,
+    doNotDisturbUntil: null,
+    settingsCollapsedGroups: saved.settingsCollapsedGroups || {},
+    editingProfileId: null,
     rebuildModal: {
       open: false,
       mode: 'full',
@@ -136,6 +224,140 @@
     answerSubmitError: $('answer-submit-error'),
     btnAnswerSubmitConfirm: $('btn-answer-submit-confirm'),
     btnAnswerSubmitCancel: $('btn-answer-submit-cancel'),
+
+    // ===== 设置页搜索 =====
+    settingsSearch: $('settings-search'),
+
+    // ===== 设置组（折叠） =====
+    settingsGroups: Array.from(document.querySelectorAll('.settings-group')),
+
+    // ===== 学习节奏与目标 =====
+    prefDailyGoal: $('pref-daily-goal'),
+    prefDailyGoalNum: $('pref-daily-goal-num'),
+    studySlotMorning: document.querySelector('[data-study-slot="morning"]'),
+    studySlotAfternoon: document.querySelector('[data-study-slot="afternoon"]'),
+    studySlotEvening: document.querySelector('[data-study-slot="evening"]'),
+    restDayCheckboxes: Array.from(document.querySelectorAll('[data-rest-day]')),
+    studySlotCheckboxes: Array.from(document.querySelectorAll('[data-study-slot]')),
+    mixSumHint: $('mix-sum-hint'),
+    perSubjectDifficultyList: $('per-subject-difficulty-list'),
+
+    // ===== AI 风格与内容 =====
+    aiDetailLevelRadios: Array.from(document.querySelectorAll('input[name="ai-detail-level"]')),
+    aiFeedbackToneRadios: Array.from(document.querySelectorAll('input[name="ai-feedback-tone"]')),
+    explainStyleCheckboxes: Array.from(document.querySelectorAll('[data-explain-style]')),
+    aiMathStyleRadios: Array.from(document.querySelectorAll('input[name="ai-math-style"]')),
+    exTypeConcept: $('ex-type-concept'),
+    exTypeCalc: $('ex-type-calc'),
+    exTypeProof: $('ex-type-proof'),
+    exTypeSumHint: $('ex-type-sum-hint'),
+    aiIncludeProofs: $('ai-include-proofs'),
+    aiIncludeHistory: $('ai-include-history'),
+    prefLangExercises: $('pref-lang-exercises'),
+
+    // ===== 主动 Coach =====
+    coachEnabled: $('coach-enabled'),
+    coachLoopCheckboxes: Array.from(document.querySelectorAll('[data-coach-loop]')),
+    coachToastLevelRadios: Array.from(document.querySelectorAll('input[name="coach-toast-level"]')),
+    coachDndStart: $('coach-dnd-start'),
+    coachDndEnd: $('coach-dnd-end'),
+    btnDnd1h: $('btn-dnd-1h'),
+    btnDndToday: $('btn-dnd-today'),
+    btnDndCustom: $('btn-dnd-custom'),
+    coachIdleThreshold: $('coach-idle-threshold'),
+    coachIdleThresholdValue: $('coach-idle-threshold-value'),
+    coachSrPolicyRadios: Array.from(document.querySelectorAll('input[name="coach-sr-policy"]')),
+    coachBriefCacheRadios: Array.from(document.querySelectorAll('input[name="coach-brief-cache"]')),
+    coachThrottleHour: $('coach-throttle-hour'),
+    coachThrottleDay: $('coach-throttle-day'),
+
+    // ===== 资料检索 =====
+    retrievalGroundingDefault: $('retrieval-grounding-default'),
+    retrievalStrictnessRadios: Array.from(document.querySelectorAll('input[name="retrieval-strictness"]')),
+    retrievalCiteDefault: $('retrieval-cite-default'),
+    retrievalSnippets: $('retrieval-snippets'),
+    retrievalSnippetsValue: $('retrieval-snippets-value'),
+
+    // ===== 讲义阅读体验 =====
+    lectureReaderModeRadios: Array.from(document.querySelectorAll('input[name="lecture-reader-mode"]')),
+    lectureApplyModeRadios: Array.from(document.querySelectorAll('input[name="lecture-apply-mode"]')),
+    lectureSyncSource: $('lecture-sync-source'),
+    lectureHighlightDuration: $('lecture-highlight-duration'),
+    lectureHighlightDurationValue: $('lecture-highlight-duration-value'),
+
+    // ===== UI 与显示 =====
+    uiFontSize: $('ui-font-size'),
+    uiFontSizeValue: $('ui-font-size-value'),
+    uiDefaultTabRadios: Array.from(document.querySelectorAll('input[name="ui-default-tab"]')),
+    uiTreeDefaultExpand: $('ui-tree-default-expand'),
+    uiThemeRadios: Array.from(document.querySelectorAll('input[name="ui-theme"]')),
+    uiShowEmoji: $('ui-show-emoji'),
+
+    // ===== AI Profile 编辑器 =====
+    btnAddAIProfile: $('btn-add-ai-profile'),
+    aiProfilesList: $('ai-profiles-list'),
+    aiProfileEditor: $('ai-profile-editor'),
+    aiProfileEditorTitle: $('ai-profile-editor-title'),
+    aiProfileName: $('ai-profile-name'),
+    aiProfileProvider: $('ai-profile-provider'),
+    aiProfileBaseUrl: $('ai-profile-base-url'),
+    aiProfileAnthropicBaseUrl: $('ai-profile-anthropic-base-url'),
+    aiProfileToken: $('ai-profile-token'),
+    aiProfileModel: $('ai-profile-model'),
+    aiProfileWireApi: $('ai-profile-wire-api'),
+    aiProfileContextWindow: $('ai-profile-context-window'),
+    aiProfileMaxTokens: $('ai-profile-max-tokens'),
+    aiProfileReasoningEffort: $('ai-profile-reasoning-effort'),
+    aiProfileNotes: $('ai-profile-notes'),
+    btnSaveAIProfile: $('btn-save-ai-profile'),
+    btnCancelAIProfile: $('btn-cancel-ai-profile'),
+    aiWsOverrideEnabled: $('ai-ws-override-enabled'),
+    aiWsBaseProfile: $('ai-ws-base-profile'),
+    aiWsProvider: $('ai-ws-provider'),
+    aiWsBaseUrl: $('ai-ws-base-url'),
+    aiWsToken: $('ai-ws-token'),
+    aiWsModel: $('ai-ws-model'),
+    btnSaveWsOverride: $('btn-save-ws-override'),
+
+    // ===== 数据管理 =====
+    dataSubjectSelect: $('data-subject-select'),
+    btnClearWrongQuestions: $('btn-clear-wrong-questions'),
+    btnClearDiagnosis: $('btn-clear-diagnosis'),
+    btnResetCourseProgress: $('btn-reset-course-progress'),
+    btnExportLearningData: $('btn-export-learning-data'),
+    btnImportLearningData: $('btn-import-learning-data'),
+
+    // ===== 数据目录与高级 =====
+    btnExportPrefs: $('btn-export-prefs'),
+    btnImportPrefs: $('btn-import-prefs'),
+    btnResetAllPrefs: $('btn-reset-all-prefs'),
+
+    // ===== 今日 Coach =====
+    coachTodaySection: $('coach-today-section'),
+    coachBriefSubtitle: $('coach-brief-subtitle'),
+    coachBriefBody: $('coach-brief-body'),
+    coachSuggestionsList: $('coach-suggestions-list'),
+    btnCoachRefreshBrief: $('btn-coach-refresh-brief'),
+    btnCoachDnd: $('btn-coach-dnd'),
+
+    // ===== 学习计划 =====
+    learningPlanSection: $('learning-plan-section'),
+    btnEditPlan: $('btn-edit-plan'),
+    planProgressBar: $('plan-progress-bar'),
+    planProgressFill: $('plan-progress-fill'),
+    planStatus: $('plan-status'),
+    planMilestonesList: $('plan-milestones-list'),
+    learningPlanModal: $('learning-plan-modal'),
+    planSubject: $('plan-subject'),
+    planTargetDate: $('plan-target-date'),
+    planDailyMinutes: $('plan-daily-minutes'),
+    planExtraNotes: $('plan-extra-notes'),
+    btnSavePlan: $('btn-save-plan'),
+    btnCancelPlan: $('btn-cancel-plan'),
+    btnClosePlanModal: $('btn-close-plan-modal'),
+
+    // ===== 重置组按钮 =====
+    resetGroupButtons: Array.from(document.querySelectorAll('[data-reset-group]')),
   };
 
   function subjectLabel(subject) {
@@ -285,6 +507,7 @@
       chatGroundingMode: state.chatGroundingMode,
       chatMessages: state.chatMessages,
       lastOpenedLesson: state.lastOpenedLesson,
+      settingsCollapsedGroups: state.settingsCollapsedGroups,
     });
   }
 
@@ -1102,45 +1325,586 @@
     els.materialSubject.value = values.includes(preferred) ? preferred : values[0];
   }
 
+  function setRadioGroup(radios, value) {
+    if (!radios) return;
+    radios.forEach((radio) => { radio.checked = radio.value === String(value); });
+  }
+
+  function getRadioGroup(radios) {
+    if (!radios) return null;
+    const checked = radios.find((r) => r.checked);
+    return checked ? checked.value : null;
+  }
+
+  function renderPerSubjectDifficulty(preferences) {
+    if (!els.perSubjectDifficultyList) return;
+    const subjects = state.courses.map((c) => c.subject);
+    if (!subjects.length) {
+      els.perSubjectDifficultyList.innerHTML = '<p class="hint">尚无已知学科。生成课程后会出现在这里。</p>';
+      return;
+    }
+    const perSubject = preferences?.difficulty?.perSubject || {};
+    const globalLevel = preferences?.difficulty?.global || 'basic';
+    els.perSubjectDifficultyList.innerHTML = subjects.map((subject) => {
+      const level = perSubject[subject] || globalLevel;
+      return `
+        <div class="per-subject-row" data-subject="${escapeHtml(subject)}">
+          <span class="per-subject-name">${escapeHtml(subjectLabel(subject))}</span>
+          <select class="per-subject-select" data-subject-difficulty="${escapeHtml(subject)}">
+            <option value="beginner"${level === 'beginner' ? ' selected' : ''}>入门</option>
+            <option value="basic"${level === 'basic' ? ' selected' : ''}>基础</option>
+            <option value="intermediate"${level === 'intermediate' ? ' selected' : ''}>进阶</option>
+            <option value="challenge"${level === 'challenge' ? ' selected' : ''}>挑战</option>
+          </select>
+        </div>
+      `;
+    }).join('');
+
+    els.perSubjectDifficultyList.querySelectorAll('[data-subject-difficulty]').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        if (!state.preferences) return;
+        state.preferences.difficulty = state.preferences.difficulty || { global: 'basic', perSubject: {}, exerciseMix: { easy: 30, medium: 50, hard: 20 } };
+        state.preferences.difficulty.perSubject = state.preferences.difficulty.perSubject || {};
+        state.preferences.difficulty.perSubject[sel.getAttribute('data-subject-difficulty')] = sel.value;
+        schedulePreferenceSave();
+      });
+    });
+  }
+
+  function updateMixSumHint() {
+    if (!els.mixSumHint) return;
+    const sum = Number(els.mixEasy?.value || 0) + Number(els.mixMedium?.value || 0) + Number(els.mixHard?.value || 0);
+    els.mixSumHint.textContent = `当前合计：${sum}%`;
+    els.mixSumHint.classList.toggle('warn-text', sum !== 100);
+  }
+
+  function updateExTypeSumHint() {
+    if (!els.exTypeSumHint) return;
+    const sum = Number(els.exTypeConcept?.value || 0) + Number(els.exTypeCalc?.value || 0) + Number(els.exTypeProof?.value || 0);
+    els.exTypeSumHint.textContent = `当前合计：${sum}%`;
+    els.exTypeSumHint.classList.toggle('warn-text', sum !== 100);
+  }
+
   function renderPreferences(preferences) {
     if (!preferences) return;
-    state.preferences = preferences;
+    // 与默认偏好深合并，避免读取空字段
+    const merged = deepMerge(deepClone(DEFAULT_PREFS), preferences);
+    state.preferences = merged;
 
-    if (els.prefDifficulty) els.prefDifficulty.value = preferences.difficulty?.global || 'basic';
-    if (els.mixEasy) els.mixEasy.value = String(preferences.difficulty?.exerciseMix?.easy ?? 40);
-    if (els.mixMedium) els.mixMedium.value = String(preferences.difficulty?.exerciseMix?.medium ?? 40);
-    if (els.mixHard) els.mixHard.value = String(preferences.difficulty?.exerciseMix?.hard ?? 20);
-    if (els.prefExercises) els.prefExercises.value = String(preferences.pace?.exercisesPerSession ?? 5);
-    if (els.prefSpeed) els.prefSpeed.value = preferences.pace?.speed || 'medium';
-    if (els.prefReview) els.prefReview.value = String(preferences.pace?.reviewEveryNLessons ?? 3);
-    if (els.prefLangContent) els.prefLangContent.value = preferences.language?.content || 'zh';
-    if (els.prefLangCode) els.prefLangCode.value = preferences.language?.codeComments || 'zh';
+    // ===== 学习节奏与目标 =====
+    if (els.prefDifficulty) els.prefDifficulty.value = merged.difficulty?.global || 'basic';
+    if (els.mixEasy) els.mixEasy.value = String(merged.difficulty?.exerciseMix?.easy ?? 30);
+    if (els.mixMedium) els.mixMedium.value = String(merged.difficulty?.exerciseMix?.medium ?? 50);
+    if (els.mixHard) els.mixHard.value = String(merged.difficulty?.exerciseMix?.hard ?? 20);
+    updateMixSumHint();
+    if (els.prefExercises) els.prefExercises.value = String(merged.pace?.exercisesPerSession ?? 5);
+    if (els.prefSpeed) els.prefSpeed.value = merged.pace?.speed || 'medium';
+    if (els.prefReview) els.prefReview.value = String(merged.pace?.reviewEveryNLessons ?? 3);
+    const dailyGoal = merged.pace?.dailyGoalMinutes ?? 45;
+    if (els.prefDailyGoal) els.prefDailyGoal.value = String(dailyGoal);
+    if (els.prefDailyGoalNum) els.prefDailyGoalNum.value = String(dailyGoal);
+
+    const restDays = Array.isArray(merged.pace?.restDays) ? merged.pace.restDays.map(Number) : [];
+    els.restDayCheckboxes?.forEach((cb) => {
+      cb.checked = restDays.includes(Number(cb.getAttribute('data-rest-day')));
+    });
+    const slots = Array.isArray(merged.pace?.studyTimeSlots) ? merged.pace.studyTimeSlots : [];
+    els.studySlotCheckboxes?.forEach((cb) => {
+      cb.checked = slots.includes(cb.getAttribute('data-study-slot'));
+    });
+
+    renderPerSubjectDifficulty(merged);
+
+    // ===== 语言 =====
+    if (els.prefLangContent) els.prefLangContent.value = merged.language?.content || 'zh';
+    if (els.prefLangExercises) els.prefLangExercises.value = merged.language?.exercises || 'zh';
+    if (els.prefLangCode) els.prefLangCode.value = merged.language?.codeComments || 'zh';
+
+    // ===== AI 风格与内容 =====
+    setRadioGroup(els.aiDetailLevelRadios, merged.aiStyle?.lessonDetail || 'standard');
+    setRadioGroup(els.aiFeedbackToneRadios, merged.aiStyle?.feedbackTone || 'encouraging');
+    const explainStyles = Array.isArray(merged.aiStyle?.explanationStyles) ? merged.aiStyle.explanationStyles : [];
+    els.explainStyleCheckboxes?.forEach((cb) => {
+      cb.checked = explainStyles.includes(cb.getAttribute('data-explain-style'));
+    });
+    setRadioGroup(els.aiMathStyleRadios, merged.aiStyle?.mathSymbol || 'latex');
+    if (els.exTypeConcept) els.exTypeConcept.value = String(merged.aiStyle?.exerciseTypeMix?.multipleChoice ?? 40);
+    if (els.exTypeCalc) els.exTypeCalc.value = String(merged.aiStyle?.exerciseTypeMix?.freeResponse ?? 40);
+    if (els.exTypeProof) els.exTypeProof.value = String(merged.aiStyle?.exerciseTypeMix?.code ?? 20);
+    updateExTypeSumHint();
+    if (els.aiIncludeProofs) els.aiIncludeProofs.checked = !!merged.aiStyle?.includeProofs;
+    if (els.aiIncludeHistory) els.aiIncludeHistory.checked = !!merged.aiStyle?.includeHistory;
+
+    // ===== Coach =====
+    if (els.coachEnabled) els.coachEnabled.checked = merged.coach?.active !== false;
+    const loops = merged.coach?.loops || {};
+    const loopKeyMap = { dailyBrief: 'dailyBrief', idleNudge: 'idle', srPrompt: 'sr', metacog: 'metacog', planSync: 'drift' };
+    els.coachLoopCheckboxes?.forEach((cb) => {
+      const dataKey = cb.getAttribute('data-coach-loop');
+      const stateKey = loopKeyMap[dataKey] || dataKey;
+      cb.checked = loops[stateKey] !== false;
+    });
+    setRadioGroup(els.coachToastLevelRadios, merged.coach?.notifications?.toastLevel || 'high-only');
+    if (els.coachDndStart) els.coachDndStart.value = merged.coach?.notifications?.quietHoursStart || '22:00';
+    if (els.coachDndEnd) els.coachDndEnd.value = merged.coach?.notifications?.quietHoursEnd || '08:00';
+    const idleMin = merged.coach?.idleThresholdMinutes ?? 8;
+    if (els.coachIdleThreshold) els.coachIdleThreshold.value = String(idleMin);
+    if (els.coachIdleThresholdValue) els.coachIdleThresholdValue.textContent = `${idleMin} 分钟`;
+    setRadioGroup(els.coachSrPolicyRadios, merged.coach?.sr?.variantStrategy || 'reuse');
+    setRadioGroup(els.coachBriefCacheRadios, merged.coach?.dailyBrief?.cacheStrategy || 'per-day');
+    if (els.coachThrottleHour) els.coachThrottleHour.value = String(merged.coach?.throttle?.maxToastsPerHour ?? 3);
+    if (els.coachThrottleDay) els.coachThrottleDay.value = String(merged.coach?.throttle?.maxBannersPerHour ?? 12);
+
+    // ===== 资料检索 =====
+    if (els.retrievalGroundingDefault) els.retrievalGroundingDefault.checked = !!merged.retrieval?.defaultGrounding;
+    setRadioGroup(els.retrievalStrictnessRadios, merged.retrieval?.strictness || 'balanced');
+    if (els.retrievalCiteDefault) els.retrievalCiteDefault.checked = merged.retrieval?.citeSources !== false;
+    const snippets = merged.retrieval?.maxExcerpts ?? 4;
+    if (els.retrievalSnippets) els.retrievalSnippets.value = String(snippets);
+    if (els.retrievalSnippetsValue) els.retrievalSnippetsValue.textContent = String(snippets);
+
+    // ===== 讲义阅读体验 =====
+    setRadioGroup(els.lectureReaderModeRadios, merged.coach?.lecture?.viewerMode || 'lecture-webview');
+    setRadioGroup(els.lectureApplyModeRadios, merged.coach?.lecture?.applyMode || 'preview-confirm');
+    if (els.lectureSyncSource) els.lectureSyncSource.checked = merged.coach?.lecture?.syncSourceEditor !== false;
+    const highlightSec = Math.round((merged.coach?.lecture?.highlightChangesMs ?? 3000) / 1000);
+    if (els.lectureHighlightDuration) els.lectureHighlightDuration.value = String(highlightSec);
+    if (els.lectureHighlightDurationValue) els.lectureHighlightDurationValue.textContent = `${highlightSec} 秒`;
+
+    // ===== UI 与显示 =====
+    const fontSize = merged.ui?.fontSize ?? 13;
+    if (els.uiFontSize) els.uiFontSize.value = String(fontSize);
+    if (els.uiFontSizeValue) els.uiFontSizeValue.textContent = `${fontSize} px`;
+    setRadioGroup(els.uiDefaultTabRadios, merged.ui?.defaultTab || 'learn');
+    if (els.uiTreeDefaultExpand) els.uiTreeDefaultExpand.checked = merged.ui?.expandCourseTree !== false;
+    setRadioGroup(els.uiThemeRadios, merged.ui?.theme || 'auto');
+    if (els.uiShowEmoji) els.uiShowEmoji.checked = merged.ui?.showEmoji !== false;
   }
 
   function collectPreferences() {
-    const current = state.preferences || {};
+    const current = state.preferences || deepClone(DEFAULT_PREFS);
+
+    const restDays = (els.restDayCheckboxes || [])
+      .filter((cb) => cb.checked)
+      .map((cb) => Number(cb.getAttribute('data-rest-day')))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+    const studySlots = (els.studySlotCheckboxes || [])
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.getAttribute('data-study-slot'))
+      .filter(Boolean);
+    const explainStyles = (els.explainStyleCheckboxes || [])
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.getAttribute('data-explain-style'))
+      .filter(Boolean);
+
+    const loops = current.coach?.loops || {};
+    const loopKeyMap = { dailyBrief: 'dailyBrief', idleNudge: 'idle', srPrompt: 'sr', metacog: 'metacog', planSync: 'drift' };
+    (els.coachLoopCheckboxes || []).forEach((cb) => {
+      const dataKey = cb.getAttribute('data-coach-loop');
+      const stateKey = loopKeyMap[dataKey] || dataKey;
+      loops[stateKey] = !!cb.checked;
+    });
+
     return {
       difficulty: {
         global: els.prefDifficulty?.value || current.difficulty?.global || 'basic',
         perSubject: current.difficulty?.perSubject || {},
         exerciseMix: {
-          easy: Number(els.mixEasy?.value || current.difficulty?.exerciseMix?.easy || 40),
-          medium: Number(els.mixMedium?.value || current.difficulty?.exerciseMix?.medium || 40),
-          hard: Number(els.mixHard?.value || current.difficulty?.exerciseMix?.hard || 20),
+          easy: Number(els.mixEasy?.value ?? current.difficulty?.exerciseMix?.easy ?? 30),
+          medium: Number(els.mixMedium?.value ?? current.difficulty?.exerciseMix?.medium ?? 50),
+          hard: Number(els.mixHard?.value ?? current.difficulty?.exerciseMix?.hard ?? 20),
         },
       },
       pace: {
-        dailyGoalMinutes: current.pace?.dailyGoalMinutes || 45,
-        exercisesPerSession: Number(els.prefExercises?.value || current.pace?.exercisesPerSession || 5),
+        dailyGoalMinutes: Number(els.prefDailyGoalNum?.value ?? els.prefDailyGoal?.value ?? current.pace?.dailyGoalMinutes ?? 45),
+        exercisesPerSession: Number(els.prefExercises?.value ?? current.pace?.exercisesPerSession ?? 5),
         speed: els.prefSpeed?.value || current.pace?.speed || 'medium',
-        reviewEveryNLessons: Number(els.prefReview?.value || current.pace?.reviewEveryNLessons || 3),
+        reviewEveryNLessons: Number(els.prefReview?.value ?? current.pace?.reviewEveryNLessons ?? 3),
+        restDays,
+        studyTimeSlots: studySlots,
       },
       language: {
         content: els.prefLangContent?.value || current.language?.content || 'zh',
-        exercises: current.language?.exercises || 'zh',
+        exercises: els.prefLangExercises?.value || current.language?.exercises || 'zh',
         codeComments: els.prefLangCode?.value || current.language?.codeComments || 'zh',
       },
+      aiStyle: {
+        lessonDetail: getRadioGroup(els.aiDetailLevelRadios) || current.aiStyle?.lessonDetail || 'standard',
+        feedbackTone: getRadioGroup(els.aiFeedbackToneRadios) || current.aiStyle?.feedbackTone || 'encouraging',
+        explanationStyles: explainStyles,
+        mathSymbol: getRadioGroup(els.aiMathStyleRadios) || current.aiStyle?.mathSymbol || 'latex',
+        exerciseTypeMix: {
+          multipleChoice: Number(els.exTypeConcept?.value ?? 40),
+          freeResponse: Number(els.exTypeCalc?.value ?? 40),
+          code: Number(els.exTypeProof?.value ?? 20),
+        },
+        includeProofs: !!els.aiIncludeProofs?.checked,
+        includeHistory: !!els.aiIncludeHistory?.checked,
+      },
+      retrieval: {
+        defaultGrounding: !!els.retrievalGroundingDefault?.checked,
+        strictness: getRadioGroup(els.retrievalStrictnessRadios) || current.retrieval?.strictness || 'balanced',
+        citeSources: !!els.retrievalCiteDefault?.checked,
+        maxExcerpts: Number(els.retrievalSnippets?.value ?? current.retrieval?.maxExcerpts ?? 4),
+      },
+      ui: {
+        fontSize: Number(els.uiFontSize?.value ?? current.ui?.fontSize ?? 13),
+        defaultTab: getRadioGroup(els.uiDefaultTabRadios) || current.ui?.defaultTab || 'learn',
+        expandCourseTree: !!els.uiTreeDefaultExpand?.checked,
+        showEmoji: !!els.uiShowEmoji?.checked,
+        theme: getRadioGroup(els.uiThemeRadios) || current.ui?.theme || 'auto',
+      },
+      coach: {
+        active: !!els.coachEnabled?.checked,
+        loops,
+        notifications: {
+          toastLevel: getRadioGroup(els.coachToastLevelRadios) || current.coach?.notifications?.toastLevel || 'high-only',
+          quietHoursStart: els.coachDndStart?.value || current.coach?.notifications?.quietHoursStart || '22:00',
+          quietHoursEnd: els.coachDndEnd?.value || current.coach?.notifications?.quietHoursEnd || '08:00',
+        },
+        throttle: {
+          maxToastsPerHour: Number(els.coachThrottleHour?.value ?? current.coach?.throttle?.maxToastsPerHour ?? 3),
+          maxBannersPerHour: Number(els.coachThrottleDay?.value ?? current.coach?.throttle?.maxBannersPerHour ?? 12),
+        },
+        doNotDisturbUntil: state.doNotDisturbUntil ?? current.coach?.doNotDisturbUntil ?? null,
+        idleThresholdMinutes: Number(els.coachIdleThreshold?.value ?? current.coach?.idleThresholdMinutes ?? 8),
+        sr: {
+          variantStrategy: getRadioGroup(els.coachSrPolicyRadios) || current.coach?.sr?.variantStrategy || 'reuse',
+        },
+        dailyBrief: {
+          cacheStrategy: getRadioGroup(els.coachBriefCacheRadios) || current.coach?.dailyBrief?.cacheStrategy || 'per-day',
+        },
+        lecture: {
+          viewerMode: getRadioGroup(els.lectureReaderModeRadios) || current.coach?.lecture?.viewerMode || 'lecture-webview',
+          applyMode: getRadioGroup(els.lectureApplyModeRadios) || current.coach?.lecture?.applyMode || 'preview-confirm',
+          syncSourceEditor: !!els.lectureSyncSource?.checked,
+          highlightChangesMs: Math.max(1, Number(els.lectureHighlightDuration?.value ?? 3)) * 1000,
+        },
+      },
     };
+  }
+
+  // ===== 偏好自动保存（debounce 300ms） =====
+  let prefsSaveTimer = null;
+  function schedulePreferenceSave() {
+    if (prefsSaveTimer) clearTimeout(prefsSaveTimer);
+    prefsSaveTimer = setTimeout(() => {
+      prefsSaveTimer = null;
+      const preferences = collectPreferences();
+      state.preferences = preferences;
+      vscode.postMessage({ type: 'savePreferences', preferences });
+    }, 300);
+  }
+
+  function resetPreferenceGroup(groupKey) {
+    const current = state.preferences ? deepClone(state.preferences) : deepClone(DEFAULT_PREFS);
+    if (groupKey === 'pace') {
+      current.pace = deepClone(DEFAULT_PREFS.pace);
+      // 同时重置 difficulty.exerciseMix（属于"练习难度分布"，与节奏组在 UI 上同组）
+      current.difficulty = current.difficulty || deepClone(DEFAULT_PREFS.difficulty);
+      current.difficulty.exerciseMix = deepClone(DEFAULT_PREFS.difficulty.exerciseMix);
+      current.difficulty.global = DEFAULT_PREFS.difficulty.global;
+    } else if (groupKey === 'aiStyle') {
+      current.aiStyle = deepClone(DEFAULT_PREFS.aiStyle);
+      current.language = deepClone(DEFAULT_PREFS.language);
+    } else if (groupKey === 'coach') {
+      current.coach = deepClone(DEFAULT_PREFS.coach);
+    } else if (groupKey === 'retrieval') {
+      current.retrieval = deepClone(DEFAULT_PREFS.retrieval);
+    } else if (groupKey === 'lecture') {
+      current.coach = current.coach || deepClone(DEFAULT_PREFS.coach);
+      current.coach.lecture = deepClone(DEFAULT_PREFS.coach.lecture);
+    } else if (groupKey === 'ui') {
+      current.ui = deepClone(DEFAULT_PREFS.ui);
+    } else if (groupKey === 'all') {
+      Object.assign(current, deepClone(DEFAULT_PREFS));
+    }
+    state.preferences = current;
+    renderPreferences(current);
+    vscode.postMessage({ type: 'savePreferences', preferences: current });
+    addLog(`已恢复默认设置：${groupKey}`, 'info');
+  }
+
+  // ===== AI Profile 列表渲染 =====
+  function renderAIProfiles() {
+    if (!els.aiProfilesList) return;
+    const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+    if (!profiles.length) {
+      els.aiProfilesList.innerHTML = '<p class="muted">还没有 AI Profile，点击"新建 Profile"创建一个。</p>';
+    } else {
+      els.aiProfilesList.innerHTML = profiles.map((profile) => {
+        const isActive = profile.id === state.activeProfileId;
+        return `
+          <div class="ai-profile-card${isActive ? ' active' : ''}" data-profile-id="${escapeHtml(profile.id)}">
+            <div class="ai-profile-card-head">
+              <strong>${escapeHtml(profile.name || '未命名')}</strong>
+              ${isActive ? '<span class="pill ok">激活中</span>' : ''}
+            </div>
+            <div class="ai-profile-card-meta muted">
+              ${escapeHtml(profile.provider || '-')} / ${escapeHtml(profile.model || '-')}
+            </div>
+            <div class="ai-profile-card-actions">
+              <button class="btn small" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}">${isActive ? '已激活' : '激活'}</button>
+              <button class="btn small ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
+              <button class="btn small ghost" type="button" data-action="duplicate" data-profile-id="${escapeHtml(profile.id)}">复制</button>
+              <button class="btn small ghost" type="button" data-action="test" data-profile-id="${escapeHtml(profile.id)}">测试</button>
+              <button class="btn small ghost" type="button" data-action="export" data-profile-id="${escapeHtml(profile.id)}">导出</button>
+              <button class="btn small danger-btn" type="button" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">删除</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      els.aiProfilesList.querySelectorAll('[data-action]').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const action = btn.getAttribute('data-action');
+          const profileId = btn.getAttribute('data-profile-id');
+          const profile = state.aiProfiles.find((p) => p.id === profileId);
+          if (!profile) return;
+          handleAIProfileAction(action, profile);
+        });
+      });
+    }
+
+    // 同步 Workspace Override 的 base profile 选项
+    if (els.aiWsBaseProfile) {
+      const current = state.workspaceAIOverride?.baseProfileId || '';
+      els.aiWsBaseProfile.innerHTML = '<option value="">使用全局激活</option>' + profiles.map((p) =>
+        `<option value="${escapeHtml(p.id)}"${p.id === current ? ' selected' : ''}>${escapeHtml(p.name || p.id)}</option>`
+      ).join('');
+    }
+  }
+
+  function handleAIProfileAction(action, profile) {
+    if (action === 'activate') {
+      vscode.postMessage({ type: 'activateAIProfile', profileId: profile.id });
+      return;
+    }
+    if (action === 'edit') {
+      openAIProfileEditor(profile);
+      return;
+    }
+    if (action === 'duplicate') {
+      vscode.postMessage({ type: 'duplicateAIProfile', profileId: profile.id });
+      return;
+    }
+    if (action === 'test') {
+      vscode.postMessage({ type: 'testAIProfile', profile });
+      addLog(`正在测试 AI Profile：${profile.name}`, 'info');
+      return;
+    }
+    if (action === 'export') {
+      const includeToken = window.confirm('导出包含 token？\n\n点击"确定"导出含 token 的版本，"取消"导出脱敏版本。');
+      vscode.postMessage({ type: 'exportAIProfile', profileId: profile.id, includeToken });
+      return;
+    }
+    if (action === 'delete') {
+      if (!window.confirm(`确认删除 Profile "${profile.name || profile.id}"？此操作不可撤销。`)) return;
+      vscode.postMessage({ type: 'deleteAIProfile', profileId: profile.id });
+      return;
+    }
+  }
+
+  function openAIProfileEditor(profile) {
+    state.editingProfileId = profile?.id || null;
+    if (els.aiProfileEditor) els.aiProfileEditor.classList.remove('hidden');
+    if (els.aiProfileEditorTitle) els.aiProfileEditorTitle.textContent = profile ? `编辑 Profile：${profile.name || ''}` : '新建 Profile';
+    if (els.aiProfileName) els.aiProfileName.value = profile?.name || '';
+    if (els.aiProfileProvider) els.aiProfileProvider.value = profile?.provider || 'anthropic';
+    if (els.aiProfileBaseUrl) els.aiProfileBaseUrl.value = profile?.baseUrl || '';
+    if (els.aiProfileAnthropicBaseUrl) els.aiProfileAnthropicBaseUrl.value = profile?.anthropicBaseUrl || '';
+    if (els.aiProfileToken) els.aiProfileToken.value = profile?.apiToken || '';
+    if (els.aiProfileModel) els.aiProfileModel.value = profile?.model || '';
+    if (els.aiProfileWireApi) els.aiProfileWireApi.value = profile?.wireApi || 'anthropic';
+    if (els.aiProfileContextWindow) els.aiProfileContextWindow.value = profile?.contextWindow ? String(profile.contextWindow) : '';
+    if (els.aiProfileMaxTokens) els.aiProfileMaxTokens.value = profile?.maxTokens ? String(profile.maxTokens) : '';
+    if (els.aiProfileReasoningEffort) els.aiProfileReasoningEffort.value = profile?.reasoningEffort || '';
+    if (els.aiProfileNotes) els.aiProfileNotes.value = profile?.notes || '';
+    requestAnimationFrame(() => els.aiProfileEditor?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  }
+
+  function closeAIProfileEditor() {
+    state.editingProfileId = null;
+    if (els.aiProfileEditor) els.aiProfileEditor.classList.add('hidden');
+  }
+
+  function collectAIProfileForm() {
+    const profile = {
+      name: (els.aiProfileName?.value || '').trim(),
+      provider: els.aiProfileProvider?.value || 'anthropic',
+      baseUrl: (els.aiProfileBaseUrl?.value || '').trim(),
+      anthropicBaseUrl: (els.aiProfileAnthropicBaseUrl?.value || '').trim() || undefined,
+      apiToken: els.aiProfileToken?.value || '',
+      model: (els.aiProfileModel?.value || '').trim(),
+      wireApi: els.aiProfileWireApi?.value || 'anthropic',
+      contextWindow: els.aiProfileContextWindow?.value ? Number(els.aiProfileContextWindow.value) : undefined,
+      maxTokens: els.aiProfileMaxTokens?.value ? Number(els.aiProfileMaxTokens.value) : undefined,
+      reasoningEffort: els.aiProfileReasoningEffort?.value || undefined,
+      notes: (els.aiProfileNotes?.value || '').trim() || undefined,
+    };
+    if (state.editingProfileId) profile.id = state.editingProfileId;
+    return profile;
+  }
+
+  function renderWorkspaceAIOverride() {
+    const ov = state.workspaceAIOverride || {};
+    if (els.aiWsOverrideEnabled) els.aiWsOverrideEnabled.checked = !!ov.enabled;
+    if (els.aiWsProvider) els.aiWsProvider.value = ov.providerOverride || ov.provider || '';
+    if (els.aiWsBaseUrl) els.aiWsBaseUrl.value = ov.baseUrlOverride || ov.baseUrl || '';
+    if (els.aiWsToken) els.aiWsToken.value = ov.apiTokenOverride || ov.apiToken || '';
+    if (els.aiWsModel) els.aiWsModel.value = ov.modelOverride || ov.model || '';
+  }
+
+  // ===== 今日 Coach 渲染 =====
+  function renderCoachToday() {
+    if (!els.coachTodaySection) return;
+    els.coachTodaySection.classList.remove('hidden');
+    const brief = state.dailyBrief;
+    if (!brief) {
+      if (els.coachBriefSubtitle) els.coachBriefSubtitle.textContent = '今天还没有简报。';
+      if (els.coachBriefBody) els.coachBriefBody.innerHTML = '<p class="muted">点击右上角 ↻ 生成今日建议。</p>';
+      return;
+    }
+    if (els.coachBriefSubtitle) {
+      const dateLabel = brief.date || new Date().toLocaleDateString();
+      els.coachBriefSubtitle.textContent = `更新于 ${escapeHtml(dateLabel)}`;
+    }
+    if (els.coachBriefBody) {
+      const recap = brief.yesterdayRecap || brief.recap || '';
+      const todayList = Array.isArray(brief.todaySuggestions) ? brief.todaySuggestions
+                       : Array.isArray(brief.suggestions) ? brief.suggestions : [];
+      const recapHtml = recap ? `<div class="coach-recap"><strong>昨日回顾</strong><div>${escapeHtml(recap)}</div></div>` : '';
+      const todayHtml = todayList.length
+        ? `<div class="coach-today-list"><strong>今日建议</strong><ul>${todayList.map((s) => `<li>${escapeHtml(typeof s === 'string' ? s : (s.title || s.body || ''))}</li>`).join('')}</ul></div>`
+        : '';
+      els.coachBriefBody.innerHTML = recapHtml + todayHtml || '<p class="muted">今日尚无建议。</p>';
+    }
+  }
+
+  function renderCoachSuggestions() {
+    if (!els.coachSuggestionsList) return;
+    const items = Array.isArray(state.coachSuggestions) ? state.coachSuggestions : [];
+    if (!items.length) {
+      els.coachSuggestionsList.innerHTML = '';
+      return;
+    }
+    els.coachSuggestionsList.innerHTML = items.map((s) => `
+      <div class="coach-chip urgency-${escapeHtml(s.urgency || 'low')}" data-suggestion-id="${escapeHtml(s.id)}">
+        <span class="coach-chip-title">${escapeHtml(s.title || s.body || '')}</span>
+        <span class="coach-chip-actions">
+          <button class="coach-chip-act" type="button" data-suggestion-action="open" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
+          <button class="coach-chip-dismiss" type="button" data-suggestion-action="dismiss" data-suggestion-id="${escapeHtml(s.id)}" title="忽略">✕</button>
+        </span>
+      </div>
+    `).join('');
+
+    els.coachSuggestionsList.querySelectorAll('[data-suggestion-action]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const suggestionId = btn.getAttribute('data-suggestion-id');
+        const action = btn.getAttribute('data-suggestion-action');
+        if (action === 'dismiss') {
+          vscode.postMessage({ type: 'coachDismissSuggestion', suggestionId });
+        } else {
+          vscode.postMessage({ type: 'coachAction', suggestionId });
+        }
+      });
+    });
+  }
+
+  function updateDndButton() {
+    if (!els.btnCoachDnd) return;
+    const active = state.doNotDisturbUntil && new Date(state.doNotDisturbUntil).getTime() > Date.now();
+    els.btnCoachDnd.textContent = active ? '🔔' : '🔕';
+    els.btnCoachDnd.title = active
+      ? `勿扰至 ${new Date(state.doNotDisturbUntil).toLocaleTimeString()}`
+      : '勿扰 1 小时';
+  }
+
+  // ===== 学习计划渲染 =====
+  function renderLearningPlan() {
+    if (!els.learningPlanSection) return;
+    if (!state.selectedSubject) {
+      els.learningPlanSection.classList.add('hidden');
+      return;
+    }
+    els.learningPlanSection.classList.remove('hidden');
+    const plan = state.learningPlan;
+    if (!plan) {
+      if (els.planStatus) els.planStatus.textContent = '本课程暂无学习计划。点击右上角"编辑计划"创建。';
+      if (els.planProgressBar) els.planProgressBar.classList.add('hidden');
+      if (els.planMilestonesList) els.planMilestonesList.innerHTML = '';
+      return;
+    }
+    const milestones = Array.isArray(plan.milestones) ? plan.milestones : [];
+    const total = milestones.length;
+    const done = milestones.filter((m) => m.status === 'done').length;
+    const percent = total ? Math.round((done / total) * 100) : 0;
+    if (els.planProgressBar) els.planProgressBar.classList.remove('hidden');
+    if (els.planProgressFill) els.planProgressFill.style.width = `${percent}%`;
+    if (els.planStatus) {
+      const goal = plan.goal || {};
+      els.planStatus.textContent = `目标：${goal.targetEndDate || '?'} / 每日 ${goal.dailyMinutes || '?'} 分钟 / 进度 ${done}/${total}（${percent}%）`;
+    }
+    if (els.planMilestonesList) {
+      const today = new Date();
+      els.planMilestonesList.innerHTML = milestones.map((m) => {
+        const expectedDate = m.expectedDoneBy ? new Date(m.expectedDoneBy) : null;
+        const overdue = m.status !== 'done' && expectedDate && expectedDate < today;
+        const cls = overdue ? 'overdue' : m.status;
+        const statusLabel = overdue ? '已延期' : (m.status === 'done' ? '完成' : m.status === 'in-progress' ? '进行中' : m.status === 'skipped' ? '跳过' : '待开始');
+        return `
+          <div class="plan-milestone status-${escapeHtml(cls)}">
+            <span class="plan-milestone-title">${escapeHtml(m.topicTitle || m.topicId || '-')}</span>
+            <span class="plan-milestone-date muted">${escapeHtml(m.expectedDoneBy || '-')}</span>
+            <span class="plan-milestone-status">${escapeHtml(statusLabel)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  function openLearningPlanModal() {
+    if (!state.selectedSubject) {
+      addLog('请先选择课程后再编辑学习计划。', 'warn');
+      return;
+    }
+    if (els.learningPlanModal) {
+      els.learningPlanModal.classList.remove('hidden');
+      els.learningPlanModal.setAttribute('aria-hidden', 'false');
+    }
+    const plan = state.learningPlan;
+    if (els.planSubject) els.planSubject.value = subjectLabel(state.selectedSubject);
+    if (els.planTargetDate) {
+      const def = plan?.goal?.targetEndDate || (() => {
+        const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10);
+      })();
+      els.planTargetDate.value = def;
+    }
+    if (els.planDailyMinutes) els.planDailyMinutes.value = String(plan?.goal?.dailyMinutes || 60);
+    if (els.planExtraNotes) els.planExtraNotes.value = plan?.goal?.extraNotes || '';
+  }
+
+  function closeLearningPlanModal() {
+    if (els.learningPlanModal) {
+      els.learningPlanModal.classList.add('hidden');
+      els.learningPlanModal.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  // ===== 数据管理 - 学科选择 =====
+  function syncDataSubjectSelect() {
+    if (!els.dataSubjectSelect) return;
+    const subjects = state.courses.map((c) => c.subject);
+    if (!subjects.length) {
+      els.dataSubjectSelect.innerHTML = '<option value="">无课程</option>';
+      els.dataSubjectSelect.value = '';
+      return;
+    }
+    const current = els.dataSubjectSelect.value || state.selectedSubject || subjects[0];
+    els.dataSubjectSelect.innerHTML = subjects.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(subjectLabel(s))}</option>`).join('');
+    els.dataSubjectSelect.value = subjects.includes(current) ? current : subjects[0];
   }
 
   function renderChatContext() {
@@ -1390,10 +2154,18 @@
     requestDiagnosis(false);
     renderChatContext();
     syncMaterialImportTargets();
+    syncDataSubjectSelect();
     renderOutlineRebuildModal();
     renderWrongQuestions();
+    renderLearningPlan();
+    if (state.preferences) {
+      renderPerSubjectDifficulty(state.preferences);
+    }
     persist();
     requestWrongQuestions();
+    if (state.selectedSubject) {
+      vscode.postMessage({ type: 'getLearningPlan', subject: state.selectedSubject });
+    }
   }
 
   function activateTab(tabName) {
@@ -1571,6 +2343,9 @@
     if (event.key === 'Escape' && !els.answerSubmitModal?.classList.contains('hidden')) {
       closeAnswerSubmitModal();
     }
+    if (event.key === 'Escape' && els.learningPlanModal && !els.learningPlanModal.classList.contains('hidden')) {
+      closeLearningPlanModal();
+    }
   });
 
   els.btnOutlineRebuildModeFull?.addEventListener('click', () => {
@@ -1667,6 +2442,307 @@
     state.preferences = preferences;
     vscode.postMessage({ type: 'savePreferences', preferences });
     addLog('学习偏好已提交保存。', 'info');
+  });
+
+  // ===== 设置页搜索 =====
+  els.settingsSearch?.addEventListener('input', () => {
+    const q = (els.settingsSearch.value || '').trim().toLowerCase();
+    document.querySelectorAll('.setting-row').forEach((row) => {
+      const text = row.textContent.toLowerCase();
+      const match = !q || text.includes(q);
+      row.classList.toggle('hidden', !match);
+      row.classList.toggle('hl', !!q && match);
+    });
+    if (q) {
+      document.querySelectorAll('.settings-group').forEach((g) => g.setAttribute('open', ''));
+    }
+  });
+
+  // ===== 设置页折叠状态持久化 =====
+  els.settingsGroups?.forEach((group) => {
+    const groupId = group.id || group.getAttribute('data-group') || '';
+    if (!groupId) return;
+    if (state.settingsCollapsedGroups[groupId] === true) {
+      group.removeAttribute('open');
+    } else if (state.settingsCollapsedGroups[groupId] === false) {
+      group.setAttribute('open', '');
+    }
+    group.addEventListener('toggle', () => {
+      state.settingsCollapsedGroups[groupId] = !group.open;
+      persist();
+    });
+  });
+
+  // ===== "恢复默认"按钮（每组） =====
+  els.resetGroupButtons?.forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      const groupKey = btn.getAttribute('data-reset-group');
+      if (!groupKey) return;
+      if (!window.confirm(`确认恢复"${groupKey}"组的默认设置？`)) return;
+      resetPreferenceGroup(groupKey);
+    });
+  });
+
+  // ===== 自动保存绑定：常规控件（change） =====
+  function bindAutoSave(el, eventName = 'change') {
+    if (!el) return;
+    el.addEventListener(eventName, schedulePreferenceSave);
+  }
+
+  // 学习节奏与目标
+  bindAutoSave(els.prefDifficulty);
+  bindAutoSave(els.prefExercises);
+  bindAutoSave(els.prefSpeed);
+  bindAutoSave(els.prefReview, 'input');
+  bindAutoSave(els.mixEasy, 'input');
+  bindAutoSave(els.mixMedium, 'input');
+  bindAutoSave(els.mixHard, 'input');
+  [els.mixEasy, els.mixMedium, els.mixHard].forEach((el) => {
+    el?.addEventListener('input', updateMixSumHint);
+  });
+
+  if (els.prefDailyGoal && els.prefDailyGoalNum) {
+    els.prefDailyGoal.addEventListener('input', () => {
+      els.prefDailyGoalNum.value = els.prefDailyGoal.value;
+      schedulePreferenceSave();
+    });
+    els.prefDailyGoalNum.addEventListener('input', () => {
+      els.prefDailyGoal.value = els.prefDailyGoalNum.value;
+      schedulePreferenceSave();
+    });
+  }
+
+  els.restDayCheckboxes?.forEach((cb) => bindAutoSave(cb));
+  els.studySlotCheckboxes?.forEach((cb) => bindAutoSave(cb));
+
+  // AI 风格与内容
+  els.aiDetailLevelRadios?.forEach((r) => bindAutoSave(r));
+  els.aiFeedbackToneRadios?.forEach((r) => bindAutoSave(r));
+  els.explainStyleCheckboxes?.forEach((cb) => bindAutoSave(cb));
+  els.aiMathStyleRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.exTypeConcept, 'input');
+  bindAutoSave(els.exTypeCalc, 'input');
+  bindAutoSave(els.exTypeProof, 'input');
+  [els.exTypeConcept, els.exTypeCalc, els.exTypeProof].forEach((el) => {
+    el?.addEventListener('input', updateExTypeSumHint);
+  });
+  bindAutoSave(els.aiIncludeProofs);
+  bindAutoSave(els.aiIncludeHistory);
+  bindAutoSave(els.prefLangContent);
+  bindAutoSave(els.prefLangExercises);
+  bindAutoSave(els.prefLangCode);
+
+  // Coach
+  bindAutoSave(els.coachEnabled);
+  els.coachLoopCheckboxes?.forEach((cb) => bindAutoSave(cb));
+  els.coachToastLevelRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.coachDndStart);
+  bindAutoSave(els.coachDndEnd);
+  if (els.coachIdleThreshold) {
+    els.coachIdleThreshold.addEventListener('input', () => {
+      const v = els.coachIdleThreshold.value;
+      if (els.coachIdleThresholdValue) els.coachIdleThresholdValue.textContent = `${v} 分钟`;
+      schedulePreferenceSave();
+    });
+  }
+  els.coachSrPolicyRadios?.forEach((r) => bindAutoSave(r));
+  els.coachBriefCacheRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.coachThrottleHour, 'input');
+  bindAutoSave(els.coachThrottleDay, 'input');
+
+  // 资料检索
+  bindAutoSave(els.retrievalGroundingDefault);
+  els.retrievalStrictnessRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.retrievalCiteDefault);
+  if (els.retrievalSnippets) {
+    els.retrievalSnippets.addEventListener('input', () => {
+      if (els.retrievalSnippetsValue) els.retrievalSnippetsValue.textContent = String(els.retrievalSnippets.value);
+      schedulePreferenceSave();
+    });
+  }
+
+  // 讲义阅读体验
+  els.lectureReaderModeRadios?.forEach((r) => bindAutoSave(r));
+  els.lectureApplyModeRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.lectureSyncSource);
+  if (els.lectureHighlightDuration) {
+    els.lectureHighlightDuration.addEventListener('input', () => {
+      const v = els.lectureHighlightDuration.value;
+      if (els.lectureHighlightDurationValue) els.lectureHighlightDurationValue.textContent = `${v} 秒`;
+      schedulePreferenceSave();
+    });
+  }
+
+  // UI 与显示
+  if (els.uiFontSize) {
+    els.uiFontSize.addEventListener('input', () => {
+      const v = els.uiFontSize.value;
+      if (els.uiFontSizeValue) els.uiFontSizeValue.textContent = `${v} px`;
+      schedulePreferenceSave();
+    });
+  }
+  els.uiDefaultTabRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.uiTreeDefaultExpand);
+  els.uiThemeRadios?.forEach((r) => bindAutoSave(r));
+  bindAutoSave(els.uiShowEmoji);
+
+  // ===== AI Profile 编辑器交互 =====
+  els.btnAddAIProfile?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    openAIProfileEditor(null);
+  });
+
+  els.btnSaveAIProfile?.addEventListener('click', () => {
+    const profile = collectAIProfileForm();
+    if (!profile.name) {
+      addLog('请填写 Profile 名称。', 'warn');
+      return;
+    }
+    vscode.postMessage({ type: 'saveAIProfile', profile });
+    closeAIProfileEditor();
+    addLog(`已提交保存 Profile：${profile.name}`, 'info');
+  });
+
+  els.btnCancelAIProfile?.addEventListener('click', () => {
+    closeAIProfileEditor();
+  });
+
+  // ===== Workspace AI Override =====
+  els.btnSaveWsOverride?.addEventListener('click', () => {
+    const override = {
+      enabled: !!els.aiWsOverrideEnabled?.checked,
+      baseProfileId: els.aiWsBaseProfile?.value || null,
+      providerOverride: (els.aiWsProvider?.value || '').trim() || undefined,
+      baseUrlOverride: (els.aiWsBaseUrl?.value || '').trim() || undefined,
+      apiTokenOverride: els.aiWsToken?.value || undefined,
+      modelOverride: (els.aiWsModel?.value || '').trim() || undefined,
+    };
+    vscode.postMessage({ type: 'saveWorkspaceAIOverride', override });
+    addLog('已保存工作区 AI 覆盖设置。', 'info');
+  });
+
+  // ===== 数据管理按钮 =====
+  function getDataSubject() {
+    return els.dataSubjectSelect?.value || state.selectedSubject || null;
+  }
+
+  els.btnClearWrongQuestions?.addEventListener('click', () => {
+    const subject = getDataSubject();
+    if (!subject) { addLog('请先选择学科。', 'warn'); return; }
+    if (!window.confirm(`确认清空"${subjectLabel(subject)}"的错题本？`)) return;
+    vscode.postMessage({ type: 'clearWrongQuestions', subject });
+  });
+
+  els.btnClearDiagnosis?.addEventListener('click', () => {
+    const subject = getDataSubject();
+    if (!subject) { addLog('请先选择学科。', 'warn'); return; }
+    if (!window.confirm(`确认清空"${subjectLabel(subject)}"的诊断历史？`)) return;
+    vscode.postMessage({ type: 'clearDiagnosisHistory', subject });
+  });
+
+  els.btnResetCourseProgress?.addEventListener('click', () => {
+    const subject = getDataSubject();
+    if (!subject) { addLog('请先选择学科。', 'warn'); return; }
+    if (!window.confirm(`确认重置"${subjectLabel(subject)}"的课程进度？所有讲义/练习状态会清零。`)) return;
+    vscode.postMessage({ type: 'resetCourseProgress', subject });
+  });
+
+  els.btnExportLearningData?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'exportLearningData' });
+  });
+
+  els.btnImportLearningData?.addEventListener('click', () => {
+    if (!window.confirm('导入学习数据会覆盖现有数据，确认继续？')) return;
+    vscode.postMessage({ type: 'importLearningData' });
+  });
+
+  // ===== 数据目录与高级 =====
+  els.btnExportPrefs?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'exportPreferences' });
+  });
+
+  els.btnImportPrefs?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'importPreferences' });
+  });
+
+  els.btnResetAllPrefs?.addEventListener('click', () => {
+    if (!window.confirm('确认恢复全部默认设置？所有偏好会被重置。')) return;
+    resetPreferenceGroup('all');
+  });
+
+  // ===== 今日 Coach 卡片交互 =====
+  els.btnCoachRefreshBrief?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'getDailyBrief', force: true });
+    addLog('正在刷新今日简报...', 'info');
+  });
+
+  els.btnCoachDnd?.addEventListener('click', () => {
+    const active = state.doNotDisturbUntil && new Date(state.doNotDisturbUntil).getTime() > Date.now();
+    if (active) {
+      vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 0 });
+      state.doNotDisturbUntil = null;
+    } else {
+      vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 60 });
+      state.doNotDisturbUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    }
+    updateDndButton();
+  });
+
+  els.btnDnd1h?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 60 });
+    state.doNotDisturbUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    updateDndButton();
+  });
+
+  els.btnDndToday?.addEventListener('click', () => {
+    const end = new Date(); end.setHours(23, 59, 59, 999);
+    const minutes = Math.max(1, Math.round((end.getTime() - Date.now()) / 60000));
+    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: minutes });
+    state.doNotDisturbUntil = end.toISOString();
+    updateDndButton();
+  });
+
+  els.btnDndCustom?.addEventListener('click', () => {
+    const raw = window.prompt('设置勿扰时长（分钟）', '120');
+    if (!raw) return;
+    const minutes = Math.max(1, Math.round(Number(raw) || 0));
+    if (!minutes) return;
+    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: minutes });
+    state.doNotDisturbUntil = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+    updateDndButton();
+  });
+
+  // ===== 学习计划交互 =====
+  els.btnEditPlan?.addEventListener('click', openLearningPlanModal);
+  els.btnCancelPlan?.addEventListener('click', closeLearningPlanModal);
+  els.btnClosePlanModal?.addEventListener('click', closeLearningPlanModal);
+  els.learningPlanModal?.addEventListener('click', (event) => {
+    if (event.target === els.learningPlanModal) closeLearningPlanModal();
+  });
+
+  els.btnSavePlan?.addEventListener('click', () => {
+    if (!state.selectedSubject) {
+      addLog('请先选择课程。', 'warn');
+      return;
+    }
+    const targetEndDate = els.planTargetDate?.value || '';
+    const dailyMinutes = Number(els.planDailyMinutes?.value || 60);
+    const extraNotes = (els.planExtraNotes?.value || '').trim();
+    if (!targetEndDate) {
+      addLog('请填写截止日期。', 'warn');
+      return;
+    }
+    const plan = {
+      subject: state.selectedSubject,
+      goal: { targetEndDate, dailyMinutes, extraNotes: extraNotes || undefined },
+      driftThresholdDays: 2,
+    };
+    vscode.postMessage({ type: 'setLearningPlan', plan, autoDecompose: true });
+    addLog('正在让 AI 拆解学习计划...', 'info');
+    closeLearningPlanModal();
   });
 
   els.btnOpenDataDir?.addEventListener('click', () => {
@@ -1945,6 +3021,73 @@
         }
         break;
       }
+      case 'aiProfilesList': {
+        state.aiProfiles = Array.isArray(msg.data) ? msg.data : [];
+        state.activeProfileId = msg.activeProfileId || null;
+        if (msg.workspaceOverride !== undefined) {
+          state.workspaceAIOverride = msg.workspaceOverride;
+        }
+        renderAIProfiles();
+        renderWorkspaceAIOverride();
+        break;
+      }
+      case 'aiProfileSaved': {
+        if (msg.profile) {
+          const idx = state.aiProfiles.findIndex((p) => p.id === msg.profile.id);
+          if (idx >= 0) state.aiProfiles[idx] = msg.profile;
+          else state.aiProfiles.push(msg.profile);
+          renderAIProfiles();
+        }
+        addLog(`AI Profile 已保存：${msg.profile?.name || '-'}`, 'info');
+        break;
+      }
+      case 'aiTestResult': {
+        const m = msg.message || (msg.success ? '测试成功' : '测试失败');
+        addLog(m, msg.success ? 'info' : 'error');
+        break;
+      }
+      case 'workspaceAIOverride': {
+        state.workspaceAIOverride = msg.data || null;
+        renderWorkspaceAIOverride();
+        break;
+      }
+      case 'dailyBrief': {
+        state.dailyBrief = msg.data || null;
+        renderCoachToday();
+        break;
+      }
+      case 'coachSuggestions': {
+        state.coachSuggestions = Array.isArray(msg.data) ? msg.data : [];
+        renderCoachSuggestions();
+        break;
+      }
+      case 'activityLog': {
+        // 暂时只 console.log，留扩展点
+        // eslint-disable-next-line no-console
+        console.log('[activityLog]', msg.data);
+        break;
+      }
+      case 'learningPlan': {
+        state.learningPlan = msg.data || null;
+        renderLearningPlan();
+        break;
+      }
+      case 'doNotDisturbState': {
+        state.doNotDisturbUntil = msg.until || null;
+        updateDndButton();
+        break;
+      }
+      case 'dataOpResult': {
+        const op = msg.operation || '操作';
+        const ok = !!msg.ok;
+        addLog(`${op} ${ok ? '成功' : '失败'}${msg.message ? '：' + msg.message : ''}`, ok ? 'info' : 'error');
+        // 数据被清空/导入后刷新课程相关 UI
+        if (ok) {
+          refreshCoursePanelData(false);
+          requestWrongQuestions();
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1957,10 +3100,17 @@
   renderMaterials();
   renderDiagnosis(null);
   syncMaterialImportTargets();
+  syncDataSubjectSelect();
   renderChatContext();
   renderResolvedAIConfig(null, null);
   renderOutlineRebuildModal();
   renderWrongQuestions();
+  renderLearningPlan();
+  renderCoachToday();
+  renderCoachSuggestions();
+  renderAIProfiles();
+  renderWorkspaceAIOverride();
+  updateDndButton();
   updateTaskBlockedState();
 
   refreshCoursePanelData();
@@ -1971,4 +3121,10 @@
   vscode.postMessage({ type: 'getPreferences' });
   vscode.postMessage({ type: 'getDataDir' });
   vscode.postMessage({ type: 'getResolvedAIConfig' });
+  vscode.postMessage({ type: 'listAIProfiles' });
+  vscode.postMessage({ type: 'getDailyBrief' });
+  vscode.postMessage({ type: 'getCoachSuggestions' });
+  if (state.selectedSubject) {
+    vscode.postMessage({ type: 'getLearningPlan', subject: state.selectedSubject });
+  }
 })();
