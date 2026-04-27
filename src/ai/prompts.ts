@@ -32,16 +32,73 @@ function preferencesContext(prefs: LearningPreferences | null): string {
     medium: '中速',
     fast: '快速',
   };
+  const detailLabel: Record<string, string> = {
+    concise: '精简（点到为止，目标 600-1200 字）',
+    standard: '标准（详略得当，目标 1500-2500 字）',
+    detailed: '详尽（充分展开推导和例子，目标 3000-5000 字）',
+  };
+  const toneLabel: Record<string, string> = {
+    direct: '直接：开门见山，不寒暄',
+    encouraging: '鼓励性：对正确部分明确肯定，对错误以建设性方式指出',
+    socratic: '苏格拉底式：多用反问引导学生自己发现答案，不要直接给结论',
+  };
+  const styleLabelMap: Record<string, string> = {
+    'example-first': '例子优先（先给具体场景再抽象）',
+    'formula-first': '公式优先（先给精确数学表达再解释）',
+    'intuition-first': '直觉优先（先建立感性理解再走形式化）',
+    'rigor-first': '严谨证明优先（先给定理证明再讲应用）',
+  };
+  const mathLabel: Record<string, string> = {
+    'english-standard': '使用英文标准数学符号（如 ∀, ∃, ∈, ⊆）',
+    'chinese': '使用中文常见符号习惯（集合用「」、推导用"故"、"由此得"）',
+  };
 
-  return `
+  let result = `
 学生偏好设置：
 - 整体难度：${diffLabel[prefs.difficulty.global] ?? prefs.difficulty.global}
 - 练习难度分布：简单 ${prefs.difficulty.exerciseMix.easy}% / 中等 ${prefs.difficulty.exerciseMix.medium}% / 困难 ${prefs.difficulty.exerciseMix.hard}%
 - 学习速度：${speedLabel[prefs.pace.speed] ?? prefs.pace.speed}
 - 每次练习数量：${prefs.pace.exercisesPerSession} 题
+- 每日学习目标：${prefs.pace.dailyGoalMinutes ?? 60} 分钟
 - 内容语言：${langLabel[prefs.language.content] ?? prefs.language.content}
+- 练习语言：${langLabel[prefs.language.exercises] ?? prefs.language.exercises}
 - 代码注释语言：${langLabel[prefs.language.codeComments] ?? prefs.language.codeComments}
 `;
+
+  // AI 风格与内容（如果用户配置了）
+  if (prefs.aiStyle) {
+    const styleParts: string[] = [];
+    if (prefs.aiStyle.lessonDetail) {
+      styleParts.push(`- 讲义详尽度：${detailLabel[prefs.aiStyle.lessonDetail] ?? prefs.aiStyle.lessonDetail}`);
+    }
+    if (prefs.aiStyle.feedbackTone) {
+      styleParts.push(`- 反馈口吻：${toneLabel[prefs.aiStyle.feedbackTone] ?? prefs.aiStyle.feedbackTone}`);
+    }
+    if (prefs.aiStyle.explanationStyles && prefs.aiStyle.explanationStyles.length > 0) {
+      const styles = prefs.aiStyle.explanationStyles.map((s) => styleLabelMap[s] ?? s).join('；');
+      styleParts.push(`- 解释风格偏好：${styles}`);
+    }
+    if (prefs.aiStyle.mathSymbol) {
+      styleParts.push(`- 数学符号习惯：${mathLabel[prefs.aiStyle.mathSymbol] ?? prefs.aiStyle.mathSymbol}`);
+    }
+    if (prefs.aiStyle.exerciseTypeMix) {
+      const m = prefs.aiStyle.exerciseTypeMix;
+      styleParts.push(`- 练习类型偏好：选择 ${m.multipleChoice ?? 30}% / 问答 ${m.freeResponse ?? 50}% / 代码 ${m.code ?? 20}%`);
+    }
+    if (prefs.aiStyle.includeProofs === false) {
+      styleParts.push('- 不要在讲义中包含完整证明，给出关键引理与思路即可');
+    } else if (prefs.aiStyle.includeProofs) {
+      styleParts.push('- 讲义中可以包含必要的证明步骤');
+    }
+    if (prefs.aiStyle.includeHistory) {
+      styleParts.push('- 讲义可适当包含历史背景与人物故事，加深印象');
+    }
+    if (styleParts.length > 0) {
+      result += `\nAI 风格与内容偏好（请严格遵循）：\n${styleParts.join('\n')}\n`;
+    }
+  }
+
+  return result;
 }
 
 function diagnosisContext(diag: LatestDiagnosis | null): string {
