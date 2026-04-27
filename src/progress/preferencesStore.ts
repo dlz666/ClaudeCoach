@@ -13,33 +13,186 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
     exercisesPerSession: 5,
     speed: 'medium',
     reviewEveryNLessons: 3,
+    restDays: [],
+    studyTimeSlots: ['morning', 'afternoon', 'evening'],
   },
   language: {
     content: 'zh',
     exercises: 'zh',
     codeComments: 'zh',
   },
+  aiStyle: {
+    lessonDetail: 'standard',
+    feedbackTone: 'encouraging',
+    explanationStyles: ['example-first', 'intuition-first'],
+    mathSymbol: 'english-standard',
+    exerciseTypeMix: { multipleChoice: 30, freeResponse: 50, code: 20 },
+    includeProofs: true,
+    includeHistory: false,
+  },
+  retrieval: {
+    defaultGrounding: true,
+    strictness: 'inclusive',
+    citeSources: true,
+    maxExcerpts: 4,
+  },
+  ui: {
+    fontSize: 14,
+    defaultTab: 'learn',
+    expandCourseTree: true,
+    showEmoji: true,
+    theme: 'auto',
+  },
+  coach: {
+    active: true,
+    loops: {
+      dailyBrief: true,
+      idle: true,
+      sr: true,
+      metacog: true,
+      drift: true,
+    },
+    notifications: {
+      toastLevel: 'high-urgency-only',
+      quietHoursStart: '22:00',
+      quietHoursEnd: '08:00',
+    },
+    throttle: {
+      maxToastsPerHour: 1,
+      maxBannersPerHour: 4,
+    },
+    doNotDisturbUntil: null,
+    idleThresholdMinutes: 8,
+    sr: {
+      variantStrategy: 'ai-variant',
+    },
+    dailyBrief: {
+      cacheStrategy: 'per-day',
+    },
+    lecture: {
+      viewerMode: 'lecture-webview',
+      applyMode: 'preview-confirm',
+      syncSourceEditor: false,
+      highlightChangesMs: 5000,
+    },
+  },
 };
+
+/** 深合并：用户保存的 prefs 缺字段时用默认值补齐。 */
+function mergePreferences(stored: Partial<LearningPreferences> | null | undefined): LearningPreferences {
+  if (!stored) {
+    return JSON.parse(JSON.stringify(DEFAULT_PREFERENCES)) as LearningPreferences;
+  }
+  return {
+    difficulty: {
+      global: stored.difficulty?.global ?? DEFAULT_PREFERENCES.difficulty.global,
+      perSubject: stored.difficulty?.perSubject ?? DEFAULT_PREFERENCES.difficulty.perSubject,
+      exerciseMix: stored.difficulty?.exerciseMix ?? DEFAULT_PREFERENCES.difficulty.exerciseMix,
+    },
+    pace: {
+      ...DEFAULT_PREFERENCES.pace,
+      ...(stored.pace ?? {}),
+    },
+    language: {
+      ...DEFAULT_PREFERENCES.language,
+      ...(stored.language ?? {}),
+    },
+    aiStyle: {
+      ...DEFAULT_PREFERENCES.aiStyle!,
+      ...(stored.aiStyle ?? {}),
+      exerciseTypeMix: {
+        ...DEFAULT_PREFERENCES.aiStyle!.exerciseTypeMix!,
+        ...(stored.aiStyle?.exerciseTypeMix ?? {}),
+      },
+    },
+    retrieval: {
+      ...DEFAULT_PREFERENCES.retrieval!,
+      ...(stored.retrieval ?? {}),
+    },
+    ui: {
+      ...DEFAULT_PREFERENCES.ui!,
+      ...(stored.ui ?? {}),
+    },
+    coach: {
+      ...DEFAULT_PREFERENCES.coach!,
+      ...(stored.coach ?? {}),
+      loops: {
+        ...DEFAULT_PREFERENCES.coach!.loops!,
+        ...(stored.coach?.loops ?? {}),
+      },
+      notifications: {
+        ...DEFAULT_PREFERENCES.coach!.notifications!,
+        ...(stored.coach?.notifications ?? {}),
+      },
+      throttle: {
+        ...DEFAULT_PREFERENCES.coach!.throttle!,
+        ...(stored.coach?.throttle ?? {}),
+      },
+      sr: {
+        ...DEFAULT_PREFERENCES.coach!.sr!,
+        ...(stored.coach?.sr ?? {}),
+      },
+      dailyBrief: {
+        ...DEFAULT_PREFERENCES.coach!.dailyBrief!,
+        ...(stored.coach?.dailyBrief ?? {}),
+      },
+      lecture: {
+        ...DEFAULT_PREFERENCES.coach!.lecture!,
+        ...(stored.coach?.lecture ?? {}),
+      },
+    },
+  };
+}
 
 export class PreferencesStore {
   private readonly paths = getStoragePathResolver();
 
   async get(): Promise<LearningPreferences> {
-    const current = await readJson<LearningPreferences>(this.paths.learningPreferencesPath);
+    const current = await readJson<Partial<LearningPreferences>>(this.paths.learningPreferencesPath);
     if (current) {
-      return current;
+      return mergePreferences(current);
     }
 
-    const legacy = await readJson<LearningPreferences>(this.paths.legacyLearningPreferencesPath);
+    const legacy = await readJson<Partial<LearningPreferences>>(this.paths.legacyLearningPreferencesPath);
     if (legacy) {
-      await writeJson(this.paths.learningPreferencesPath, legacy);
-      return legacy;
+      const merged = mergePreferences(legacy);
+      await writeJson(this.paths.learningPreferencesPath, merged);
+      return merged;
     }
 
-    return { ...DEFAULT_PREFERENCES };
+    return mergePreferences(null);
   }
 
   async save(prefs: LearningPreferences): Promise<void> {
-    await writeJson(this.paths.learningPreferencesPath, prefs);
+    const normalized = mergePreferences(prefs);
+    await writeJson(this.paths.learningPreferencesPath, normalized);
+  }
+
+  /** 单独恢复某个分组的默认值。 */
+  async resetGroup(group: keyof LearningPreferences): Promise<LearningPreferences> {
+    const current = await this.get();
+    const next = JSON.parse(JSON.stringify(current)) as LearningPreferences;
+    (next as any)[group] = JSON.parse(JSON.stringify((DEFAULT_PREFERENCES as any)[group]));
+    await this.save(next);
+    return next;
+  }
+
+  async resetAll(): Promise<LearningPreferences> {
+    const fresh = mergePreferences(null);
+    await this.save(fresh);
+    return fresh;
+  }
+
+  async exportRaw(): Promise<LearningPreferences> {
+    return this.get();
+  }
+
+  async importRaw(input: unknown): Promise<LearningPreferences> {
+    if (!input || typeof input !== 'object') {
+      throw new Error('导入的偏好数据不是对象。');
+    }
+    const merged = mergePreferences(input as Partial<LearningPreferences>);
+    await this.save(merged);
+    return merged;
   }
 }

@@ -68,8 +68,60 @@
       {
         "command": "claudeCoach.syncFromCodex",
         "title": "ClaudeCoach: 从 .codex 同步配置"
+      },
+      {
+        "command": "claudeCoach.openLectureViewer",
+        "title": "ClaudeCoach: 打开讲义阅读器",
+        "category": "ClaudeCoach"
+      },
+      {
+        "command": "claudeCoach.inlineEdit",
+        "title": "ClaudeCoach: 在此处问 AI",
+        "category": "ClaudeCoach"
+      },
+      {
+        "command": "claudeCoach.inlineRewrite",
+        "title": "ClaudeCoach: 重写选中段落",
+        "category": "ClaudeCoach"
+      },
+      {
+        "command": "claudeCoach.coachDoNotDisturb",
+        "title": "ClaudeCoach: 勿扰 1 小时",
+        "category": "ClaudeCoach"
+      },
+      {
+        "command": "claudeCoach.coachOpenPanel",
+        "title": "ClaudeCoach: 打开今日 Coach 面板",
+        "category": "ClaudeCoach"
       }
     ],
+    "keybindings": [
+      {
+        "command": "claudeCoach.inlineEdit",
+        "key": "alt+i",
+        "when": "editorTextFocus && editorLangId == markdown"
+      },
+      {
+        "command": "claudeCoach.openLectureViewer",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "view.claudeCoach.sidebar.visible"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "claudeCoach.inlineEdit",
+          "when": "editorTextFocus && editorLangId == markdown",
+          "group": "ClaudeCoach@1"
+        },
+        {
+          "command": "claudeCoach.inlineRewrite",
+          "when": "editorTextFocus && editorLangId == markdown && editorHasSelection",
+          "group": "ClaudeCoach@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "ClaudeCoach",
       "properties": {

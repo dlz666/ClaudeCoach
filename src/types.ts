@@ -247,6 +247,20 @@ export interface LatestDiagnosis {
 }
 
 // ===== Learning Preferences =====
+
+export type LessonDetailLevel = 'concise' | 'standard' | 'detailed';
+export type FeedbackTone = 'direct' | 'encouraging' | 'socratic';
+export type ExplanationStyle = 'example-first' | 'formula-first' | 'intuition-first' | 'rigor-first';
+export type MathSymbolStyle = 'english-standard' | 'chinese';
+export type RetrievalStrictness = 'strict' | 'inclusive';
+export type LectureViewerMode = 'lecture-webview' | 'native-preview' | 'split-both';
+export type LectureApplyMode = 'auto-apply' | 'preview-confirm';
+export type ToastLevel = 'always' | 'high-urgency-only' | 'never';
+export type SRVariantStrategy = 'ai-variant' | 'repeat-original' | 'ask-each-time';
+export type DailyBriefCacheStrategy = 'per-day' | 'always-fresh';
+export type DefaultTab = 'learn' | 'chat' | 'materials' | 'settings' | 'logs';
+export type StudyTimeSlot = 'morning' | 'afternoon' | 'evening';
+
 export interface LearningPreferences {
   difficulty: {
     global: 'beginner' | 'basic' | 'intermediate' | 'challenge';
@@ -258,12 +272,253 @@ export interface LearningPreferences {
     exercisesPerSession: number;
     speed: 'slow' | 'medium' | 'fast';
     reviewEveryNLessons: number;
+    /** 每周第几天为休息日（0=周日 ... 6=周六）。drift 检测时不计入。 */
+    restDays?: number[];
+    /** 学习时段偏好。Coach 在勾选的时段才主动提醒。 */
+    studyTimeSlots?: StudyTimeSlot[];
   };
   language: {
     content: 'zh' | 'en' | 'mixed';
     exercises: 'zh' | 'en' | 'mixed';
     codeComments: 'zh' | 'en';
   };
+  /** AI 风格与内容偏好。每一项都会接通到 prompt。 */
+  aiStyle?: {
+    lessonDetail?: LessonDetailLevel;
+    feedbackTone?: FeedbackTone;
+    explanationStyles?: ExplanationStyle[];
+    mathSymbol?: MathSymbolStyle;
+    /** 练习类型权重，三项加和 100。 */
+    exerciseTypeMix?: { multipleChoice: number; freeResponse: number; code: number };
+    includeProofs?: boolean;
+    includeHistory?: boolean;
+  };
+  /** 资料检索行为。 */
+  retrieval?: {
+    defaultGrounding?: boolean;
+    strictness?: RetrievalStrictness;
+    citeSources?: boolean;
+    maxExcerpts?: number;
+  };
+  /** UI 偏好。 */
+  ui?: {
+    fontSize?: number;
+    defaultTab?: DefaultTab;
+    expandCourseTree?: boolean;
+    showEmoji?: boolean;
+    theme?: 'auto' | 'high-contrast';
+  };
+  /** Coach 主动行为。 */
+  coach?: {
+    active?: boolean;
+    loops?: {
+      dailyBrief?: boolean;
+      idle?: boolean;
+      sr?: boolean;
+      metacog?: boolean;
+      drift?: boolean;
+    };
+    notifications?: {
+      toastLevel?: ToastLevel;
+      quietHoursStart?: string;
+      quietHoursEnd?: string;
+    };
+    throttle?: {
+      maxToastsPerHour?: number;
+      maxBannersPerHour?: number;
+    };
+    doNotDisturbUntil?: string | null;
+    idleThresholdMinutes?: number;
+    sr?: {
+      variantStrategy?: SRVariantStrategy;
+    };
+    dailyBrief?: {
+      cacheStrategy?: DailyBriefCacheStrategy;
+    };
+    lecture?: {
+      viewerMode?: LectureViewerMode;
+      applyMode?: LectureApplyMode;
+      syncSourceEditor?: boolean;
+      highlightChangesMs?: number;
+    };
+  };
+}
+
+// ===== Coach: 主动学习核心 schemas =====
+
+/** 学习计划：用户设定的目标 + AI 拆解的每日清单。 */
+export interface PlanMilestone {
+  topicId: string;
+  topicTitle: string;
+  expectedDoneBy: string; // ISO date
+  status: 'pending' | 'in-progress' | 'done' | 'skipped';
+}
+
+export interface LearningPlan {
+  schemaVersion: number;
+  subject: Subject;
+  /** 用户结构化输入 + 可选自由文本说明。 */
+  goal: {
+    targetEndDate: string;     // ISO
+    dailyMinutes: number;
+    extraNotes?: string;        // 用户自由补充
+  };
+  createdAt: string;
+  updatedAt: string;
+  milestones: PlanMilestone[];
+  /** 落后多少天才告警。 */
+  driftThresholdDays: number;
+  lastDriftCheckAt?: string | null;
+}
+
+/** 学习会话：本次打开扩展期间的活动汇总。 */
+export interface StudySession {
+  id: string;
+  startedAt: string;
+  endedAt?: string;
+  activeMillis: number;
+  lessonsTouched: string[];        // lessonId 列表
+  exercisesSubmitted: number;
+  trigger: 'webview-visible' | 'editor-open' | 'manual';
+  lastActivityAt: string;
+}
+
+/** 间隔重复队列项。复用 WrongQuestion 作为源头，元数据单存。 */
+export interface SpacedRepetitionItem {
+  id: string;
+  sourceWrongQuestionId: string;
+  subject: Subject;
+  topicId: string;
+  lessonId: string;
+  repetitionCount: number;
+  easeFactor: number;
+  intervalDays: number;
+  nextDueAt: string;
+  lastReviewedAt?: string | null;
+  /** 上次重测的质量（0=完全错，5=完美）。映射自 score。 */
+  lastQuality?: number;
+}
+
+export interface SpacedRepetitionQueue {
+  schemaVersion: number;
+  subject: Subject;
+  items: SpacedRepetitionItem[];
+  updatedAt: string;
+}
+
+/** Coach 候选建议。生命周期在 Suggestion 池内管理。 */
+export type CoachSuggestionKind =
+  | 'daily-brief'
+  | 'idle-nudge'
+  | 'sr-due'
+  | 'metacog-question'
+  | 'drift-alert'
+  | 'related-lesson'
+  | 'streak-up'
+  | 'streak-down'
+  | 'next-step';
+
+export type CoachSuggestionUrgency = 'low' | 'medium' | 'high';
+
+export interface CoachSuggestionAction {
+  label: string;
+  command: string;
+  args?: Record<string, unknown>;
+}
+
+export interface CoachSuggestion {
+  id: string;
+  kind: CoachSuggestionKind;
+  subject?: Subject;
+  topicId?: string;
+  lessonId?: string;
+  createdAt: string;
+  expiresAt?: string;
+  urgency: CoachSuggestionUrgency;
+  title: string;
+  body: string;
+  actions: CoachSuggestionAction[];
+  /** 去重键。同 dedupKey 的旧建议会被新建议替换或合并。 */
+  dedupKey: string;
+  dispatchedAt?: string | null;
+  dismissedAt?: string | null;
+  actedAt?: string | null;
+}
+
+/** 用户活动事件（轻量）。 */
+export type LearnerActivityKind =
+  | 'lesson-open'
+  | 'lecture-render'
+  | 'inline-suggest'
+  | 'inline-apply'
+  | 'exercise-open'
+  | 'exercise-submit'
+  | 'webview-visible'
+  | 'webview-hidden'
+  | 'editor-typing'
+  | 'idle-detected'
+  | 'coach-suggestion-dispatched'
+  | 'coach-suggestion-acted'
+  | 'coach-suggestion-dismissed';
+
+export interface LearnerActivityEntry {
+  at: string;
+  kind: LearnerActivityKind;
+  subject?: Subject;
+  topicId?: string;
+  lessonId?: string;
+  meta?: Record<string, unknown>;
+}
+
+/** Daily brief 缓存条目。 */
+export interface DailyBriefEntry {
+  dateKey: string;       // YYYY-MM-DD
+  subject?: Subject;
+  generatedAt: string;
+  yesterdayRecap: string;
+  todaySuggestions: string[];
+  srDueCount: number;
+  planProgress?: {
+    completedMilestones: number;
+    totalMilestones: number;
+    daysAhead: number;   // 正数=领先，负数=落后
+  };
+}
+
+export interface DailyBriefCache {
+  schemaVersion: number;
+  entries: DailyBriefEntry[];
+}
+
+/** Inline 编辑：webview 与后端之间的消息载荷。 */
+export interface InlineSuggestRequest {
+  filePath: string;
+  selectionText: string;
+  sourceLineStart: number;
+  sourceLineEnd: number;
+  instruction: string;
+  applyMode: LectureApplyMode;
+  /** 由前端生成的 turn id，用于关联 response。 */
+  turnId: string;
+}
+
+export interface InlineSuggestResult {
+  turnId: string;
+  status: 'preview' | 'applied' | 'failed';
+  suggestion?: string;
+  errorMessage?: string;
+  /** auto-apply 模式时返回写回后的精确字符 range，便于前端高亮。 */
+  appliedRange?: { startLine: number; endLine: number };
+}
+
+export interface InlineApplyRequest {
+  turnId: string;
+  filePath: string;
+  selectionText: string;
+  sourceLineStart: number;
+  sourceLineEnd: number;
+  /** 用户最终采纳的内容（可能是 AI 直出，也可能用户编辑过）。 */
+  finalContent: string;
 }
 
 // ===== Materials =====
@@ -504,7 +759,38 @@ export type SidebarCommand =
   | { type: 'getCourses' }
   | { type: 'getMaterials' }
   | { type: 'importAIProfile'; source: AIImportSource }
-  | { type: 'getResolvedAIConfig' };
+  | { type: 'getResolvedAIConfig' }
+  // ===== AI Profile 完整编辑（Phase 2C） =====
+  | { type: 'listAIProfiles' }
+  | { type: 'saveAIProfile'; profile: Partial<AIProfile> & { name: string; provider: APIProvider; baseUrl: string; anthropicBaseUrl: string; model: string } }
+  | { type: 'deleteAIProfile'; profileId: string }
+  | { type: 'duplicateAIProfile'; profileId: string }
+  | { type: 'activateAIProfile'; profileId: string }
+  | { type: 'saveWorkspaceAIOverride'; override: AIWorkspaceOverride }
+  | { type: 'testAIProfile'; profile?: Partial<AIProfile> }
+  | { type: 'exportAIProfile'; profileId: string; includeToken?: boolean }
+  // ===== 数据管理（Phase 2D） =====
+  | { type: 'clearWrongQuestions'; subject: Subject }
+  | { type: 'clearDiagnosisHistory'; subject: Subject }
+  | { type: 'resetCourseProgress'; subject: Subject }
+  | { type: 'exportLearningData' }
+  | { type: 'importLearningData' }
+  // ===== Inline 内联编辑（Phase 1） =====
+  | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
+  | { type: 'inlineSuggest'; request: InlineSuggestRequest }
+  | { type: 'inlineApply'; request: InlineApplyRequest }
+  | { type: 'inlineDismiss'; turnId: string }
+  // ===== Coach（Phase 2-3） =====
+  | { type: 'getDailyBrief'; subject?: Subject; force?: boolean }
+  | { type: 'coachAction'; suggestionId: string }
+  | { type: 'coachDismissSuggestion'; suggestionId: string }
+  | { type: 'setDoNotDisturb'; durationMinutes: number | null }
+  | { type: 'getLearningPlan'; subject: Subject }
+  | { type: 'setLearningPlan'; plan: Omit<LearningPlan, 'schemaVersion' | 'createdAt' | 'updatedAt' | 'milestones' | 'lastDriftCheckAt'> & { autoDecompose?: boolean } }
+  | { type: 'updateLearningPlanMilestones'; subject: Subject; milestones: PlanMilestone[] }
+  | { type: 'metacogAnswer'; subject: Subject; topicId: string; lessonId: string; question: string; answer: string }
+  | { type: 'getCoachSuggestions' }
+  | { type: 'getActivityLog' };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
@@ -523,6 +809,21 @@ export type SidebarResponse =
   | { type: 'gradingProgress'; current: number; total: number; lessonTitle?: string }
   | { type: 'autoDiagnosisRan'; subject: Subject; reason: AdaptiveTriggerReason }
   | { type: 'groundingSources'; turnId: string; sources: GroundingSource[] }
+  // ===== Inline 内联编辑响应 =====
+  | { type: 'inlineSuggestResult'; result: InlineSuggestResult }
+  | { type: 'inlineApplied'; turnId: string; appliedRange?: { startLine: number; endLine: number } }
+  | { type: 'lectureFileChanged'; filePath: string; content: string }
+  // ===== Coach 响应 =====
+  | { type: 'dailyBrief'; data: DailyBriefEntry }
+  | { type: 'coachSuggestions'; data: CoachSuggestion[] }
+  | { type: 'activityLog'; data: LearnerActivityEntry[] }
+  | { type: 'learningPlan'; subject: Subject; data: LearningPlan | null }
+  | { type: 'doNotDisturbState'; until: string | null }
+  | { type: 'coachStreakUpdate'; subject: Subject; streak: number; direction: 'up' | 'down' | 'reset' }
+  // ===== AI Profile 响应 =====
+  | { type: 'aiProfilesList'; data: AIProfile[]; activeProfileId: string }
+  // ===== 数据管理响应 =====
+  | { type: 'dataOpResult'; operation: string; ok: boolean; message?: string }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };

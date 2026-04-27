@@ -252,6 +252,53 @@ export class StoragePathResolver {
     return path.join(this.courseSubjectDir(subject), 'adaptive-trigger.json');
   }
 
+  /** Per-subject 间隔重复队列（SR）。 */
+  spacedRepetitionQueuePath(subject: Subject): string {
+    return path.join(this.courseSubjectDir(subject), 'sr-queue.json');
+  }
+
+  /** Coach 全局目录：plans / sessions / suggestions / activity / brief cache。 */
+  get coachDir(): string {
+    return path.join(this.appDir, 'coach');
+  }
+
+  get coachPlansDir(): string {
+    return path.join(this.coachDir, 'plans');
+  }
+
+  coachPlanPath(subject: Subject): string {
+    return path.join(this.coachPlansDir, `${sanitizeSegment(subject, 'subject')}.json`);
+  }
+
+  get coachSessionsDir(): string {
+    return path.join(this.coachDir, 'sessions');
+  }
+
+  coachSessionLogPath(dateKey: string): string {
+    return path.join(this.coachSessionsDir, `${dateKey}.jsonl`);
+  }
+
+  get coachSuggestionsPath(): string {
+    return path.join(this.coachDir, 'suggestions.jsonl');
+  }
+
+  get coachActivityDir(): string {
+    return path.join(this.coachDir, 'activity');
+  }
+
+  coachActivityLogPath(dateKey: string): string {
+    return path.join(this.coachActivityDir, `${dateKey}.jsonl`);
+  }
+
+  get coachDailyBriefCachePath(): string {
+    return path.join(this.coachDir, 'daily-brief-cache.json');
+  }
+
+  /** Metacognition 答题记录（用户对追问的回答），按 subject 分文件 */
+  coachMetacogPath(subject: Subject): string {
+    return path.join(this.coachDir, 'metacog', `${sanitizeSegment(subject, 'subject')}.jsonl`);
+  }
+
   courseTopicsDir(subject: Subject): string {
     return path.join(this.courseSubjectDir(subject), 'topics');
   }
