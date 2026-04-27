@@ -183,10 +183,11 @@ export class ContentGenerator {
     const messages = exercisePrompt(subject, lessonTitle, count, adaptiveDifficulty, enrichedCtx);
     const exercises = await this.ai.chatJson<Exercise[]>(messages);
 
-    // Assign lesson IDs
+    // Assign lesson IDs. 强制按位置规范化为 `ex-${i+1}`，不保留 AI 可能给的 `ex-01` 等格式，
+    // 否则前端"## 第 N 题"解析出的 `ex-N` 与后端 id 对不上，submitAllAnswers 会全部跳过。
     const sessionId = await this.courseManager.getDeterministicSessionId(subject, topicId, lessonId);
     exercises.forEach((ex, i) => {
-      ex.id = ex.id || `ex-${i + 1}`;
+      ex.id = `ex-${i + 1}`;
       ex.lessonId = sessionId;
     });
 

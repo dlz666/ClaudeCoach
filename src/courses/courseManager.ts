@@ -507,12 +507,30 @@ export class CourseManager {
     return result;
   }
 
+  /** 一次性懒迁移：把旧 `prompt.md` 重命名为 `练习.md`。安静失败。 */
+  async migrateExerciseMarkdownNameIfNeeded(subject: Subject, topicId: string, lessonId: string): Promise<void> {
+    const newPath = this.paths.courseExercisePromptPath(subject, topicId, lessonId);
+    const legacyPath = this.paths.legacyCourseExercisePromptPath(subject, topicId, lessonId);
+    if (await fileExists(newPath)) {
+      return;
+    }
+    if (!await fileExists(legacyPath)) {
+      return;
+    }
+    try {
+      await fs.rename(legacyPath, newPath);
+    } catch {
+      // 静默失败：迁移失败时旧文件仍可用，不阻断功能。
+    }
+  }
+
   private async resolveLessonStatus(
     subject: Subject,
     topicId: string,
     lessonId: string,
     currentStatus?: LessonMeta['status'],
   ): Promise<LessonMeta['status']> {
+    await this.migrateExerciseMarkdownNameIfNeeded(subject, topicId, lessonId);
     const lessonPath = this.getLessonPath(subject, topicId, lessonId);
     const exercisePath = this.getExercisePath(subject, topicId, lessonId);
     const [lessonExists, exerciseExists] = await Promise.all([

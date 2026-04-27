@@ -874,6 +874,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return Array.isArray(exercises) ? exercises : [];
   }
 
+  /**
+   * 容错匹配：兼容旧练习中 AI 给的 `ex-01` 格式与新 webview 解析出的 `ex-1`。
+   * 优先严格相等，其次按尾数字位置（ex-N → 第 N 道），再按尾数字相等（ex-1 ↔ ex-01）。
+   */
+  private _matchExerciseLoosely(exercises: Exercise[], submissionId: string): Exercise | undefined {
+    const strict = exercises.find((item) => item.id === submissionId);
+    if (strict) return strict;
+
+    const numMatch = String(submissionId).match(/(\d+)\s*$/);
+    if (!numMatch) return undefined;
+    const num = Number.parseInt(numMatch[1], 10);
+    if (!Number.isFinite(num)) return undefined;
+
+    if (num >= 1 && num <= exercises.length) {
+      return exercises[num - 1];
+    }
+    return exercises.find((item) => {
+      const itemMatch = String(item.id).match(/(\d+)\s*$/);
+      if (!itemMatch) return false;
+      return Number.parseInt(itemMatch[1], 10) === num;
+    });
+  }
+
   private async _gradeOneAnswer(args: {
     subject: Subject;
     topicId: string;
@@ -1259,6 +1282,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'openOrGenerateExercises':
         case 'generateExercises': {
           const expectedSessionId = await this.courseManager.getDeterministicSessionId(msg.subject, msg.topicId, msg.lessonId);
+          await this.courseManager.migrateExerciseMarkdownNameIfNeeded(msg.subject, msg.topicId, expectedSessionId);
           const expectedPath = this.courseManager.getExercisePath(msg.subject, msg.topicId, expectedSessionId);
 
           if (msg.type === 'openOrGenerateExercises') {
@@ -1341,8 +1365,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
 
           this._startTask(`批改 ${lessonTitle}`, async () => {
+            await this.courseManager.migrateExerciseMarkdownNameIfNeeded(subject, topicId, lessonId);
             const exercises = await this._loadLessonExercises(subject, topicId, lessonId);
-            const exercise = exercises.find((item) => item.id === exerciseId);
+            const exercise = this._matchExerciseLoosely(exercises, exerciseId);
             if (!exercise) {
               throw new Error(`未在练习 JSON 中找到 ${exerciseId}`);
             }
@@ -1376,6 +1401,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
 
           this._startTask(`批改 ${lessonTitle}`, async () => {
+            await this.courseManager.migrateExerciseMarkdownNameIfNeeded(subject, topicId, lessonId);
             const exercises = await this._loadLessonExercises(subject, topicId, lessonId);
             const total = valid.length;
             let succeeded = 0;
@@ -1384,9 +1410,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             for (let index = 0; index < valid.length; index += 1) {
               const submission = valid[index];
-              const exercise = exercises.find((item) => item.id === submission.exerciseId);
+              const exercise = this._matchExerciseLoosely(exercises, submission.exerciseId);
               if (!exercise) {
-                this._post({ type: 'log', message: `跳过未匹配的练习 ${submission.exerciseId}`, level: 'warn' });
+                this._post({ type: 'log', message: `跳过未匹配的练习 ${submission.exerciseId}（共 ${exercises.length} 道）`, level: 'warn' });
                 continue;
               }
               this._view?.webview.postMessage({

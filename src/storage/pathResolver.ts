@@ -281,6 +281,11 @@ export class StoragePathResolver {
   }
 
   courseExercisePromptPath(subject: Subject, topicId: string, lessonId: string): string {
+    return path.join(this.courseExerciseSessionDir(subject, topicId, lessonId), '练习.md');
+  }
+
+  /** 旧文件名 prompt.md，用于一次性懒迁移到 `练习.md`。 */
+  legacyCourseExercisePromptPath(subject: Subject, topicId: string, lessonId: string): string {
     return path.join(this.courseExerciseSessionDir(subject, topicId, lessonId), 'prompt.md');
   }
 
