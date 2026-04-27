@@ -276,6 +276,10 @@ export class AdaptiveEngine {
       gradesSinceLastDiagnosis: 0,
       lastDiagnosisAt: null,
       lastAutoRunAt: null,
+      streak: 0,
+      streakDirection: null,
+      lastStreakSuggestionAt: null,
+      weaknessTagOccurrences: {},
     };
   }
 
@@ -290,9 +294,45 @@ export class AdaptiveEngine {
           : 0,
         lastDiagnosisAt: stored.lastDiagnosisAt ?? null,
         lastAutoRunAt: stored.lastAutoRunAt ?? null,
+        streak: Number.isFinite(stored.streak) ? stored.streak : 0,
+        streakDirection: stored.streakDirection ?? null,
+        lastStreakSuggestionAt: stored.lastStreakSuggestionAt ?? null,
+        weaknessTagOccurrences: stored.weaknessTagOccurrences ?? {},
       };
     }
     return this.buildEmptyTriggerState(subject);
+  }
+
+  /**
+   * 更新连胜/连败计数。
+   * @param subject 学科
+   * @param direction 'up' = 这次答对（高分），'down' = 这次答错（低分），'reset' = 重置
+   */
+  async updateStreak(subject: Subject, direction: 'up' | 'down' | 'reset'): Promise<{ count: number; direction: 'up' | 'down' | null }> {
+    const state = await this.getTriggerState(subject);
+    if (direction === 'reset') {
+      state.streak = 0;
+      state.streakDirection = null;
+    } else if (state.streakDirection === direction) {
+      state.streak = (state.streak ?? 0) + 1;
+    } else {
+      state.streak = 1;
+      state.streakDirection = direction;
+    }
+    await this.saveTriggerState(subject, state);
+    return { count: state.streak ?? 0, direction: state.streakDirection ?? null };
+  }
+
+  /** 记录一个 weakness tag 出现在某 topicId。返回该 tag 累计涉及多少个不同 topic。 */
+  async recordWeaknessTagOccurrence(subject: Subject, tag: string, topicId: string): Promise<number> {
+    const state = await this.getTriggerState(subject);
+    const map = state.weaknessTagOccurrences ?? {};
+    const list = new Set(map[tag] ?? []);
+    list.add(topicId);
+    map[tag] = Array.from(list);
+    state.weaknessTagOccurrences = map;
+    await this.saveTriggerState(subject, state);
+    return list.size;
   }
 
   private async saveTriggerState(subject: Subject, state: AdaptiveTriggerState): Promise<void> {

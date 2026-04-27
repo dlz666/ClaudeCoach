@@ -685,13 +685,20 @@ export interface WrongQuestionBook {
   updatedAt: string;
 }
 
-/** 自动诊断触发器状态。 */
+/** 自动诊断触发器状态 + 实时连胜/连败追踪。 */
 export interface AdaptiveTriggerState {
   schemaVersion: number;
   subject: Subject;
   gradesSinceLastDiagnosis: number;
   lastDiagnosisAt: string | null;
   lastAutoRunAt: string | null;
+  /** 同向连胜/连败计数。当前方向由 streakDirection 决定。 */
+  streak?: number;
+  streakDirection?: 'up' | 'down' | null;
+  /** 上次连胜/连败被推送 suggestion 的时间（避免重复推）。 */
+  lastStreakSuggestionAt?: string | null;
+  /** 跨课时 weakness tag 出现次数缓存（用于 related-lesson suggestion）。 */
+  weaknessTagOccurrences?: Record<string, string[]>; // tag → topicId 列表
 }
 
 export type AdaptiveTriggerReason =
