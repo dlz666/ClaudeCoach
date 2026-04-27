@@ -3,6 +3,21 @@ import { getAIConfig, getDataDirectory } from './config';
 import { SidebarProvider } from './sidebar/SidebarProvider';
 import { ensureDir } from './utils/fileSystem';
 import { AIProfileManager } from './ai/profileManager';
+import { AIClient } from './ai/client';
+import { PreferencesStore } from './progress/preferencesStore';
+import { ProgressStore } from './progress/progressStore';
+import { AdaptiveEngine } from './progress/adaptiveEngine';
+import { CourseProfileStore } from './progress/courseProfileStore';
+import { LectureWebviewProvider } from './coach/lectureWebviewProvider';
+import { registerInlineEditCommands } from './coach/inlineEdit';
+import { CoachAgent } from './coach/coachAgent';
+import { CoachEventBus } from './coach/coachEventBus';
+import { CoachStateStore } from './coach/coachState';
+import { SuggestionStore } from './coach/suggestionStore';
+import { SessionLogger } from './coach/sessionLogger';
+import { LearningPlanStore } from './coach/learningPlanStore';
+import { CourseManager } from './courses/courseManager';
+import { getStoragePathResolver } from './storage/pathResolver';
 
 async function revealAIConfigCard(sidebarProvider: SidebarProvider): Promise<void> {
   await vscode.commands.executeCommand('workbench.view.extension.claude-coach');
@@ -17,12 +32,37 @@ export async function activate(context: vscode.ExtensionContext) {
   const aiProfiles = new AIProfileManager();
   await aiProfiles.getState();
 
+  // ===== 共享 store / engine =====
+  const ai = new AIClient();
+  const preferencesStore = new PreferencesStore();
+  const progressStore = new ProgressStore();
+  const adaptiveEngine = new AdaptiveEngine();
+  const courseProfileStore = new CourseProfileStore();
+  const courseManager = new CourseManager();
+
+  // ===== Coach 框架 =====
+  const paths = getStoragePathResolver();
+  const coachEventBus = new CoachEventBus();
+  const coachStateStore = new CoachStateStore(paths);
+  const suggestionStore = new SuggestionStore(paths);
+  const sessionLogger = new SessionLogger(paths, coachEventBus);
+  const learningPlanStore = new LearningPlanStore(paths);
+
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusBar);
 
-  const sidebarProvider = new SidebarProvider(context.extensionUri, aiProfiles, () => {
-    void refreshStatusBar();
-  });
+  const sidebarProvider = new SidebarProvider(
+    context.extensionUri,
+    aiProfiles,
+    () => { void refreshStatusBar(); },
+    {
+      coachEventBus,
+      coachStateStore,
+      suggestionStore,
+      sessionLogger,
+      learningPlanStore,
+    },
+  );
 
   const refreshStatusBar = async () => {
     const resolved = await aiProfiles.resolveConfig();
@@ -39,6 +79,63 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBar.command = 'claudeCoach.revealAIConfigCard';
     statusBar.show();
   };
+
+  // ===== CoachAgent 启动 =====
+  const coachAgent = new CoachAgent({
+    bus: coachEventBus,
+    prefs: preferencesStore,
+    state: coachStateStore,
+    suggestions: suggestionStore,
+    sessions: sessionLogger,
+    plans: learningPlanStore,
+    courseManager,
+    courseProfileStore,
+    adaptiveEngine,
+    ai,
+    postToSidebar: (msg) => sidebarProvider.postMessage(msg),
+    showToast: (level, message) => {
+      if (level === 'error') vscode.window.showErrorMessage(message);
+      else if (level === 'warn') vscode.window.showWarningMessage(message);
+      else vscode.window.showInformationMessage(message);
+    },
+  });
+  coachAgent.start();
+  sidebarProvider.attachCoachAgent(coachAgent);
+  context.subscriptions.push(coachAgent);
+
+  // ===== 讲义自渲染 webview provider =====
+  LectureWebviewProvider.register(context, context.extensionUri, {
+    ai,
+    preferencesStore,
+    progressStore,
+    adaptiveEngine,
+    courseProfileStore,
+  });
+
+  // ===== Inline 编辑命令（Alt+I / 右键 / CodeLens） =====
+  for (const disposable of registerInlineEditCommands(
+    context,
+    ai,
+    preferencesStore,
+    courseProfileStore,
+    progressStore,
+    adaptiveEngine,
+  )) {
+    context.subscriptions.push(disposable);
+  }
+
+  // ===== 编辑器活动监听（接通 idle 检测） =====
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      const fsPath = event.document.uri.fsPath;
+      if (!fsPath.toLowerCase().endsWith('.md')) return;
+      coachEventBus.emit({
+        kind: 'editor-typing',
+        at: new Date().toISOString(),
+        meta: { filePath: fsPath, changes: event.contentChanges.length },
+      });
+    }),
+  );
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('claudeCoach.sidebar', sidebarProvider, {
@@ -70,6 +167,14 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('claudeCoach.importMaterial', () => {
       sidebarProvider.sendCommand({ type: 'triggerImportMaterial' });
+    }),
+    vscode.commands.registerCommand('claudeCoach.coachOpenPanel', async () => {
+      await vscode.commands.executeCommand('workbench.view.extension.claude-coach');
+      sidebarProvider.sendCommand({ type: 'activateTab', tab: 'learn', focus: 'coach' });
+    }),
+    vscode.commands.registerCommand('claudeCoach.coachDoNotDisturb', async () => {
+      await coachStateStore.setDoNotDisturb(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+      vscode.window.showInformationMessage('ClaudeCoach: 已勿扰 1 小时。');
     }),
     vscode.commands.registerCommand('claudeCoach.syncFromClaude', async () => {
       try {

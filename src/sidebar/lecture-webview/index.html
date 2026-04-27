@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{katexStyleUri}}" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <title>📖 讲义阅读器</title>
+</head>
+<body>
+  <header class="lecture-header">
+    <div class="lecture-meta">
+      <div class="lecture-topic" id="lectureTopic"></div>
+      <h1 class="lecture-title" id="lectureTitle">加载中…</h1>
+    </div>
+    <div class="lecture-actions">
+      <span class="lecture-status" id="lectureStatus"></span>
+      <button class="btn-mini" id="btnReload" title="重新加载">↻</button>
+    </div>
+  </header>
+  <main id="lectureBody" class="lecture-body markdown-body"></main>
+
+  <div id="chip" class="lecture-chip" hidden>💬</div>
+  <div id="popover" class="lecture-comment-popover" hidden></div>
+  <div id="toastContainer" class="lecture-toast-container"></div>
+
+  <script nonce="{{nonce}}" src="{{markdownItUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexScriptUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexAutoRenderUri}}"></script>
+  <script nonce="{{nonce}}" src="{{renderHelpersUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

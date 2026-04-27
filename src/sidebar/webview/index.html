@@ -16,6 +16,21 @@
   </nav>
 
   <div id="tab-learn" class="tab-content active">
+    <section class="panel coach-card hidden" id="coach-today-section">
+      <div class="panel-header">
+        <div>
+          <h3>🤖 今日 Coach</h3>
+          <p class="section-subtitle" id="coach-brief-subtitle">加载中...</p>
+        </div>
+        <div class="coach-card-actions">
+          <button class="btn ghost small" id="btn-coach-refresh-brief" title="刷新今日建议" type="button">↻</button>
+          <button class="btn ghost small" id="btn-coach-dnd" title="勿扰 1 小时" type="button">🔕</button>
+        </div>
+      </div>
+      <div id="coach-brief-body" class="muted">点击上方 ↻ 生成今日建议。</div>
+      <div id="coach-suggestions-list"></div>
+    </section>
+
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -75,10 +90,10 @@
       </div>
     </section>
 
-    <section class="panel hidden" id="wrong-questions-section">
+    <section class="panel wrong-questions-panel hidden" id="wrong-questions-section">
       <div class="panel-header">
         <div>
-          <h3>错题本</h3>
+          <h3>📒 错题本</h3>
           <p class="section-subtitle">未掌握的题目集中在这里。可以一键基于错题再出一组练习。</p>
         </div>
         <button class="btn ghost small" id="btn-refresh-wrong-questions">刷新</button>
@@ -87,6 +102,21 @@
         <button class="btn small" id="btn-practice-wrong-questions">基于错题再出 5 题</button>
       </div>
       <div id="wrong-questions-list" class="muted">暂无错题</div>
+    </section>
+
+    <section class="panel learning-plan-panel hidden" id="learning-plan-section">
+      <div class="panel-header">
+        <div>
+          <h3>📅 学习计划</h3>
+          <p class="section-subtitle">设定目标 → AI 自动拆解每日里程碑 → 跟踪偏差</p>
+        </div>
+        <button class="btn ghost small" id="btn-edit-plan" type="button">编辑计划</button>
+      </div>
+      <div id="plan-progress-bar" class="plan-progress-bar hidden">
+        <div id="plan-progress-fill" class="plan-progress-fill" style="width:0%"></div>
+      </div>
+      <div id="plan-status" class="muted">本课程暂无学习计划</div>
+      <div id="plan-milestones-list"></div>
     </section>
 
     <section class="panel">
@@ -147,115 +177,598 @@
   </div>
 
   <div id="tab-settings" class="tab-content">
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <h3>学习偏好</h3>
-          <p class="section-subtitle">保留现有学习偏好设置，AI 配置改为只读展示。</p>
+    <input type="text" class="settings-search" id="settings-search" placeholder="搜索设置...">
+
+    <details class="settings-group" id="group-pace" open>
+      <summary>
+        <span>学习节奏与目标</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="pace">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label for="pref-difficulty">整体难度</label>
+          <select id="pref-difficulty">
+            <option value="beginner">入门</option>
+            <option value="basic">基础</option>
+            <option value="intermediate">进阶</option>
+            <option value="challenge">挑战</option>
+          </select>
         </div>
-      </div>
 
-      <label for="pref-difficulty">整体难度</label>
-      <select id="pref-difficulty">
-        <option value="beginner">入门</option>
-        <option value="basic">基础</option>
-        <option value="intermediate">进阶</option>
-        <option value="challenge">挑战</option>
-      </select>
-
-      <label>练习难度分布</label>
-      <div class="range-group">
-        <span>简单 <input type="number" id="mix-easy" value="30" min="0" max="100" class="num-input">%</span>
-        <span>中等 <input type="number" id="mix-medium" value="50" min="0" max="100" class="num-input">%</span>
-        <span>困难 <input type="number" id="mix-hard" value="20" min="0" max="100" class="num-input">%</span>
-      </div>
-
-      <label for="pref-exercises">每次练习数量</label>
-      <select id="pref-exercises">
-        <option value="3">3 题</option>
-        <option value="5">5 题</option>
-        <option value="10">10 题</option>
-      </select>
-
-      <label for="pref-speed">课程推进速度</label>
-      <select id="pref-speed">
-        <option value="slow">慢速</option>
-        <option value="medium">中速</option>
-        <option value="fast">快速</option>
-      </select>
-
-      <label for="pref-review">每学完几课复习一次</label>
-      <input type="number" id="pref-review" value="3" min="1" max="10">
-
-      <label for="pref-lang-content">讲义语言</label>
-      <select id="pref-lang-content">
-        <option value="zh">中文</option>
-        <option value="en">英文</option>
-        <option value="mixed">中英混合</option>
-      </select>
-
-      <label for="pref-lang-code">代码注释语言</label>
-      <select id="pref-lang-code">
-        <option value="zh">中文</option>
-        <option value="en">英文</option>
-      </select>
-
-      <button class="btn primary" id="btn-save-prefs">保存学习偏好</button>
-    </section>
-
-    <section class="panel resolved-card" id="ai-config-center">
-      <div class="panel-header">
-        <div>
-          <h3>当前 AI 模型</h3>
-          <p class="section-subtitle">查看当前生效模型配置。</p>
+        <div class="setting-row">
+          <label for="pref-daily-goal">每日学习目标分钟数</label>
+          <div class="slider-row">
+            <input type="range" id="pref-daily-goal" min="10" max="240" value="45">
+            <input type="number" id="pref-daily-goal-num" min="10" max="240" value="45" class="num-input">
+            <span class="hint">分钟</span>
+          </div>
         </div>
-        <div class="custom-dropdown ai-change-dropdown">
-          <button class="btn small" id="btn-change-ai-config" type="button">更换</button>
-          <div class="dropdown-menu hidden" id="ai-change-menu">
-            <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
-            <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
-            <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
-            <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
+
+        <div class="setting-row">
+          <label>学习时段</label>
+          <div class="check-row">
+            <label class="inline-check"><input type="checkbox" data-study-slot="morning"> 早晨</label>
+            <label class="inline-check"><input type="checkbox" data-study-slot="afternoon"> 午后</label>
+            <label class="inline-check"><input type="checkbox" data-study-slot="evening"> 晚上</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>周休息日</label>
+          <div class="check-row" id="rest-days-row">
+            <label class="inline-check"><input type="checkbox" data-rest-day="0"> 周日</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="1"> 周一</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="2"> 周二</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="3"> 周三</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="4"> 周四</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="5"> 周五</label>
+            <label class="inline-check"><input type="checkbox" data-rest-day="6"> 周六</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>练习难度分布（合计应为 100）</label>
+          <div class="range-group">
+            <span>简单 <input type="number" id="mix-easy" value="30" min="0" max="100" class="num-input">%</span>
+            <span>中等 <input type="number" id="mix-medium" value="50" min="0" max="100" class="num-input">%</span>
+            <span>困难 <input type="number" id="mix-hard" value="20" min="0" max="100" class="num-input">%</span>
+          </div>
+          <div id="mix-sum-hint" class="hint">当前合计：100%</div>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-exercises">每次练习数量</label>
+          <select id="pref-exercises">
+            <option value="3">3 题</option>
+            <option value="5">5 题</option>
+            <option value="10">10 题</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-speed">课程推进速度</label>
+          <select id="pref-speed">
+            <option value="slow">慢速</option>
+            <option value="medium">中速</option>
+            <option value="fast">快速</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-review">每学完几课复习一次</label>
+          <input type="number" id="pref-review" value="3" min="1" max="10">
+        </div>
+
+        <div class="setting-row">
+          <label>每学科难度覆盖</label>
+          <div id="per-subject-difficulty-list" class="per-subject-list">
+            <p class="hint">尚无已知学科。生成课程后会出现在这里。</p>
           </div>
         </div>
       </div>
-      <div class="card-subtitle" id="resolved-config-source">加载中...</div>
-      <div class="resolved-main">
-        <div class="resolved-name" id="resolved-config-name">-</div>
-      </div>
-      <div class="resolved-summary-grid">
-        <div class="stat-card">
-          <span class="stat-label">Provider</span>
-          <span class="stat-value" id="resolved-config-provider">-</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">来源</span>
-          <span class="stat-value" id="resolved-config-origin">-</span>
-        </div>
-        <div class="stat-card stat-card-wide">
-          <span class="stat-label">Base URL</span>
-          <span class="stat-value mono" id="resolved-config-url">-</span>
-        </div>
-      </div>
-      <div class="hidden">
-        <span id="resolved-warning-pills"></span>
-        <span id="resolved-config-meta"></span>
-        <span id="resolved-config-context"></span>
-        <span id="resolved-config-max-tokens"></span>
-        <span id="resolved-config-history-budget"></span>
-      </div>
-    </section>
+    </details>
 
-    <section class="panel">
-      <div class="panel-header">
-        <div>
-          <h3>数据目录</h3>
-          <p class="section-subtitle">讲义、练习和学习记录都会保存在这里。</p>
+    <details class="settings-group" id="group-ai-style">
+      <summary>
+        <span>AI 风格与内容</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="aiStyle">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label>讲义详尽度</label>
+          <div class="check-row" id="ai-detail-level">
+            <label class="inline-check"><input type="radio" name="ai-detail-level" value="concise"> 简洁</label>
+            <label class="inline-check"><input type="radio" name="ai-detail-level" value="standard" checked> 标准</label>
+            <label class="inline-check"><input type="radio" name="ai-detail-level" value="detailed"> 详尽</label>
+          </div>
         </div>
-        <button class="btn ghost small" id="btn-open-data-dir">在文件管理器中打开</button>
+
+        <div class="setting-row">
+          <label>反馈口吻</label>
+          <div class="check-row" id="ai-feedback-tone">
+            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="direct"> 直接</label>
+            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="encouraging" checked> 鼓励</label>
+            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="socratic"> 苏格拉底式</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>解释风格（可多选）</label>
+          <div class="check-row">
+            <label class="inline-check"><input type="checkbox" data-explain-style="visual"> 可视化</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="analogy"> 类比</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="formal"> 严格形式</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="example-first"> 例题先行</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>数学符号习惯</label>
+          <div class="check-row" id="ai-math-style">
+            <label class="inline-check"><input type="radio" name="ai-math-style" value="latex" checked> LaTeX</label>
+            <label class="inline-check"><input type="radio" name="ai-math-style" value="plain"> 普通文本</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>练习类型分布（合计应为 100）</label>
+          <div class="range-group">
+            <span>概念 <input type="number" id="ex-type-concept" value="40" min="0" max="100" class="num-input">%</span>
+            <span>计算 <input type="number" id="ex-type-calc" value="40" min="0" max="100" class="num-input">%</span>
+            <span>证明 <input type="number" id="ex-type-proof" value="20" min="0" max="100" class="num-input">%</span>
+          </div>
+          <div id="ex-type-sum-hint" class="hint">当前合计：100%</div>
+        </div>
+
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ai-include-proofs"> 包含证明</label>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ai-include-history"> 包含历史背景</label>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-lang-content">讲义语言</label>
+          <select id="pref-lang-content">
+            <option value="zh">中文</option>
+            <option value="en">英文</option>
+            <option value="mixed">中英混合</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-lang-exercises">练习语言</label>
+          <select id="pref-lang-exercises">
+            <option value="zh">中文</option>
+            <option value="en">英文</option>
+            <option value="mixed">中英混合</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="pref-lang-code">代码注释语言</label>
+          <select id="pref-lang-code">
+            <option value="zh">中文</option>
+            <option value="en">英文</option>
+          </select>
+        </div>
       </div>
-      <div id="data-dir-path" class="data-dir-path muted">加载中...</div>
-    </section>
+    </details>
+
+    <details class="settings-group" id="group-coach">
+      <summary>
+        <span>主动 Coach</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="coach">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="coach-enabled" checked> 启用主动 Coach</label>
+        </div>
+        <div class="setting-row">
+          <label>Loop 开关</label>
+          <div class="check-row">
+            <label class="inline-check"><input type="checkbox" data-coach-loop="dailyBrief" checked> 每日简报</label>
+            <label class="inline-check"><input type="checkbox" data-coach-loop="idleNudge" checked> 闲置提醒</label>
+            <label class="inline-check"><input type="checkbox" data-coach-loop="srPrompt" checked> 间隔重复</label>
+            <label class="inline-check"><input type="checkbox" data-coach-loop="metacog" checked> 元认知提示</label>
+            <label class="inline-check"><input type="checkbox" data-coach-loop="planSync" checked> 计划同步</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>Toast 通知级别</label>
+          <div class="check-row" id="coach-toast-level">
+            <label class="inline-check"><input type="radio" name="coach-toast-level" value="all"> 全部</label>
+            <label class="inline-check"><input type="radio" name="coach-toast-level" value="high-only" checked> 仅高优先级</label>
+            <label class="inline-check"><input type="radio" name="coach-toast-level" value="silent"> 静默</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>勿扰时段</label>
+          <div class="time-range">
+            <input type="time" id="coach-dnd-start" value="22:00">
+            <span>—</span>
+            <input type="time" id="coach-dnd-end" value="08:00">
+          </div>
+          <div class="quick-dnd-row">
+            <button class="btn ghost small" id="btn-dnd-1h" type="button">勿扰 1 小时</button>
+            <button class="btn ghost small" id="btn-dnd-today" type="button">勿扰今日</button>
+            <button class="btn ghost small" id="btn-dnd-custom" type="button">自定义...</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label for="coach-idle-threshold">Idle 阈值（分钟）</label>
+          <div class="slider-row">
+            <input type="range" id="coach-idle-threshold" min="3" max="15" value="8">
+            <span id="coach-idle-threshold-value" class="hint">8 分钟</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>SR 题面策略</label>
+          <div class="check-row" id="coach-sr-policy">
+            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="reuse" checked> 复用原题</label>
+            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="variant"> 同构变体</label>
+            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="mixed"> 混合</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>Daily Brief 缓存策略</label>
+          <div class="check-row" id="coach-brief-cache">
+            <label class="inline-check"><input type="radio" name="coach-brief-cache" value="lazy" checked> 懒加载（点开时拉）</label>
+            <label class="inline-check"><input type="radio" name="coach-brief-cache" value="prefetch"> 预取（启动时拉）</label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>节流配额</label>
+          <div class="range-group">
+            <span>每小时上限 <input type="number" id="coach-throttle-hour" value="3" min="0" max="20" class="num-input"></span>
+            <span>每天上限 <input type="number" id="coach-throttle-day" value="12" min="0" max="100" class="num-input"></span>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-retrieval">
+      <summary>
+        <span>资料检索</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="retrieval">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="retrieval-grounding-default"> 默认启用 grounding</label>
+        </div>
+        <div class="setting-row">
+          <label>检索严格度</label>
+          <div class="check-row" id="retrieval-strictness">
+            <label class="inline-check"><input type="radio" name="retrieval-strictness" value="loose"> 宽松</label>
+            <label class="inline-check"><input type="radio" name="retrieval-strictness" value="balanced" checked> 平衡</label>
+            <label class="inline-check"><input type="radio" name="retrieval-strictness" value="strict"> 严格</label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="retrieval-cite-default" checked> 默认引用资料来源</label>
+        </div>
+        <div class="setting-row">
+          <label for="retrieval-snippets">检索片段数</label>
+          <div class="slider-row">
+            <input type="range" id="retrieval-snippets" min="2" max="8" value="4">
+            <span id="retrieval-snippets-value" class="hint">4</span>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-lecture">
+      <summary>
+        <span>讲义阅读体验</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="lecture">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label>阅读模式</label>
+          <div class="check-row" id="lecture-reader-mode">
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="lecture-webview" checked> 讲义 webview</label>
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="native-preview"> 原生 preview</label>
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="split-both"> 分屏并排</label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>AI 建议应用模式</label>
+          <div class="check-row" id="lecture-apply-mode">
+            <label class="inline-check"><input type="radio" name="lecture-apply-mode" value="auto-apply"> 自动应用</label>
+            <label class="inline-check"><input type="radio" name="lecture-apply-mode" value="preview-confirm" checked> 预览确认</label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="lecture-sync-source" checked> 阅读时同步源码</label>
+        </div>
+        <div class="setting-row">
+          <label for="lecture-highlight-duration">改动高亮时长（秒）</label>
+          <div class="slider-row">
+            <input type="range" id="lecture-highlight-duration" min="1" max="10" value="3">
+            <span id="lecture-highlight-duration-value" class="hint">3 秒</span>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-ui">
+      <summary>
+        <span>UI 与显示</span>
+        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="ui">恢复默认</button>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label for="ui-font-size">字体大小</label>
+          <div class="slider-row">
+            <input type="range" id="ui-font-size" min="12" max="18" value="13">
+            <span id="ui-font-size-value" class="hint">13 px</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>默认 Tab</label>
+          <div class="check-row" id="ui-default-tab">
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="learn" checked> 学习</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="chat"> 对话</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="materials"> 资料库</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="settings"> 设置</label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ui-tree-default-expand" checked> 课程树默认展开</label>
+        </div>
+        <div class="setting-row">
+          <label>主题</label>
+          <div class="check-row" id="ui-theme">
+            <label class="inline-check"><input type="radio" name="ui-theme" value="auto" checked> 跟随 VS Code</label>
+            <label class="inline-check"><input type="radio" name="ui-theme" value="light"> 亮色</label>
+            <label class="inline-check"><input type="radio" name="ui-theme" value="dark"> 暗色</label>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ui-show-emoji" checked> 显示 emoji</label>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-ai-config">
+      <summary>
+        <span>AI 配置中心</span>
+        <button class="btn ghost small" type="button" id="btn-add-ai-profile">新建 Profile</button>
+      </summary>
+      <div class="settings-group-body">
+        <section class="resolved-card panel-flat" id="ai-config-center">
+          <div class="card-subtitle" id="resolved-config-source">加载中...</div>
+          <div class="resolved-main">
+            <div class="resolved-name" id="resolved-config-name">-</div>
+          </div>
+          <div class="resolved-summary-grid">
+            <div class="stat-card">
+              <span class="stat-label">Provider</span>
+              <span class="stat-value" id="resolved-config-provider">-</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">来源</span>
+              <span class="stat-value" id="resolved-config-origin">-</span>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <span class="stat-label">Base URL</span>
+              <span class="stat-value mono" id="resolved-config-url">-</span>
+            </div>
+          </div>
+          <div class="hidden">
+            <span id="resolved-warning-pills"></span>
+            <span id="resolved-config-meta"></span>
+            <span id="resolved-config-context"></span>
+            <span id="resolved-config-max-tokens"></span>
+            <span id="resolved-config-history-budget"></span>
+          </div>
+        </section>
+
+        <div class="setting-row">
+          <label>从已知配置导入</label>
+          <div class="custom-dropdown ai-change-dropdown">
+            <button class="btn small" id="btn-change-ai-config" type="button">导入...</button>
+            <div class="dropdown-menu hidden" id="ai-change-menu">
+              <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
+              <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
+              <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
+              <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label>Profile 列表</label>
+          <div id="ai-profiles-list" class="ai-profiles-list">
+            <p class="muted">加载中...</p>
+          </div>
+        </div>
+
+        <div id="ai-profile-editor" class="ai-profile-editor hidden">
+          <h4 id="ai-profile-editor-title">新建 Profile</h4>
+          <div class="setting-row">
+            <label for="ai-profile-name">名称</label>
+            <input type="text" id="ai-profile-name" placeholder="例如：Claude Sonnet">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-provider">Provider</label>
+            <select id="ai-profile-provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-base-url">Base URL</label>
+            <input type="text" id="ai-profile-base-url" placeholder="https://api.example.com/v1">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-anthropic-base-url">Anthropic Base URL（可选）</label>
+            <input type="text" id="ai-profile-anthropic-base-url">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-token">API Token</label>
+            <input type="password" id="ai-profile-token" placeholder="sk-...">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-model">Model</label>
+            <input type="text" id="ai-profile-model" placeholder="claude-3-7-sonnet-20250219">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-wire-api">Wire API</label>
+            <select id="ai-profile-wire-api">
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+              <option value="responses">responses</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-context-window">Context Window</label>
+            <input type="number" id="ai-profile-context-window" min="0" placeholder="200000">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-max-tokens">Max Tokens</label>
+            <input type="number" id="ai-profile-max-tokens" min="0" placeholder="8192">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-reasoning-effort">Reasoning Effort</label>
+            <select id="ai-profile-reasoning-effort">
+              <option value="">默认</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-notes">备注</label>
+            <textarea id="ai-profile-notes" rows="3" placeholder="备注..."></textarea>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btn-save-ai-profile" type="button">保存 Profile</button>
+            <button class="btn ghost" id="btn-cancel-ai-profile" type="button">取消</button>
+          </div>
+        </div>
+
+        <div class="ai-workspace-override">
+          <h4>工作区覆盖</h4>
+          <div class="setting-row">
+            <label class="inline-check"><input type="checkbox" id="ai-ws-override-enabled"> 启用工作区覆盖</label>
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-base-profile">基础 Profile</label>
+            <select id="ai-ws-base-profile"><option value="">使用全局激活</option></select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-provider">Provider 覆盖</label>
+            <input type="text" id="ai-ws-provider" placeholder="留空表示不覆盖">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-base-url">Base URL 覆盖</label>
+            <input type="text" id="ai-ws-base-url">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-token">Token 覆盖</label>
+            <input type="password" id="ai-ws-token">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-model">Model 覆盖</label>
+            <input type="text" id="ai-ws-model">
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btn-save-ws-override" type="button">保存覆盖</button>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-data">
+      <summary>
+        <span>数据管理</span>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label for="data-subject-select">当前学科</label>
+          <select id="data-subject-select"></select>
+        </div>
+        <div class="setting-row">
+          <div class="actions-row">
+            <button class="btn danger-btn" id="btn-clear-wrong-questions" type="button">清空错题本</button>
+            <button class="btn danger-btn" id="btn-clear-diagnosis" type="button">清空诊断历史</button>
+            <button class="btn danger-btn" id="btn-reset-course-progress" type="button">重置课程进度</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="actions-row">
+            <button class="btn" id="btn-export-learning-data" type="button">导出全部学习数据</button>
+            <button class="btn" id="btn-import-learning-data" type="button">导入学习数据</button>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="settings-group" id="group-advanced">
+      <summary>
+        <span>数据目录与高级</span>
+      </summary>
+      <div class="settings-group-body">
+        <div class="setting-row">
+          <label>数据目录路径</label>
+          <div id="data-dir-path" class="data-dir-path muted">加载中...</div>
+          <button class="btn ghost small" id="btn-open-data-dir" type="button">在文件管理器中打开</button>
+        </div>
+        <div class="setting-row">
+          <div class="actions-row">
+            <button class="btn" id="btn-export-prefs" type="button">导出当前所有偏好</button>
+            <button class="btn" id="btn-import-prefs" type="button">导入偏好</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <button class="btn danger-btn" id="btn-reset-all-prefs" type="button">恢复所有默认设置</button>
+        </div>
+      </div>
+    </details>
+
+    <div class="actions-row settings-save-row">
+      <button class="btn primary" id="btn-save-prefs">保存学习偏好</button>
+    </div>
+  </div>
+
+  <div id="learning-plan-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="learning-plan-modal-title">
+      <div class="modal-header">
+        <h3 id="learning-plan-modal-title">设定学习计划</h3>
+        <button class="btn ghost small" id="btn-close-plan-modal" type="button">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-row">
+          <label for="plan-subject">学科</label>
+          <input type="text" id="plan-subject" readonly>
+        </div>
+        <div class="setting-row">
+          <label for="plan-target-date">截止日期</label>
+          <input type="date" id="plan-target-date">
+        </div>
+        <div class="setting-row">
+          <label for="plan-daily-minutes">每日学习时间（分钟）</label>
+          <input type="number" id="plan-daily-minutes" min="10" max="240" value="60">
+        </div>
+        <div class="setting-row">
+          <label for="plan-extra-notes">补充说明（可选）</label>
+          <textarea id="plan-extra-notes" rows="3" placeholder="例如：跳过隐马尔可夫那一节"></textarea>
+        </div>
+        <div class="actions-row">
+          <button class="btn primary" id="btn-save-plan" type="button">保存（AI 自动拆解）</button>
+          <button class="btn ghost" id="btn-cancel-plan" type="button">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="tab-logs" class="tab-content">

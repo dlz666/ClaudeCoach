@@ -79,6 +79,15 @@ interface OutlineRebuildPreviewCacheEntry {
   impact: OutlineRebuildImpactSummary;
 }
 
+/** 由 extension.ts 注入的 Coach 框架共享实例。 */
+export interface SidebarCoachDeps {
+  coachEventBus: import('../coach/coachEventBus').CoachEventBus;
+  coachStateStore: import('../coach/coachState').CoachStateStore;
+  suggestionStore: import('../coach/suggestionStore').SuggestionStore;
+  sessionLogger: import('../coach/sessionLogger').SessionLogger;
+  learningPlanStore: import('../coach/learningPlanStore').LearningPlanStore;
+}
+
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private contentGen = new ContentGenerator();
@@ -97,16 +106,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private lastOpenedLessonFile?: ChatEditTarget;
   private selectedMaterialId?: string;
   private readonly outlineRebuildPreviews = new Map<string, OutlineRebuildPreviewCacheEntry>();
+  private coachAgent?: import('../coach/coachAgent').CoachAgent;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly aiProfiles: AIProfileManager,
     private readonly onAIConfigChanged?: () => void,
+    private readonly coachDeps?: SidebarCoachDeps,
   ) {
     this.materialManager.onDidChangeIndex((index) => {
       this._post({ type: 'materials', data: index });
       void this._refreshSelectedMaterialPreview(index);
     });
+  }
+
+  /** 由 extension.ts 注入 CoachAgent（避免循环依赖在 ctor 处理）。 */
+  attachCoachAgent(agent: import('../coach/coachAgent').CoachAgent): void {
+    this.coachAgent = agent;
+  }
+
+  /** 给 CoachAgent 用：把建议等响应推到 webview。 */
+  postMessage(msg: SidebarResponse): void {
+    this._view?.webview.postMessage(msg);
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -121,6 +142,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     };
     webviewView.webview.html = this._getHtml(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
+    // Coach: 把 visibility 变化推给事件总线
+    webviewView.onDidChangeVisibility(() => {
+      this.coachDeps?.coachEventBus.emit({
+        kind: webviewView.visible ? 'webview-visible' as any : 'webview-hidden' as any,
+        at: new Date().toISOString(),
+      });
+    });
+    // 首次解析就视作可见
+    this.coachDeps?.coachEventBus.emit({
+      kind: 'webview-visible' as any,
+      at: new Date().toISOString(),
+    });
     void this._pushAIConfigState();
     this._reconcileMaterialsInBackground();
   }
@@ -1222,7 +1255,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           const lessonExists = await fileExists(lessonPath);
           if (lessonExists && msg.type === 'openOrGenerateLesson') {
             this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
-            await openMarkdownPreview(lessonPath);
+            // 按偏好分发：自渲染 webview / VS Code 原生 preview
+            const prefs = await this.prefsStore.get();
+            const viewerMode = prefs.coach?.lecture?.viewerMode ?? 'lecture-webview';
+            if (viewerMode === 'lecture-webview' || viewerMode === 'split-both') {
+              await vscode.commands.executeCommand('claudeCoach.openLectureViewer', {
+                filePath: lessonPath,
+                subject: msg.subject,
+                topicId: msg.topicId,
+                topicTitle: msg.topicTitle,
+                lessonId: msg.lessonId,
+                lessonTitle: msg.lessonTitle,
+              });
+              if (viewerMode === 'split-both') {
+                await openMarkdownPreview(lessonPath, 'native-preview');
+              }
+            } else {
+              await openMarkdownPreview(lessonPath, 'native-preview');
+            }
+            // 给事件总线一个 lesson-opened 信号
+            this.coachDeps?.coachEventBus.emit({
+              kind: 'lesson-opened',
+              at: new Date().toISOString(),
+              subject: msg.subject,
+              topicId: msg.topicId,
+              lessonId: msg.lessonId,
+            });
             break;
           }
           if (lessonExists) {
@@ -1654,7 +1712,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case '__legacy_saveAIProfile__': {
+        case 'listAIProfiles': {
+          const state = await this.aiProfiles.getState();
+          this._view?.webview.postMessage({
+            type: 'aiProfilesList',
+            data: state.profiles,
+            activeProfileId: state.activeProfileId,
+          });
+          break;
+        }
+
+        case '__legacy_saveAIProfile__':
+        case 'saveAIProfile': {
           await this.aiProfiles.saveProfile({
             id: msg.profile.id,
             name: msg.profile.name,
@@ -1671,28 +1740,57 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             source: msg.profile.source ?? 'manual',
           });
           await this._afterAIConfigMutation('AI 配置已保存');
+          // 自动重发 list
+          const stateAfter = await this.aiProfiles.getState();
+          this._view?.webview.postMessage({
+            type: 'aiProfilesList',
+            data: stateAfter.profiles,
+            activeProfileId: stateAfter.activeProfileId,
+          });
           break;
         }
 
-        case '__legacy_deleteAIProfile__': {
+        case '__legacy_deleteAIProfile__':
+        case 'deleteAIProfile': {
           await this.aiProfiles.deleteProfile(msg.profileId);
           await this._afterAIConfigMutation('AI 配置已删除');
+          const stateAfter = await this.aiProfiles.getState();
+          this._view?.webview.postMessage({
+            type: 'aiProfilesList',
+            data: stateAfter.profiles,
+            activeProfileId: stateAfter.activeProfileId,
+          });
           break;
         }
 
-        case '__legacy_duplicateAIProfile__': {
+        case '__legacy_duplicateAIProfile__':
+        case 'duplicateAIProfile': {
           const duplicated = await this.aiProfiles.duplicateProfile(msg.profileId);
           await this._afterAIConfigMutation(`已复制 AI 配置：${duplicated.name}`);
+          const stateAfter = await this.aiProfiles.getState();
+          this._view?.webview.postMessage({
+            type: 'aiProfilesList',
+            data: stateAfter.profiles,
+            activeProfileId: stateAfter.activeProfileId,
+          });
           break;
         }
 
-        case '__legacy_activateAIProfile__': {
+        case '__legacy_activateAIProfile__':
+        case 'activateAIProfile': {
           await this.aiProfiles.activateProfile(msg.profileId);
           await this._afterAIConfigMutation('已切换当前 AI 配置');
+          const stateAfter = await this.aiProfiles.getState();
+          this._view?.webview.postMessage({
+            type: 'aiProfilesList',
+            data: stateAfter.profiles,
+            activeProfileId: stateAfter.activeProfileId,
+          });
           break;
         }
 
-        case '__legacy_saveWorkspaceAIOverride__': {
+        case '__legacy_saveWorkspaceAIOverride__':
+        case 'saveWorkspaceAIOverride': {
           await this.aiProfiles.saveWorkspaceOverride(msg.override as AIWorkspaceOverride);
           await this._afterAIConfigMutation('项目级 AI 覆盖已更新');
           break;
@@ -1713,13 +1811,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
-        case '__legacy_exportAIProfile__': {
+        case '__legacy_exportAIProfile__':
+        case 'exportAIProfile': {
           await this.aiProfiles.exportProfile(msg.profileId, !!msg.includeToken);
           this._post({ type: 'log', message: 'AI 配置已导出', level: 'info' });
           break;
         }
 
-        case '__legacy_testAIProfile__': {
+        case '__legacy_testAIProfile__':
+        case 'testAIProfile': {
           try {
             const message = await this.aiProfiles.testResolvedConfig(msg.profile as Partial<AIProfile> | undefined);
             this._view?.webview.postMessage({ type: 'aiTestResult', success: true, message });
@@ -1729,6 +1829,222 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._view?.webview.postMessage({ type: 'aiTestResult', success: false, message });
             this._post({ type: 'log', message, level: 'error' });
           }
+          break;
+        }
+
+        // ===== 数据管理 =====
+
+        case 'clearWrongQuestions': {
+          const subject = msg.subject as Subject;
+          if (!subject) break;
+          await this.courseManager.clearResolvedWrongQuestions(subject);
+          // 全清需要写空 book
+          const book = await this.courseManager.getWrongQuestionBook(subject);
+          for (const q of book.questions) {
+            await this.courseManager.resolveWrongQuestion(subject, q.id);
+          }
+          await this.courseManager.clearResolvedWrongQuestions(subject);
+          this._post({ type: 'dataOpResult', operation: 'clearWrongQuestions', ok: true, message: subject });
+          await this._refreshWrongQuestions(subject);
+          break;
+        }
+
+        case 'clearDiagnosisHistory': {
+          const subject = msg.subject as Subject;
+          if (!subject) break;
+          try {
+            const { rm } = await import('fs/promises');
+            const paths = (await import('../storage/pathResolver')).getStoragePathResolver();
+            await rm(paths.diagnosisHistoryDirForSubject(subject), { recursive: true, force: true });
+            this._post({ type: 'dataOpResult', operation: 'clearDiagnosisHistory', ok: true, message: subject });
+          } catch (error: any) {
+            this._post({ type: 'dataOpResult', operation: 'clearDiagnosisHistory', ok: false, message: error?.message });
+          }
+          break;
+        }
+
+        case 'resetCourseProgress': {
+          const subject = msg.subject as Subject;
+          if (!subject) break;
+          const outline = await this.courseManager.getCourseOutline(subject);
+          if (!outline) {
+            this._post({ type: 'dataOpResult', operation: 'resetCourseProgress', ok: false, message: '课程不存在' });
+            break;
+          }
+          for (const topic of outline.topics) {
+            for (const lesson of topic.lessons) {
+              await this.courseManager.updateLessonStatus(subject, topic.id, lesson.id, 'not-started');
+            }
+          }
+          this._post({ type: 'dataOpResult', operation: 'resetCourseProgress', ok: true, message: subject });
+          await this._refreshCourses();
+          break;
+        }
+
+        case 'exportLearningData': {
+          // 简化版：仅显示数据目录路径，让用户手动打包
+          const dir = getDataDirectory();
+          await ensureDir(dir);
+          await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
+          this._post({ type: 'dataOpResult', operation: 'exportLearningData', ok: true, message: dir });
+          break;
+        }
+
+        case 'importLearningData': {
+          this._post({ type: 'dataOpResult', operation: 'importLearningData', ok: false, message: '请手动复制文件到数据目录后重启扩展。' });
+          break;
+        }
+
+        // ===== Inline 内联编辑路由 =====
+
+        case 'openLectureViewer': {
+          await vscode.commands.executeCommand('claudeCoach.openLectureViewer', {
+            filePath: this.courseManager.getLessonPath(msg.subject as Subject, msg.topicId, msg.lessonId),
+            subject: msg.subject,
+            topicId: msg.topicId,
+            topicTitle: msg.topicTitle,
+            lessonId: msg.lessonId,
+            lessonTitle: msg.lessonTitle,
+          });
+          break;
+        }
+
+        // ===== Coach 消息 =====
+
+        case 'getDailyBrief': {
+          // Phase 3 Loop 1 实现具体生成；这里先返回占位让 UI 不空
+          this._post({
+            type: 'dailyBrief',
+            data: {
+              dateKey: new Date().toISOString().slice(0, 10),
+              subject: msg.subject as Subject | undefined,
+              generatedAt: new Date().toISOString(),
+              yesterdayRecap: '今日 Coach 模块已就绪。Loop 1 待 Phase 3 实施完整 brief 生成。',
+              todaySuggestions: ['完成今日错题复习', '尝试 Inline 编辑功能（Alt+I）', '在设置页配置 Coach 偏好'],
+              srDueCount: 0,
+            },
+          });
+          break;
+        }
+
+        case 'coachAction': {
+          const id = String(msg.suggestionId ?? '');
+          if (!id || !this.coachDeps) break;
+          await this.coachDeps.suggestionStore.markActed(id);
+          break;
+        }
+
+        case 'coachDismissSuggestion': {
+          const id = String(msg.suggestionId ?? '');
+          if (!id || !this.coachDeps) break;
+          await this.coachDeps.suggestionStore.markDismissed(id);
+          this._post({
+            type: 'coachSuggestions',
+            data: (await this.coachDeps.suggestionStore.getActive()) as unknown as import('../types').CoachSuggestion[],
+          });
+          break;
+        }
+
+        case 'setDoNotDisturb': {
+          if (!this.coachDeps) break;
+          const minutes = Number(msg.durationMinutes);
+          const until = Number.isFinite(minutes) && minutes > 0
+            ? new Date(Date.now() + minutes * 60 * 1000).toISOString()
+            : null;
+          await this.coachDeps.coachStateStore.setDoNotDisturb(until);
+          this._post({ type: 'doNotDisturbState', until });
+          this._post({ type: 'log', message: until ? `已勿扰至 ${until}` : '已取消勿扰', level: 'info' });
+          break;
+        }
+
+        case 'getLearningPlan': {
+          if (!this.coachDeps) break;
+          const subject = msg.subject as Subject;
+          const plan = await this.coachDeps.learningPlanStore.get(subject);
+          this._post({ type: 'learningPlan', subject, data: plan as any });
+          break;
+        }
+
+        case 'setLearningPlan': {
+          if (!this.coachDeps) break;
+          const planInput = msg.plan as any;
+          const subject = planInput.subject as Subject;
+          // 简化拆解：按章节数平均分配（Phase 3 Loop 5 改进 AI 拆解）
+          const outline = await this.courseManager.getCourseOutline(subject);
+          const milestones = (outline?.topics ?? []).map((topic, index) => {
+            const targetEnd = new Date(planInput.goal.targetEndDate);
+            const startDate = new Date();
+            const totalMs = targetEnd.getTime() - startDate.getTime();
+            const total = (outline?.topics?.length ?? 1);
+            const milestoneTime = startDate.getTime() + (totalMs * (index + 1)) / total;
+            return {
+              topicId: topic.id,
+              topicTitle: topic.title,
+              expectedDoneBy: new Date(milestoneTime).toISOString().slice(0, 10),
+              status: 'pending' as const,
+            };
+          });
+          const plan = {
+            schemaVersion: 1,
+            subject,
+            goal: {
+              targetEndDate: planInput.goal.targetEndDate,
+              dailyMinutes: planInput.goal.dailyMinutes,
+              extraNotes: planInput.goal.extraNotes,
+            },
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            milestones,
+            driftThresholdDays: planInput.driftThresholdDays ?? 2,
+            lastDriftCheckAt: null,
+          };
+          await this.coachDeps.learningPlanStore.save(plan as any);
+          this._post({ type: 'learningPlan', subject, data: plan as any });
+          this._post({ type: 'log', message: `已保存学习计划，共 ${milestones.length} 个里程碑`, level: 'info' });
+          break;
+        }
+
+        case 'metacogAnswer': {
+          // 简化版：仅记录到 courseProfileStore 作为 reflection 事件
+          const subject = msg.subject as Subject;
+          if (!subject) break;
+          await this.courseProfileStore.recordEvent(subject, {
+            id: `metacog-${Date.now()}`,
+            type: 'answer-revision',
+            subject,
+            topicId: msg.topicId ?? null,
+            lessonId: msg.lessonId ?? null,
+            createdAt: new Date().toISOString(),
+            summary: `Metacog Q: ${msg.question} | A: ${String(msg.answer ?? '').slice(0, 200)}`,
+            weaknessTags: [],
+            strengthTags: [],
+            rawRefs: [],
+          });
+          this._post({ type: 'log', message: '元认知反思已记录', level: 'info' });
+          break;
+        }
+
+        case 'getCoachSuggestions': {
+          if (!this.coachDeps) {
+            this._post({ type: 'coachSuggestions', data: [] });
+            break;
+          }
+          this._post({
+            type: 'coachSuggestions',
+            data: (await this.coachDeps.suggestionStore.getActive()) as unknown as import('../types').CoachSuggestion[],
+          });
+          break;
+        }
+
+        case 'getActivityLog': {
+          if (!this.coachDeps) {
+            this._post({ type: 'activityLog', data: [] });
+            break;
+          }
+          this._post({
+            type: 'activityLog',
+            data: (await this.coachDeps.sessionLogger.recentActivity(50)) as any,
+          });
           break;
         }
 

@@ -1409,3 +1409,359 @@ textarea:focus,
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== Phase 2B/2C/2D Settings + Coach + Plan ===== */
+.settings-search {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+}
+
+.settings-group {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 88%, transparent), color-mix(in srgb, var(--surface-2) 94%, transparent));
+}
+
+.settings-group > summary {
+  padding: 12px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  list-style: none;
+  user-select: none;
+}
+
+.settings-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-group > summary::before {
+  content: '▶';
+  margin-right: 8px;
+  font-size: 10px;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+
+.settings-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.settings-group[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-group-body {
+  padding: 14px 16px;
+}
+
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.setting-row.hidden {
+  display: none;
+}
+
+.setting-row.hl {
+  background: rgba(255, 235, 100, 0.08);
+  padding: 8px;
+  border-radius: 6px;
+  border-left: 2px solid #f1c40f;
+}
+
+.setting-row > label {
+  font-size: 13px;
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+.setting-row .hint {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider-row input[type="range"] {
+  flex: 1;
+}
+
+.slider-row .num-input,
+.slider-row input[type="number"] {
+  width: 64px;
+}
+
+.time-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quick-dnd-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.per-subject-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.per-subject-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.per-subject-row .per-subject-label {
+  flex: 1;
+  font-size: 12px;
+}
+
+.reset-group-btn {
+  margin-left: 8px;
+}
+
+.settings-save-row {
+  position: sticky;
+  bottom: 0;
+  background: var(--vscode-sideBar-background);
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  z-index: 5;
+}
+
+/* Coach Card */
+.coach-card {
+  border-left: 3px solid var(--vscode-textLink-foreground, #4dabf7);
+}
+
+.coach-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.coach-suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 16px;
+  background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.06));
+  margin: 4px 4px 0 0;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 12px;
+  transition: 120ms;
+}
+
+.coach-suggestion-chip.high {
+  border-color: #e74c3c;
+}
+
+.coach-suggestion-chip.medium {
+  border-color: #f39c12;
+}
+
+.coach-suggestion-chip.low {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.coach-suggestion-chip:hover {
+  background: var(--vscode-button-hoverBackground, rgba(255, 255, 255, 0.12));
+}
+
+.coach-suggestion-chip .dismiss {
+  opacity: 0.5;
+  cursor: pointer;
+  margin-left: 2px;
+  font-size: 14px;
+}
+
+.coach-suggestion-chip .dismiss:hover {
+  opacity: 1;
+}
+
+#coach-suggestions-list {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+#coach-brief-body {
+  margin-top: 6px;
+}
+
+/* Learning Plan */
+.plan-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.plan-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50, #66BB6A);
+  transition: width 0.4s ease;
+}
+
+.plan-milestone {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+}
+
+.plan-milestone:last-child {
+  border-bottom: none;
+}
+
+.plan-milestone.done {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.plan-milestone.overdue {
+  color: #e74c3c;
+}
+
+.plan-milestone-date {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* AI profile cards */
+.ai-profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-profile-card {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.ai-profile-card.active {
+  border-color: var(--vscode-textLink-foreground, #4dabf7);
+  border-width: 2px;
+}
+
+.ai-profile-card .ai-profile-meta {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.ai-profile-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-profile-actions button {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.ai-profile-editor {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ai-profile-editor.hidden {
+  display: none;
+}
+
+.ai-workspace-override {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ai-workspace-override h4,
+.ai-profile-editor h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.panel-flat {
+  margin-bottom: 12px;
+  padding: 12px;
+  box-shadow: none;
+}
+
+/* Danger button */
+.danger-btn {
+  background: rgba(231, 76, 60, 0.18);
+  color: #e74c3c;
+  border: 1px solid #e74c3c;
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.32);
+}
+
+/* Wrong questions panel polish */
+.wrong-questions-panel {
+  border-left: 3px solid #f39c12;
+}
+
+.learning-plan-panel {
+  border-left: 3px solid #4CAF50;
+}
+
+/* Modal panel for plan */
+#learning-plan-modal .modal-panel {
+  max-width: 480px;
+}

@@ -873,3 +873,139 @@ Return JSON only.`,
     },
   ];
 }
+
+// ===== Inline Editing (Phase 1A) =====
+
+/**
+ * Trim a long markdown document into a budget for prompt injection while keeping
+ * both the head and the tail visible. We keep the first half and the last half so
+ * the model still sees the document beginning + ending; middle is collapsed.
+ */
+function clampInlineDocument(documentContext: string, budget = 8000): string {
+  if (!documentContext) {
+    return '';
+  }
+  if (documentContext.length <= budget) {
+    return documentContext;
+  }
+  const halfBudget = Math.floor((budget - 40) / 2);
+  const head = documentContext.slice(0, halfBudget);
+  const tail = documentContext.slice(documentContext.length - halfBudget);
+  return `${head}\n\n[...省略 ${documentContext.length - head.length - tail.length} 字...]\n\n${tail}`;
+}
+
+const INLINE_OUTPUT_RULES = `
+你正在直接修改一份课程讲义 Markdown 文件，输出会被精确写回到原文档的某个位置。
+硬性规则：
+- 只输出新的 markdown 片段本身，不要复述原选区或上下文。
+- 不要返回“好的、我已修改”这类元话或说明。
+- 保留 LaTeX 公式格式：行内用 $...$、独立用 $$...$$，并且单个 $ 不能跨行。
+- 如果原文里有代码块，保留同样的语言标识（例如 \`\`\`python）。
+- 不要用 markdown 代码围栏整体包裹整段输出，除非用户明确要求生成代码块。
+- 输出必须可以直接拼接进 Markdown 文档，不要加额外的前导/尾随空白。`;
+
+/**
+ * Insert mode: produce a new markdown fragment that should be appended after the
+ * cursor / selection. The model sees the whole lecture for context but should NOT
+ * rewrite the existing surrounding text.
+ */
+export function inlineInsertPrompt(args: {
+  documentContext: string;
+  cursorContext: string;
+  selectionText: string;
+  instruction: string;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { documentContext, cursorContext, selectionText, instruction, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lecture-edit' };
+  const trimmedSelection = selectionText.trim();
+
+  const userParts: string[] = [
+    `用户指令：${instruction}`,
+    '',
+    '完整讲义（已截取，前后保留）：',
+    '"""',
+    clampInlineDocument(documentContext),
+    '"""',
+    '',
+    '光标附近的上下文窗口（约 ±20 行）：',
+    '"""',
+    cursorContext || '（无）',
+    '"""',
+  ];
+
+  if (trimmedSelection) {
+    userParts.push(
+      '',
+      '当前选中的文本（你的输出会插入到选区末尾，不要重复这段）：',
+      '"""',
+      trimmedSelection,
+      '"""'
+    );
+  }
+
+  userParts.push(
+    '',
+    '请直接输出要插入的 markdown 片段。不要返回原始上下文，不要解释。'
+  );
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + INLINE_OUTPUT_RULES + `
+
+任务模式：在指定位置“追加插入”一段新内容。
+- 你只产生新的 markdown 片段，不要重写已经存在的段落。
+- 新内容应该和上文风格、术语、记号保持一致。
+- 如果用户没要求，不要新增大标题；优先用小标题或自然段。`,
+    },
+    {
+      role: 'user',
+      content: userParts.join('\n'),
+    },
+  ];
+}
+
+/**
+ * Rewrite mode: replace the user's selected text with a revised version, given
+ * full document context for coherence.
+ */
+export function inlineRewritePrompt(args: {
+  documentContext: string;
+  selectionText: string;
+  instruction: string;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { documentContext, selectionText, instruction, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lecture-edit' };
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + INLINE_OUTPUT_RULES + `
+
+任务模式：重写用户选中的那一段文字。
+- 输出会“替换”掉原选区文本，所以请输出完整的替换段。
+- 保留原段意图与重要事实，按用户指令调整表达、节奏、深度或例子。
+- 如果原选区是带标题的小节，保留同样层级的标题；如果只是一段段落，不要凭空加标题。`,
+    },
+    {
+      role: 'user',
+      content: [
+        `用户指令：${instruction}`,
+        '',
+        '完整讲义（用于参考整体语境，已截取）：',
+        '"""',
+        clampInlineDocument(documentContext),
+        '"""',
+        '',
+        '需要重写的选中文本（必须给出整段替换，不要复述原文）：',
+        '"""',
+        selectionText,
+        '"""',
+        '',
+        '请直接输出重写后的 markdown，不要解释。',
+      ].join('\n'),
+    },
+  ];
+}

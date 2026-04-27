@@ -1,0 +1,513 @@
+/* lecture-webview/style.css */
+
+:root {
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 24px;
+  --border: color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
+  --surface-1: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
+  --surface-2: color-mix(in srgb, var(--vscode-sideBar-background) 62%, var(--vscode-editor-background));
+  --surface-3: color-mix(in srgb, var(--vscode-input-background) 80%, var(--vscode-editor-background));
+  --accent: var(--vscode-button-background);
+  --accent-soft: color-mix(in srgb, var(--vscode-button-background) 16%, transparent);
+  --accent-strong: color-mix(in srgb, var(--vscode-button-background) 92%, white 8%);
+  --success: rgba(76, 175, 80, 0.85);
+  --success-soft: rgba(76, 175, 80, 0.20);
+  --warn: rgba(245, 158, 11, 0.92);
+  --danger: rgba(239, 68, 68, 0.92);
+  --shadow-popover: 0 18px 38px rgba(0, 0, 0, 0.32);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* ===== header ===== */
+
+.lecture-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 36px 14px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--vscode-editor-background) 96%, transparent) 0%,
+    color-mix(in srgb, var(--vscode-editor-background) 88%, transparent) 100%);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.lecture-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.lecture-topic {
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lecture-title {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lecture-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lecture-status {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 70%, transparent);
+}
+
+.lecture-status[data-level="success"] { color: var(--success); }
+.lecture-status[data-level="error"] { color: var(--danger); }
+
+.btn-mini {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: 14px;
+  transition: 120ms ease;
+}
+
+.btn-mini:hover {
+  background: var(--accent-soft);
+  transform: rotate(90deg);
+}
+
+/* ===== body / markdown ===== */
+
+.lecture-body {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 40px 120px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1.4em 0 0.6em;
+  letter-spacing: 0.005em;
+}
+
+.markdown-body h1 { font-size: 26px; }
+.markdown-body h2 {
+  font-size: 21px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 { font-size: 17px; }
+.markdown-body h4 { font-size: 14px; }
+
+.markdown-body p,
+.markdown-body li,
+.markdown-body blockquote {
+  font-size: 14.5px;
+  line-height: 1.78;
+}
+
+.markdown-body p { margin: 0.7em 0; }
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.4em;
+  margin: 0.6em 0;
+}
+
+.markdown-body blockquote {
+  margin: 1em 0;
+  padding: 6px 16px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: color-mix(in srgb, var(--vscode-foreground) 92%, transparent);
+}
+
+.markdown-body code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family, "Consolas", monospace);
+  font-size: 13px;
+  background: color-mix(in srgb, var(--vscode-textCodeBlock-background, var(--surface-3)) 90%, transparent);
+}
+
+.markdown-body pre {
+  margin: 0.8em 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--vscode-textCodeBlock-background, var(--surface-3)) 92%, transparent);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+
+.markdown-body th {
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  font-weight: 600;
+}
+
+.markdown-body a {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--vscode-textLink-foreground) 50%, transparent);
+}
+
+.markdown-body a:hover { border-bottom-style: solid; }
+
+/* 公式溢出滚动而不撑大页面 */
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+/* ===== flash highlight (5s 后渐隐) ===== */
+
+[data-source-line].flash-changed {
+  background: rgba(76, 175, 80, 0.20);
+  outline: 2px solid rgba(76, 175, 80, 0.45);
+  outline-offset: 2px;
+  border-radius: 6px;
+  transition: background 1.2s ease-out 3.6s, outline-color 1.2s ease-out 3.6s;
+  animation: flash-in 240ms ease-out;
+}
+
+@keyframes flash-in {
+  from { background: rgba(76, 175, 80, 0.55); }
+  to { background: rgba(76, 175, 80, 0.20); }
+}
+
+/* 让选中状态在自身渲染 markdown 内更柔和 */
+::selection {
+  background: color-mix(in srgb, var(--vscode-editor-selectionBackground, var(--accent)) 80%, transparent);
+}
+
+/* ===== chip ===== */
+
+.lecture-chip {
+  position: absolute;
+  z-index: 1000;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+  color: var(--vscode-button-foreground);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.30);
+  animation: chip-in 140ms ease-out;
+  transition: transform 120ms ease;
+  user-select: none;
+}
+
+.lecture-chip:hover {
+  transform: scale(1.08);
+}
+
+@keyframes chip-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.85); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ===== popover (评论框) ===== */
+
+.lecture-comment-popover {
+  position: absolute;
+  z-index: 1001;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  box-shadow: var(--shadow-popover);
+  animation: pop-in 160ms ease-out;
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.popover-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);
+  margin-bottom: 8px;
+}
+
+.popover-quote {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  padding: 6px 10px;
+  border-radius: 0 6px 6px 0;
+  max-height: 80px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 8px;
+}
+
+.popover-textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.popover-textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.popover-textarea.empty-flash {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.popover-actions,
+.bubble-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btn-primary,
+.btn-ghost {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  color: var(--vscode-button-foreground);
+}
+
+.btn-primary:hover { transform: translateY(-1px); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+.btn-ghost:hover {
+  background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+}
+
+/* ===== suggestion bubble ===== */
+
+.lecture-suggestion-bubble {
+  position: absolute;
+  z-index: 999;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
+  box-shadow: var(--shadow-popover);
+  padding: 12px 14px 14px 18px;
+  animation: bubble-in 180ms ease-out;
+  border-left: 3px solid var(--accent);
+}
+
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.lecture-suggestion-bubble.failed { border-left-color: var(--danger); }
+.lecture-suggestion-bubble.applied { border-left-color: var(--success); }
+
+.bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.bubble-tag {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--vscode-foreground) 92%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.lecture-suggestion-bubble.failed .bubble-tag,
+.bubble-tag-error {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+}
+
+.lecture-suggestion-bubble.applied .bubble-tag {
+  background: var(--success-soft);
+  color: color-mix(in srgb, var(--success) 92%, white 6%);
+}
+
+.bubble-range {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.bubble-body {
+  font-size: 13.5px;
+  line-height: 1.7;
+  max-height: 320px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.bubble-body p { margin: 0.4em 0; }
+.bubble-body pre { margin: 0.4em 0; }
+
+/* loading dots */
+
+.bubble-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px;
+  justify-content: center;
+}
+
+.bubble-loading .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.55;
+  animation: dot-pulse 1.05s infinite ease-in-out;
+}
+.bubble-loading .dot:nth-child(2) { animation-delay: 0.18s; }
+.bubble-loading .dot:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes dot-pulse {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.45; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* ===== toasts ===== */
+
+.lecture-toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2000;
+  pointer-events: none;
+}
+
+.lecture-toast {
+  pointer-events: auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--surface-2));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-popover);
+  font-size: 12.5px;
+  max-width: 360px;
+  animation: toast-in 180ms ease-out;
+}
+
+.lecture-toast.success {
+  border-color: color-mix(in srgb, var(--success) 60%, var(--border));
+  color: color-mix(in srgb, var(--success) 92%, white 6%);
+}
+
+.lecture-toast.error {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+}
+
+.lecture-toast.fading {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 280ms ease-out, transform 280ms ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}

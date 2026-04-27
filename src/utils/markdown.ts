@@ -191,16 +191,46 @@ export async function writeMarkdown(filePath: string, content: string): Promise<
   await writeText(filePath, fixLatex(content));
 }
 
+export type LectureViewerMode = 'native-preview' | 'lecture-webview';
+
 /** Write content through fixLatex and open preview. */
-export async function writeMarkdownAndPreview(filePath: string, content: string): Promise<void> {
+export async function writeMarkdownAndPreview(
+  filePath: string,
+  content: string,
+  viewerMode?: LectureViewerMode
+): Promise<void> {
   await writeMarkdown(filePath, content);
-  const uri = vscode.Uri.file(filePath);
-  await vscode.commands.executeCommand('markdown.showPreview', uri);
+  await openMarkdownPreview(filePath, viewerMode);
 }
 
-/** Open existing file in markdown preview (no rewrite). */
-export async function openMarkdownPreview(filePath: string): Promise<void> {
+/**
+ * Open existing file in markdown preview (no rewrite).
+ *
+ * - When `viewerMode` is omitted, behaviour is unchanged (legacy callers): single-pane
+ *   `markdown.showPreview` to keep existing UX intact.
+ * - When `viewerMode === 'native-preview'`, the source markdown is shown in column 1
+ *   while VS Code's native preview opens in a side column.
+ * - When `viewerMode === 'lecture-webview'`, this is currently a placeholder that the
+ *   LectureWebviewProvider will own. Until that provider is wired in, we fall back to
+ *   the native preview-to-side behaviour so users still see something useful.
+ */
+export async function openMarkdownPreview(
+  filePath: string,
+  viewerMode?: LectureViewerMode
+): Promise<void> {
   const uri = vscode.Uri.file(filePath);
+
+  if (!viewerMode) {
+    await vscode.commands.executeCommand('markdown.showPreview', uri);
+    return;
+  }
+
+  if (viewerMode === 'native-preview' || viewerMode === 'lecture-webview') {
+    await vscode.window.showTextDocument(uri, { viewColumn: vscode.ViewColumn.One, preview: false });
+    await vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+    return;
+  }
+
   await vscode.commands.executeCommand('markdown.showPreview', uri);
 }
 
