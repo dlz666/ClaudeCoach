@@ -23,6 +23,7 @@ import { ExamPrepStore } from './exam/examPrepStore';
 import { ExamAnalyzer } from './exam/examAnalyzer';
 import { ExamVariantGenerator } from './exam/examVariantGenerator';
 import { ExamGrader } from './exam/examGrader';
+import { ExamReadinessCalculator } from './exam/examReadinessCalculator';
 import { ExamWebviewProvider } from './coach/examWebviewProvider';
 
 async function revealAIConfigCard(sidebarProvider: SidebarProvider): Promise<void> {
@@ -60,6 +61,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const examAnalyzer = new ExamAnalyzer(ai, materialManager);
   const examVariantGenerator = new ExamVariantGenerator(ai);
   const examGrader = new ExamGrader(ai);
+  const examReadinessCalculator = new ExamReadinessCalculator(
+    courseManager,
+    courseProfileStore,
+    learningPlanStore,
+    ai,
+  );
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusBar);
@@ -144,6 +151,7 @@ export async function activate(context: vscode.ExtensionContext) {
     examAnalyzer,
     examVariantGenerator,
     examGrader,
+    examReadinessCalculator,
   });
 
   // ===== Inline 编辑命令（Alt+I / 右键 / CodeLens） =====

@@ -596,7 +596,33 @@ export class ExamWebviewProvider {
         });
         return;
       }
-      const snapshot: ExamReadinessSnapshot | null = await calculator.compute({ sessionId });
+      // ExamReadinessCalculator.compute 签名是 (session, promptCtx)
+      const session = await this.deps.examPrepStore.getSession(sessionId);
+      if (!session) {
+        ctx.panel.webview.postMessage({
+          type: 'log',
+          level: 'warn',
+          message: `备考会话 ${sessionId} 不存在。`,
+        });
+        return;
+      }
+      // promptCtx 用最小可用版（学生画像 + 偏好；学科 tag 已通过其他路径走）
+      let promptCtx: any = { scope: 'diagnosis' };
+      try {
+        if (this.deps.preferencesStore) {
+          promptCtx.preferences = await this.deps.preferencesStore.get();
+        }
+        if (this.deps.progressStore) {
+          promptCtx.profile = await this.deps.progressStore.getProfile();
+        }
+        if (this.deps.courseProfileStore) {
+          const cpc = await this.deps.courseProfileStore.buildPromptContext(session.subject);
+          promptCtx = { ...promptCtx, ...cpc };
+        }
+      } catch (err) {
+        console.warn('[ExamWebview] buildPromptContext for readiness failed:', err);
+      }
+      const snapshot: ExamReadinessSnapshot | null = await calculator.compute(session, promptCtx);
       if (!snapshot) return;
       await this.deps.examPrepStore.updateReadiness(sessionId, snapshot);
       ctx.panel.webview.postMessage({ type: 'examReadinessUpdated', sessionId, snapshot });
