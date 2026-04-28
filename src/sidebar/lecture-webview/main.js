@@ -28,6 +28,20 @@
       linkify: true,
       typographer: false,
       breaks: false,
+      highlight: (str, lang) => {
+        // 用 highlight.js 渲染代码块
+        if (typeof window.hljs !== 'undefined' && window.hljs) {
+          try {
+            if (lang && window.hljs.getLanguage(lang)) {
+              const out = window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+              return `<pre class="hljs"><code class="hljs language-${lang}">${out}</code></pre>`;
+            }
+            const auto = window.hljs.highlightAuto(str);
+            return `<pre class="hljs"><code class="hljs language-${auto.language || 'text'}">${auto.value}</code></pre>`;
+          } catch (err) { /* fallback */ }
+        }
+        return '';
+      },
     });
     if (typeof helpers.attachSourceLines === 'function') {
       helpers.attachSourceLines(md);
@@ -599,6 +613,16 @@
       hideChip();
     }
   });
+
+  // Ctrl+滚轮 整体缩放（讲义阅读器独立 panel，本地缩放）
+  let _lectureFontScale = 1;
+  document.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    _lectureFontScale = Math.max(0.7, Math.min(2.0, _lectureFontScale + delta));
+    document.body.style.zoom = String(_lectureFontScale);
+  }, { passive: false });
 
   if (els.chip) {
     els.chip.addEventListener('click', () => {

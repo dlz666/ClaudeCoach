@@ -270,6 +270,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return summary.slice(0, 2500);
   }
 
+  /**
+   * 读用户偏好的检索片段数（retrieval.maxExcerpts），按场景档位轻量加权。
+   * - 'light'  ：日常 chat / 默认课程问答（接近用户原值）
+   * - 'normal' ：练习 / 讲义生成（用户值 +0/+1）
+   * - 'deep'   ：大纲重构 / 整本资料对话（用户值 +2，给更多上下文）
+   * 用户值范围 2-8，最终结果再 clamp 到 [2, 10]，避免极端值。
+   */
+  private async _resolveMaxExcerpts(tier: 'light' | 'normal' | 'deep' = 'light'): Promise<number> {
+    let base = 4;
+    try {
+      const prefs = await this.prefsStore.get();
+      const v = Number((prefs as any)?.retrieval?.maxExcerpts);
+      if (Number.isFinite(v) && v > 0) {
+        base = Math.max(2, Math.min(8, Math.round(v)));
+      }
+    } catch {
+      /* keep default */
+    }
+    const bump = tier === 'deep' ? 2 : tier === 'normal' ? 1 : 0;
+    return Math.max(2, Math.min(10, base + bump));
+  }
+
   private async _buildSubjectGrounding(
     subject: string | undefined,
     query: string,
@@ -330,9 +352,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return { sources: [] };
     }
 
+    const maxExcerpts = await this._resolveMaxExcerpts(
+      resolvedMode === 'material' ? 'normal' : 'light',
+    );
     return this._buildSubjectGrounding(subject, message, {
       materialId: resolvedMode === 'material' ? materialId : undefined,
-      maxExcerpts: resolvedMode === 'material' ? 5 : 4,
+      maxExcerpts,
     });
   }
 
@@ -461,10 +486,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     ]);
 
     const courseProfileContext = await this._buildCourseProfileContext(request.subject);
+    const outlineMaxExcerpts = await this._resolveMaxExcerpts('deep');
     const grounding = await this._buildSubjectGrounding(
       request.subject,
       [currentOutline.title, request.instruction ?? '', 'course outline rebuild'].join(' ').trim(),
-      { materialIds, maxExcerpts: 6 },
+      { materialIds, maxExcerpts: outlineMaxExcerpts },
     );
 
     const previewOutline = request.mode === 'full'
@@ -1371,10 +1397,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
             ]);
+            const rebuildMaxExcerpts = await this._resolveMaxExcerpts('deep');
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
               [currentOutline.title, '重构课程大纲'].join(' '),
-              { materialId: msg.materialId, maxExcerpts: 6 },
+              { materialId: msg.materialId, maxExcerpts: rebuildMaxExcerpts },
             );
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
             const rebuilt = await this.contentGen.rebuildCourse(msg.subject, currentOutline, {
@@ -1477,10 +1504,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 limit: 4,
               }),
             ]);
+            const lessonMaxExcerpts = await this._resolveMaxExcerpts('normal');
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
               [msg.topicTitle, msg.lessonTitle, '讲义'].filter(Boolean).join(' '),
-              { maxExcerpts: 5 },
+              { maxExcerpts: lessonMaxExcerpts },
             );
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateLesson(
@@ -1561,10 +1589,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 limit: 5,
               }),
             ]);
+            const exerciseMaxExcerpts = await this._resolveMaxExcerpts('normal');
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
               [msg.topicTitle, msg.lessonTitle, '练习题'].filter(Boolean).join(' '),
-              { maxExcerpts: 5 },
+              { maxExcerpts: exerciseMaxExcerpts },
             );
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateExercises(
@@ -1829,10 +1858,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               this.adaptiveEngine.getLatestDiagnosis(subject),
               this.progressStore.getProfile(),
             ]);
+            const wrongPracticeMaxExcerpts = await this._resolveMaxExcerpts('light');
             const grounding = await this._buildSubjectGrounding(
               subject,
               [lessonTitle, '错题再练', '薄弱点强化'].join(' '),
-              { maxExcerpts: 4 },
+              { maxExcerpts: wrongPracticeMaxExcerpts },
             );
             const courseProfileContext = await this._buildCourseProfileContext(subject, topicId);
 
@@ -2971,6 +3001,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'webview', 'main.js')
     );
+    const hljsScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js')
+    );
+    const hljsStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'github-dark.min.css')
+    );
 
     // Read HTML template and replace placeholders
     try {
@@ -2982,6 +3018,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       html = html.replace('{{katexScriptUri}}', katexScriptUri.toString());
       html = html.replace('{{katexAutoRenderUri}}', katexAutoRenderUri.toString());
       html = html.replace('{{scriptUri}}', scriptUri.toString());
+      html = html.replace('{{hljsScriptUri}}', hljsScriptUri.toString());
+      html = html.replace('{{hljsStyleUri}}', hljsStyleUri.toString());
       return html;
     } catch {
       // Fallback: inline HTML

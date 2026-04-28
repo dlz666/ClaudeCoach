@@ -2109,3 +2109,28 @@ input[type="radio"] + * {
   background: var(--accent-soft);
 }
 
+/* ===== highlight.js 代码块 ===== */
+pre.hljs,
+.markdown-body pre,
+.chat-msg.assistant pre {
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  background: #1e1e1e;
+  border: 1px solid var(--border);
+  font-family: var(--vscode-editor-font-family, 'Consolas', 'Monaco', monospace);
+  font-size: calc(13px * var(--cc-font-scale, 1));
+  line-height: 1.45;
+}
+pre.hljs code,
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre;
+}
+.hljs {
+  color: #d4d4d4;
+}
+

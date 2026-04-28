@@ -596,6 +596,24 @@
         breaks: true,
         linkify: true,
         typographer: false,
+        highlight: (str, lang) => {
+          // 用 highlight.js 渲染代码块（如果它已加载）
+          if (typeof window.hljs !== 'undefined' && window.hljs) {
+            try {
+              if (lang && window.hljs.getLanguage(lang)) {
+                const out = window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+                return `<pre class="hljs"><code class="hljs language-${lang}">${out}</code></pre>`;
+              }
+              // 未指定语言时让 hljs 自动检测
+              const auto = window.hljs.highlightAuto(str);
+              return `<pre class="hljs"><code class="hljs language-${auto.language || 'text'}">${auto.value}</code></pre>`;
+            } catch (err) {
+              console.warn('hljs render failed:', err);
+            }
+          }
+          // hljs 不可用时回退默认转义
+          return ''; // 让 markdown-it 走默认 escapeHtml
+        },
       })
     : null;
 
@@ -1696,11 +1714,42 @@
     const fontSize = merged.ui?.fontSize ?? 13;
     if (els.uiFontSize) els.uiFontSize.value = String(fontSize);
     if (els.uiFontSizeValue) els.uiFontSizeValue.textContent = `${fontSize} px`;
+    applyFontScale(fontSize);  // 真正改变字体大小
     setRadioGroup(els.uiDefaultTabRadios, merged.ui?.defaultTab || 'learn');
     if (els.uiTreeDefaultExpand) els.uiTreeDefaultExpand.checked = merged.ui?.expandCourseTree !== false;
     setRadioGroup(els.uiThemeRadios, merged.ui?.theme || 'auto');
     if (els.uiShowEmoji) els.uiShowEmoji.checked = merged.ui?.showEmoji !== false;
   }
+
+  /**
+   * 应用 fontSize 到整个 webview。基准 13px，按比例 zoom 整个 body。
+   * 既影响 UI 控件，也影响渲染的 markdown 内容。
+   */
+  function applyFontScale(fontSize) {
+    const px = Math.max(10, Math.min(28, Number(fontSize) || 13));
+    const scale = px / 13;
+    document.documentElement.style.setProperty('--cc-font-scale', String(scale));
+    // CSS zoom 是 chromium 支持的非标准属性，让所有元素整体缩放
+    document.body.style.zoom = String(scale);
+  }
+
+  // Ctrl+滚轮 调整字体大小（任何 webview 区域都生效）
+  document.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const cur = Number(state.preferences?.ui?.fontSize) || 13;
+    const delta = event.deltaY > 0 ? -1 : 1;
+    const next = Math.max(10, Math.min(28, cur + delta));
+    if (next === cur) return;
+    // 同步到 prefs（debounce 保存）
+    state.preferences = state.preferences || {};
+    state.preferences.ui = state.preferences.ui || {};
+    state.preferences.ui.fontSize = next;
+    if (els.uiFontSize) els.uiFontSize.value = String(next);
+    if (els.uiFontSizeValue) els.uiFontSizeValue.textContent = `${next} px`;
+    applyFontScale(next);
+    schedulePreferenceSave();
+  }, { passive: false });
 
   function collectPreferences() {
     const current = state.preferences || deepClone(DEFAULT_PREFS);
@@ -2887,8 +2936,9 @@
   // UI 与显示
   if (els.uiFontSize) {
     els.uiFontSize.addEventListener('input', () => {
-      const v = els.uiFontSize.value;
+      const v = Number(els.uiFontSize.value) || 13;
       if (els.uiFontSizeValue) els.uiFontSizeValue.textContent = `${v} px`;
+      applyFontScale(v);  // 拖动 slider 时立即生效
       schedulePreferenceSave();
     });
   }

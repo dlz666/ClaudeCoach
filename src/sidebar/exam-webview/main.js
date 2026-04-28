@@ -85,7 +85,25 @@
 
   let md = null;
   if (typeof window.markdownit === 'function') {
-    md = window.markdownit({ html: false, breaks: true, linkify: true, typographer: false });
+    md = window.markdownit({
+      html: false,
+      breaks: true,
+      linkify: true,
+      typographer: false,
+      highlight: (str, lang) => {
+        if (typeof window.hljs !== 'undefined' && window.hljs) {
+          try {
+            if (lang && window.hljs.getLanguage(lang)) {
+              const out = window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+              return `<pre class="hljs"><code class="hljs language-${lang}">${out}</code></pre>`;
+            }
+            const auto = window.hljs.highlightAuto(str);
+            return `<pre class="hljs"><code class="hljs language-${auto.language || 'text'}">${auto.value}</code></pre>`;
+          } catch (err) { /* fallthrough */ }
+        }
+        return '';
+      },
+    });
   }
   function renderMarkdown(text) {
     if (md) {
@@ -738,4 +756,14 @@
   renderReadiness();
   // 主动拉一次（防 init 错过）
   vscode.postMessage({ type: 'getExamSession' });
+
+  // Ctrl+滚轮 整体缩放
+  let _examFontScale = 1;
+  document.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    _examFontScale = Math.max(0.7, Math.min(2.0, _examFontScale + delta));
+    document.body.style.zoom = String(_examFontScale);
+  }, { passive: false });
 })();

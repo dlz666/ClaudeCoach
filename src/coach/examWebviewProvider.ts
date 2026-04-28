@@ -664,6 +664,12 @@ export class ExamWebviewProvider {
     const katexAutoRenderUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'node_modules', 'katex', 'dist', 'contrib', 'auto-render.min.js'),
     );
+    const hljsScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'highlight.min.js'),
+    );
+    const hljsStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'github-dark.min.css'),
+    );
 
     const csp = [
       `default-src 'none'`,
@@ -698,7 +704,9 @@ export class ExamWebviewProvider {
       .replace(/{{markdownItUri}}/g, markdownItUri.toString())
       .replace(/{{katexStyleUri}}/g, katexStyleUri.toString())
       .replace(/{{katexScriptUri}}/g, katexScriptUri.toString())
-      .replace(/{{katexAutoRenderUri}}/g, katexAutoRenderUri.toString());
+      .replace(/{{katexAutoRenderUri}}/g, katexAutoRenderUri.toString())
+      .replace(/{{hljsScriptUri}}/g, hljsScriptUri.toString())
+      .replace(/{{hljsStyleUri}}/g, hljsStyleUri.toString());
   }
 }
 
