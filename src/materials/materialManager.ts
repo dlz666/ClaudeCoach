@@ -113,7 +113,7 @@ export class MaterialManager {
     return index.materials.find(material => material.id === materialId) ?? null;
   }
 
-  async importMaterial(subject: Subject): Promise<MaterialEntry | null> {
+  async importMaterial(subject: Subject, materialType?: import('../types').MaterialType): Promise<MaterialEntry | null> {
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: false,
       filters: {
@@ -123,6 +123,27 @@ export class MaterialManager {
     });
 
     if (!uris || uris.length === 0) { return null; }
+
+    // 如果调用方未指定 materialType，弹一个 QuickPick 让用户选
+    let resolvedType: import('../types').MaterialType = materialType ?? 'other';
+    if (!materialType) {
+      const choice = await vscode.window.showQuickPick(
+        [
+          { label: '📚 教材/参考书', value: 'textbook' as const },
+          { label: '📝 课堂笔记/讲义', value: 'lecture-notes' as const },
+          { label: '📖 官方文档/API', value: 'official-doc' as const },
+          { label: '📋 真题/模拟卷', value: 'exam-paper' as const },
+          { label: '📄 学术论文', value: 'paper' as const },
+          { label: '🗂 速查表/汇总', value: 'cheatsheet' as const },
+          { label: '🎬 视频字幕', value: 'video-transcript' as const },
+          { label: '📁 其他/未分类', value: 'other' as const },
+        ],
+        {
+          placeHolder: '资料类型（影响 AI 检索时如何使用这份资料）',
+        },
+      );
+      if (choice) resolvedType = choice.value;
+    }
 
     const sourceFile = uris[0].fsPath;
     const fileName = path.basename(sourceFile);
@@ -144,6 +165,7 @@ export class MaterialManager {
       status: 'pending',
       addedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      materialType: resolvedType,
     };
 
     const index = await this.getIndex();
@@ -261,6 +283,19 @@ export class MaterialManager {
     }
   }
 
+  /** 更新资料类型（影响后续检索加权）。 */
+  async setMaterialType(materialId: string, materialType: import('../types').MaterialType): Promise<boolean> {
+    const index = await this.getIndex();
+    const idx = index.materials.findIndex((m) => m.id === materialId);
+    if (idx < 0) return false;
+    index.materials[idx] = { ...index.materials[idx], materialType, updatedAt: new Date().toISOString() };
+    await this.saveIndex(index);
+    if (index.materials[idx].storageDir) {
+      await writeJson(this.paths.materialMetaPath(index.materials[idx].subject, materialId), index.materials[idx]);
+    }
+    return true;
+  }
+
   async deleteMaterial(materialId: string): Promise<void> {
     const index = await this.getIndex();
     const idx = index.materials.findIndex(material => material.id === materialId);
@@ -368,7 +403,7 @@ export class MaterialManager {
   async buildGroundingContext(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number }
+    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number; courseTags?: import('../types').CourseTag[] }
   ): Promise<GroundingContextV2> {
     const material = options?.materialId ? await this.getMaterialById(options.materialId) : null;
     const summary = await this.getRelevantSummary(subject, query, options);
@@ -460,13 +495,13 @@ export class MaterialManager {
   private async retrieveRelevantExcerpts(
     subject: Subject,
     query: string,
-    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number }
+    options?: { materialId?: string; materialIds?: string[]; maxExcerpts?: number; courseTags?: import('../types').CourseTag[] }
   ): Promise<RetrievedExcerpt[]> {
     const materials = await this._getIndexedMaterials(subject, options);
     const maxExcerpts = options?.maxExcerpts ?? 4;
     const queryText = query.trim().toLowerCase();
     const keywords = this._extractSearchTerms(query);
-    return this._retrieveRelevantExcerptsWholeBook(materials, queryText, keywords, maxExcerpts);
+    return this._retrieveRelevantExcerptsWholeBook(materials, queryText, keywords, maxExcerpts, options?.courseTags);
     /*
     const results: RetrievedExcerpt[] = [];
 
@@ -1005,6 +1040,7 @@ export class MaterialManager {
     queryText: string,
     keywords: string[],
     maxExcerpts: number,
+    courseTags?: import('../types').CourseTag[],
   ): Promise<RetrievedExcerpt[]> {
     if (!queryText && !keywords.length) {
       return this._buildDistributedFallbackExcerpts(materials, maxExcerpts);
@@ -1053,6 +1089,9 @@ export class MaterialManager {
         }
       }
 
+      // tag → materialType 加权：当前课程 tag 偏好这种类型的资料就给整份 material 加分
+      const materialTypeBonus = this._computeMaterialTypeBonus(material, courseTags);
+
       chunks.forEach((chunk, index) => {
         const lowered = chunk.toLowerCase();
         let score = this._scoreChunkWithIDF(lowered, queryText, keywords, dfMap, totalChunks);
@@ -1079,6 +1118,9 @@ export class MaterialManager {
             }
           }
         }
+
+        // tag→type 加权（对每个 chunk 同样加，让"对路"的资料整体浮上来）
+        score += materialTypeBonus;
 
         if (score <= 0) {
           return;
@@ -1176,6 +1218,27 @@ export class MaterialManager {
       .sort((left, right) => right.hitCount - left.hitCount)
       .slice(0, 5)
       .map(({ materialId, sectionLabel, anchorTerms }) => ({ materialId, sectionLabel, anchorTerms }));
+  }
+
+  /**
+   * 当前课程的 tag 命中这份资料的 materialType → 返回加权分。
+   * 多 tag 时取最大权重（一个 tag 权重高足以让资料浮上来）。
+   * 资料没有 type 时按 'other' 处理（基本零加权）。
+   */
+  private _computeMaterialTypeBonus(material: MaterialEntry, courseTags?: import('../types').CourseTag[]): number {
+    if (!courseTags || courseTags.length === 0) return 0;
+    const matType = material.materialType ?? 'other';
+    const { TAG_MATERIAL_TYPE_WEIGHTS } = require('../types') as typeof import('../types');
+    let best = 0;
+    for (const tag of courseTags) {
+      const table = TAG_MATERIAL_TYPE_WEIGHTS[tag];
+      if (!table) continue;
+      const w = (table as any)[matType];
+      if (typeof w === 'number' && w > best) {
+        best = w;
+      }
+    }
+    return best;
   }
 
   /** 预计算每个 keyword 在 chunks 集合内出现的文档数（chunk count）。 */

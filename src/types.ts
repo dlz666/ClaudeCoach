@@ -732,6 +732,46 @@ export interface InlineApplyRequest {
 }
 
 // ===== Materials =====
+
+/** 资料类型：决定它在不同教学法 tag 下的检索权重。 */
+export type MaterialType =
+  | 'textbook'        // 教材/参考书
+  | 'lecture-notes'   // 课堂笔记 / 讲义
+  | 'official-doc'    // 官方文档 / API 参考（cs-skill 偏爱）
+  | 'exam-paper'      // 真题 / 模拟卷（exam-prep 偏爱）
+  | 'paper'           // 学术论文（research 偏爱）
+  | 'cheatsheet'      // 速查表 / 知识点汇总
+  | 'video-transcript'// 视频字幕（语言学习常用）
+  | 'other';          // 未分类
+
+export const MATERIAL_TYPE_LABELS: Record<MaterialType, string> = {
+  'textbook': '📚 教材/参考书',
+  'lecture-notes': '📝 课堂笔记/讲义',
+  'official-doc': '📖 官方文档/API',
+  'exam-paper': '📋 真题/模拟卷',
+  'paper': '📄 学术论文',
+  'cheatsheet': '🗂 速查表/汇总',
+  'video-transcript': '🎬 视频字幕',
+  'other': '📁 其他',
+};
+
+/**
+ * 每个 CourseTag 偏好的 MaterialType 权重表。检索时给匹配类型的资料加分。
+ * 数值是加权分（直接加到 chunk score 上）。
+ */
+export const TAG_MATERIAL_TYPE_WEIGHTS: Record<CourseTag, Partial<Record<MaterialType, number>>> = {
+  'cs-skill': { 'official-doc': 15, 'cheatsheet': 8, 'lecture-notes': 5, 'textbook': 3 },
+  'cs-theory': { 'textbook': 12, 'lecture-notes': 10, 'paper': 6, 'official-doc': 4 },
+  'math-foundation': { 'textbook': 15, 'lecture-notes': 10, 'cheatsheet': 5 },
+  'math-advanced': { 'textbook': 12, 'paper': 12, 'lecture-notes': 8 },
+  'physics': { 'textbook': 12, 'lecture-notes': 10, 'cheatsheet': 5 },
+  'engineering': { 'paper': 8, 'official-doc': 8, 'lecture-notes': 6, 'textbook': 5 },
+  'language': { 'video-transcript': 12, 'cheatsheet': 10, 'textbook': 6 },
+  'exam-prep': { 'exam-paper': 20, 'cheatsheet': 12, 'textbook': 6, 'lecture-notes': 4 },
+  'humanities': { 'textbook': 12, 'paper': 10, 'lecture-notes': 6 },
+  'research': { 'paper': 18, 'lecture-notes': 6, 'textbook': 4 },
+};
+
 export interface MaterialEntry {
   id: string;
   fileName: string;
@@ -745,6 +785,8 @@ export interface MaterialEntry {
   updatedAt?: string;
   indexedAt?: string;
   lastError?: string;
+  /** 资料类型，影响检索时按 tag 加权。可选——旧资料默认 'other'。 */
+  materialType?: MaterialType;
 }
 
 export interface MaterialIndex {
@@ -970,7 +1012,8 @@ export type SidebarCommand =
   | { type: 'getDiagnosis'; subject?: Subject; run?: boolean }
   | { type: 'openFile'; filePath: string }
   | { type: 'previewMaterial'; materialId: string }
-  | { type: 'importMaterial'; subject: Subject }
+  | { type: 'importMaterial'; subject: Subject; materialType?: MaterialType }
+  | { type: 'setMaterialType'; materialId: string; materialType: MaterialType }
   | { type: 'getPreferences' }
   | { type: 'savePreferences'; preferences: LearningPreferences }
   | { type: 'getCourses' }

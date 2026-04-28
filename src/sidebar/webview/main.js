@@ -18,6 +18,19 @@
   ];
   const COURSE_TAG_LABEL_MAP = COURSE_TAGS.reduce((m, t) => { m[t.value] = t.label; return m; }, {});
 
+  // 资料类型元数据（与 types.ts 的 MATERIAL_TYPE_LABELS 同步）
+  const MATERIAL_TYPES = [
+    { value: 'textbook', label: '📚 教材/参考书' },
+    { value: 'lecture-notes', label: '📝 课堂笔记/讲义' },
+    { value: 'official-doc', label: '📖 官方文档/API' },
+    { value: 'exam-paper', label: '📋 真题/模拟卷' },
+    { value: 'paper', label: '📄 学术论文' },
+    { value: 'cheatsheet', label: '🗂 速查表/汇总' },
+    { value: 'video-transcript', label: '🎬 视频字幕' },
+    { value: 'other', label: '📁 其他' },
+  ];
+  const MATERIAL_TYPE_LABEL_MAP = MATERIAL_TYPES.reduce((m, t) => { m[t.value] = t.label; return m; }, {});
+
   const SUBJECT_LABELS = {
     calculus: '微积分',
     'linear-algebra': '线性代数',
@@ -1068,16 +1081,35 @@
     }
 
     const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
-    els.courseMaterialsList.innerHTML = materials.map((item) => `
+    const typeOptions = MATERIAL_TYPES.map((t) => `<option value="${t.value}">${escapeHtml(t.label)}</option>`).join('');
+    els.courseMaterialsList.innerHTML = materials.map((item) => {
+      const currentType = item.materialType || 'other';
+      return `
       <div class="material-item clickable course-material-item${item.id === state.selectedCourseMaterialId ? ' active' : ''}" data-id="${escapeHtml(item.id)}">
         <span class="material-name">${escapeHtml(item.fileName)}</span>
         <span class="material-right">
+          <select class="material-type-select" data-id="${escapeHtml(item.id)}" title="资料类型（影响 AI 检索时的优先级）">
+            ${MATERIAL_TYPES.map((t) => `<option value="${t.value}"${t.value === currentType ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}
+          </select>
           <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
           ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
           <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
         </span>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
+
+    // type 选择变化 → 立即保存
+    els.courseMaterialsList.querySelectorAll('.material-type-select').forEach((sel) => {
+      sel.addEventListener('click', (e) => e.stopPropagation());
+      sel.addEventListener('change', (e) => {
+        e.stopPropagation();
+        vscode.postMessage({
+          type: 'setMaterialType',
+          materialId: sel.getAttribute('data-id'),
+          materialType: sel.value,
+        });
+      });
+    });
 
     els.courseMaterialsList.querySelectorAll('.course-material-item').forEach((item) => {
       item.addEventListener('click', () => {

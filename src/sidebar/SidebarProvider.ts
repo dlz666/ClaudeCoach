@@ -280,6 +280,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       materialId: options?.materialId,
       materialIds: options?.materialIds,
       maxExcerpts: options?.maxExcerpts,
+      // 把课程教学法 tag 传给检索：tag 偏好的 materialType 会获得加权
+      courseTags: outline?.tags,
     });
 
     return {
@@ -2274,6 +2276,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'getMaterials': {
           await this._refreshMaterials();
           this._reconcileMaterialsInBackground();
+          break;
+        }
+
+        case 'setMaterialType': {
+          const materialId = String(msg.materialId ?? '');
+          const materialType = msg.materialType as import('../types').MaterialType;
+          if (!materialId || !materialType) break;
+          const ok = await this.materialManager.setMaterialType(materialId, materialType);
+          if (ok) {
+            this._post({ type: 'log', message: `已更新资料类型`, level: 'info' });
+            await this._refreshMaterials();
+          }
           break;
         }
 

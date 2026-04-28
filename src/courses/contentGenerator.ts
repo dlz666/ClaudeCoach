@@ -19,6 +19,8 @@ import {
   CourseProfileChapter,
   TopicOutline,
   WrongQuestion,
+  CourseTag,
+  COURSE_TAG_PLAYBOOK,
   subjectLabel,
 } from '../types';
 import { CourseManager } from './courseManager';
@@ -178,9 +180,13 @@ export class ContentGenerator {
   ): Promise<{ exercises: Exercise[]; filePath: string }> {
     const adaptiveDifficulty = this.computeAdaptiveDifficulty(difficulty, ctx);
     const focused = (wrongQuestions ?? []).slice(0, 3);
-    const enrichedCtx = focused.length > 0
+    const enrichedCtxBase = focused.length > 0
       ? this.injectWrongQuestionContext(ctx, focused, '最近错题与对应薄弱点（请出题时覆盖这些考点的"变体"，不要照抄题面）')
       : ctx;
+
+    // 课程教学法 tag 的 defaultExerciseMix 覆盖用户全局 exerciseTypeMix
+    // （tag 是课程级硬约束，应胜过用户的"通用偏好"）
+    const enrichedCtx = this.applyTagExerciseMix(enrichedCtxBase);
 
     const messages = exercisePrompt(subject, lessonTitle, count, adaptiveDifficulty, enrichedCtx);
     const exercises = await this.ai.chatJson<Exercise[]>(messages);
@@ -217,6 +223,40 @@ export class ContentGenerator {
     await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
 
     return { exercises, filePath };
+  }
+
+  /**
+   * 课程教学法 tag 的 defaultExerciseMix 覆盖用户的 aiStyle.exerciseTypeMix。
+   * 多 tag 时取所有 tag 的 mix 平均。tag 没有指定 mix 时不覆盖。
+   * 这是"课程级硬约束 > 用户全局偏好"的体现。
+   */
+  private applyTagExerciseMix(ctx: GenerationContext): GenerationContext {
+    const tags = (ctx.courseTags ?? []).filter(Boolean) as CourseTag[];
+    if (tags.length === 0) return ctx;
+
+    const mixes = tags
+      .map((tag) => COURSE_TAG_PLAYBOOK[tag]?.defaultExerciseMix)
+      .filter(Boolean) as Array<NonNullable<typeof COURSE_TAG_PLAYBOOK[CourseTag]['defaultExerciseMix']>>;
+    if (mixes.length === 0) return ctx;
+
+    const avg = {
+      multipleChoice: Math.round(mixes.reduce((s, m) => s + m.multipleChoice, 0) / mixes.length),
+      freeResponse: Math.round(mixes.reduce((s, m) => s + m.freeResponse, 0) / mixes.length),
+      code: Math.round(mixes.reduce((s, m) => s + m.code, 0) / mixes.length),
+    };
+
+    // 深拷贝 prefs 避免污染调用方的 ctx.preferences
+    const prefs: LearningPreferences | null | undefined = ctx.preferences;
+    if (!prefs) return ctx;
+
+    const overriddenPrefs: LearningPreferences = {
+      ...prefs,
+      aiStyle: {
+        ...(prefs.aiStyle ?? {}),
+        exerciseTypeMix: avg,
+      },
+    };
+    return { ...ctx, preferences: overriddenPrefs };
   }
 
   private computeAdaptiveDifficulty(requestedDifficulty: number, ctx: GenerationContext): number {
