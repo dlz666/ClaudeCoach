@@ -502,6 +502,25 @@ export interface LearningPreferences {
     strictness?: RetrievalStrictness;
     citeSources?: boolean;
     maxExcerpts?: number;
+    /**
+     * 向量检索 (Hybrid RAG) 配置。embedding 模型可以与 chat 模型完全独立的
+     * baseUrl/token，例如 chat 走 codex 中转，embedding 走硅基流动免费 bge-m3。
+     */
+    embedding?: {
+      enabled?: boolean;
+      /** OpenAI 兼容 endpoint，例如 https://api.siliconflow.cn/v1 */
+      baseUrl?: string;
+      apiToken?: string;
+      /** 默认 BAAI/bge-m3（中英 + 跨语言均强、硅基流动免费提供） */
+      model?: string;
+      /** 向量维度，bge-m3 = 1024，OpenAI 3-small = 1536 */
+      dimension?: number;
+      /**
+       * 关键词 vs 向量的融合权重，0=纯关键词、1=纯向量、0.5=均衡。
+       * 实现走 RRF (Reciprocal Rank Fusion)，权重控制向量项的乘子。
+       */
+      hybridWeight?: number;
+    };
   };
   /** UI 偏好。 */
   ui?: {
@@ -1111,6 +1130,15 @@ export interface GroundingSource {
   excerpt: string;
   score: number;
   sectionLabel?: string;
+  /**
+   * 召回通道：'keyword'=仅关键词命中、'vector'=仅向量相似、'both'=双命中。
+   * Hybrid 模式下可选，纯关键词模式下保持 undefined。
+   */
+  retrievedBy?: 'keyword' | 'vector' | 'both';
+  /** 向量相似度（cosine），仅 vector / both 时存在。 */
+  vectorScore?: number;
+  /** 关键词 IDF 分，仅 keyword / both 时存在。 */
+  keywordScore?: number;
 }
 
 /** prompt 上下文的注入范围。`buildSystemBase` 按这个 scope 裁剪。 */
@@ -1176,6 +1204,10 @@ export type SidebarCommand =
   | { type: 'exportPreferences' }
   | { type: 'importPreferences' }
   | { type: 'deleteAIProfile'; profileId: string; profileName?: string }
+  // ===== Hybrid RAG（向量检索） =====
+  | { type: 'testEmbedding'; config: { baseUrl: string; apiToken: string; model: string; dimension?: number } }
+  | { type: 'reindexAllVectors'; subject: Subject }
+  | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Inline 内联编辑（Phase 1） =====
   | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }
@@ -1247,6 +1279,30 @@ export type SidebarResponse =
   | { type: 'examSubmissionGraded'; sessionId: string; submission: ExamSubmission }
   | { type: 'examReadinessUpdated'; sessionId: string; snapshot: ExamReadinessSnapshot }
   | { type: 'examVisionUnsupported'; modelName?: string; suggestedModels: string[] }
+  // ===== Hybrid RAG 响应 =====
+  | {
+      type: 'embeddingTestResult';
+      data: { ok: boolean; message: string; dimension?: number; latencyMs?: number };
+    }
+  | {
+      type: 'vectorReindexComplete';
+      data: { ok: boolean; processed: number; failed: number };
+    }
+  | {
+      type: 'vectorIndexStats';
+      data: {
+        subject: Subject;
+        stats: Array<{
+          materialId: string;
+          fileName: string;
+          exists: boolean;
+          chunks: number;
+          model?: string;
+          dimension?: number;
+          updatedAt?: string;
+        }>;
+      };
+    }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };

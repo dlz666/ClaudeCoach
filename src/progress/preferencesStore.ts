@@ -35,6 +35,17 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
     strictness: 'inclusive',
     citeSources: true,
     maxExcerpts: 4,
+    embedding: {
+      // 默认关闭，需要用户在设置页主动启用 + 填 baseUrl/token；首次启用时弹一次性
+      // 索引构建提示
+      enabled: false,
+      // 默认建议值：硅基流动免费 bge-m3
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiToken: '',
+      model: 'BAAI/bge-m3',
+      dimension: 1024,
+      hybridWeight: 0.5,
+    },
   },
   ui: {
     fontSize: 14,
@@ -108,6 +119,10 @@ function mergePreferences(stored: Partial<LearningPreferences> | null | undefine
     retrieval: {
       ...DEFAULT_PREFERENCES.retrieval!,
       ...(stored.retrieval ?? {}),
+      embedding: {
+        ...DEFAULT_PREFERENCES.retrieval!.embedding!,
+        ...(stored.retrieval?.embedding ?? {}),
+      },
     },
     ui: {
       ...DEFAULT_PREFERENCES.ui!,

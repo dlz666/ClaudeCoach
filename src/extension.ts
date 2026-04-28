@@ -18,6 +18,9 @@ import { SessionLogger } from './coach/sessionLogger';
 import { LearningPlanStore } from './coach/learningPlanStore';
 import { CourseManager } from './courses/courseManager';
 import { MaterialManager } from './materials/materialManager';
+import { VectorIndex } from './materials/vectorIndex';
+import { HybridRetriever } from './materials/hybridRetriever';
+import { EmbeddingClient } from './ai/embeddingClient';
 import { getStoragePathResolver } from './storage/pathResolver';
 import { ExamPrepStore } from './exam/examPrepStore';
 import { ExamAnalyzer } from './exam/examAnalyzer';
@@ -47,6 +50,41 @@ export async function activate(context: vscode.ExtensionContext) {
   const courseProfileStore = new CourseProfileStore();
   const courseManager = new CourseManager();
   const materialManager = new MaterialManager();
+
+  // ===== Hybrid RAG（向量检索）依赖注入 =====
+  // EmbeddingClient 每次拿 profile 都从 prefs 读最新值，所以用户改设置不需要重启
+  const embeddingClient = new EmbeddingClient(async () => {
+    const prefs = await preferencesStore.get();
+    const cfg = prefs.retrieval?.embedding;
+    if (!cfg || !cfg.enabled || !cfg.baseUrl || !cfg.apiToken || !cfg.model) {
+      return null;
+    }
+    return {
+      enabled: true,
+      baseUrl: cfg.baseUrl,
+      apiToken: cfg.apiToken,
+      model: cfg.model,
+      dimension: cfg.dimension,
+    };
+  });
+  const vectorIndex = new VectorIndex();
+  const hybridRetriever = new HybridRetriever(embeddingClient, vectorIndex);
+  materialManager.setHybridDeps({
+    embeddingClient,
+    vectorIndex,
+    hybridRetriever,
+    getConfig: async () => {
+      const prefs = await preferencesStore.get();
+      const cfg = prefs.retrieval?.embedding;
+      if (!cfg || !cfg.enabled) return null;
+      return {
+        enabled: true,
+        hybridWeight: typeof cfg.hybridWeight === 'number' ? cfg.hybridWeight : 0.5,
+        model: cfg.model || 'BAAI/bge-m3',
+        dimension: cfg.dimension || 1024,
+      };
+    },
+  });
 
   // ===== Coach 框架 =====
   const paths = getStoragePathResolver();

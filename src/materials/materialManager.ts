@@ -6,6 +6,9 @@ import { readJson, writeJson, ensureDir, writeText, fileExists } from '../utils/
 import { extractTextFromFile } from './textExtractor';
 import { StoragePathResolver, getStoragePathResolver } from '../storage/pathResolver';
 import { TextbookParser } from './textbookParser';
+import { EmbeddingClient } from '../ai/embeddingClient';
+import { VectorIndex } from './vectorIndex';
+import { HybridRetriever, KeywordCandidate, HybridResult } from './hybridRetriever';
 
 interface RetrievedExcerpt {
   materialId: string;
@@ -14,7 +17,21 @@ interface RetrievedExcerpt {
   excerpt: string;
   score: number;
   sectionLabel?: string;
+  /** Hybrid 模式下的额外元信息（回写到 GroundingSource，供 UI 展示通道） */
+  retrievedBy?: 'keyword' | 'vector' | 'both';
+  keywordScore?: number;
+  vectorScore?: number;
 }
+
+/** 向量化进度回调，用于状态栏显示 */
+export type VectorizeProgressCallback = (event: {
+  kind: 'start' | 'chunk-batch' | 'done' | 'error';
+  materialId?: string;
+  fileName?: string;
+  doneChunks?: number;
+  totalChunks?: number;
+  message?: string;
+}) => void;
 
 interface LocatedSection {
   materialId: string;
@@ -50,9 +67,44 @@ export class MaterialManager {
   private readonly indexEmitter = new vscode.EventEmitter<MaterialIndex>();
   readonly onDidChangeIndex = this.indexEmitter.event;
 
+  /** Hybrid RAG 三件套（可选，未注入时退化为纯关键词） */
+  private embeddingClient: EmbeddingClient | null = null;
+  private vectorIndex: VectorIndex | null = null;
+  private hybridRetriever: HybridRetriever | null = null;
+  /** 用户偏好读取器（hybrid 权重 / max excerpts），由 setHybridDeps 注入 */
+  private getHybridConfig: (() => Promise<{
+    enabled: boolean;
+    hybridWeight: number;
+    model: string;
+    dimension: number;
+  } | null>) | null = null;
+  /** 防止同一资料并发向量化 */
+  private readonly vectorizingMaterials = new Set<string>();
+
   constructor() {
     this.paths = getStoragePathResolver();
     this.parser = new TextbookParser();
+  }
+
+  /**
+   * 注入 Hybrid 三件套；可在 extension activate 时调用。
+   * 不调用 → 完全保持纯关键词行为（向后兼容）。
+   */
+  setHybridDeps(deps: {
+    embeddingClient: EmbeddingClient;
+    vectorIndex: VectorIndex;
+    hybridRetriever: HybridRetriever;
+    getConfig: () => Promise<{
+      enabled: boolean;
+      hybridWeight: number;
+      model: string;
+      dimension: number;
+    } | null>;
+  }): void {
+    this.embeddingClient = deps.embeddingClient;
+    this.vectorIndex = deps.vectorIndex;
+    this.hybridRetriever = deps.hybridRetriever;
+    this.getHybridConfig = deps.getConfig;
   }
 
   private get materialsDir(): string {
@@ -416,6 +468,9 @@ export class MaterialManager {
       excerpt: item.excerpt.slice(0, 240),
       score: item.score,
       sectionLabel: item.sectionLabel,
+      retrievedBy: item.retrievedBy,
+      keywordScore: item.keywordScore,
+      vectorScore: item.vectorScore,
     }));
 
     return {
@@ -690,6 +745,183 @@ export class MaterialManager {
       return error.message;
     }
     return String(error || '未知错误');
+  }
+
+  // =====================================================================
+  // 向量索引：增量构建 / 重建 / 删除
+  // =====================================================================
+
+  /**
+   * 为指定资料增量构建向量索引：
+   * - 已有 chunk 文本未变 → 复用旧向量
+   * - 缺失 / 文本变更的 chunks → 重新调 embedding
+   * - 模型或维度变更 → 整份重建
+   *
+   * 该方法是后台触发的"非阻塞"动作，调用方拿到 promise 但通常不 await。
+   * 错误会以 progress.error 事件发出，不抛。
+   */
+  async ensureVectorIndexFor(
+    material: MaterialEntry,
+    progress?: VectorizeProgressCallback,
+  ): Promise<{ ok: boolean; chunks: number; embedded: number; reused: number; error?: string }> {
+    if (!this.embeddingClient || !this.vectorIndex || !this.getHybridConfig) {
+      return { ok: false, chunks: 0, embedded: 0, reused: 0, error: 'hybrid 未初始化' };
+    }
+    const config = await this.getHybridConfig();
+    if (!config?.enabled) {
+      return { ok: false, chunks: 0, embedded: 0, reused: 0, error: '向量检索未启用' };
+    }
+
+    if (this.vectorizingMaterials.has(material.id)) {
+      return { ok: false, chunks: 0, embedded: 0, reused: 0, error: '该资料正在向量化中' };
+    }
+    this.vectorizingMaterials.add(material.id);
+
+    try {
+      const text = await this._readMaterialText(material);
+      if (!text) {
+        return { ok: false, chunks: 0, embedded: 0, reused: 0, error: '资料文本为空' };
+      }
+      const chunks = this._chunkText(text);
+      if (!chunks.length) {
+        return { ok: false, chunks: 0, embedded: 0, reused: 0, error: '切分结果为空' };
+      }
+
+      const existing = await this.vectorIndex.load(material);
+      const { keep, todo } = this.vectorIndex.diff(existing, chunks, config.model, config.dimension);
+
+      progress?.({
+        kind: 'start',
+        materialId: material.id,
+        fileName: material.fileName,
+        totalChunks: chunks.length,
+        message: `开始向量化（${todo.length} 新 / ${keep.length} 复用）`,
+      });
+
+      if (todo.length === 0) {
+        // 全部命中缓存，但仍需写一遍合并文件以更新 chunkIndex 顺序
+        const merged = await this.vectorIndex.merge(material, config.model, config.dimension, keep, []);
+        progress?.({
+          kind: 'done',
+          materialId: material.id,
+          fileName: material.fileName,
+          doneChunks: chunks.length,
+          totalChunks: chunks.length,
+          message: `全部命中缓存（${merged.chunks.length} 块）`,
+        });
+        return { ok: true, chunks: chunks.length, embedded: 0, reused: keep.length };
+      }
+
+      // 分批 embed（client 内部已有 batchSize；这里做进度回调）
+      const fresh: { chunkIndex: number; text: string; textHash: string; vector: number[] }[] = [];
+      const BATCH = 16; // 控制单次请求规模，便于实时显示进度
+      for (let i = 0; i < todo.length; i += BATCH) {
+        const slice = todo.slice(i, i + BATCH);
+        const vecs = await this.embeddingClient.embed(slice.map((s) => s.text));
+        if (!vecs) {
+          progress?.({
+            kind: 'error',
+            materialId: material.id,
+            fileName: material.fileName,
+            message: 'embedding 调用失败，已停止本资料的向量化',
+          });
+          return {
+            ok: false,
+            chunks: chunks.length,
+            embedded: fresh.length,
+            reused: keep.length,
+            error: 'embedding 调用失败',
+          };
+        }
+        for (let j = 0; j < slice.length; j++) {
+          fresh.push({
+            chunkIndex: slice[j].chunkIndex,
+            text: slice[j].text,
+            textHash: slice[j].textHash,
+            vector: vecs[j],
+          });
+        }
+        progress?.({
+          kind: 'chunk-batch',
+          materialId: material.id,
+          fileName: material.fileName,
+          doneChunks: keep.length + fresh.length,
+          totalChunks: chunks.length,
+        });
+      }
+
+      const dimension = fresh[0]?.vector?.length ?? config.dimension;
+      await this.vectorIndex.merge(material, config.model, dimension, keep, fresh);
+      progress?.({
+        kind: 'done',
+        materialId: material.id,
+        fileName: material.fileName,
+        doneChunks: chunks.length,
+        totalChunks: chunks.length,
+        message: `向量化完成（新 ${fresh.length} / 复用 ${keep.length}）`,
+      });
+      return { ok: true, chunks: chunks.length, embedded: fresh.length, reused: keep.length };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      progress?.({
+        kind: 'error',
+        materialId: material.id,
+        fileName: material.fileName,
+        message,
+      });
+      return { ok: false, chunks: 0, embedded: 0, reused: 0, error: message };
+    } finally {
+      this.vectorizingMaterials.delete(material.id);
+    }
+  }
+
+  /**
+   * 一次性为某学科下的所有资料重建向量索引（用户切模型时调用）。
+   */
+  async reindexAllVectors(
+    subject: Subject,
+    progress?: VectorizeProgressCallback,
+  ): Promise<{ ok: boolean; processed: number; failed: number }> {
+    if (!this.vectorIndex) {
+      return { ok: false, processed: 0, failed: 0 };
+    }
+    const materials = await this._getIndexedMaterials(subject);
+    let processed = 0;
+    let failed = 0;
+    for (const material of materials) {
+      // 强制重建：先删旧索引
+      try {
+        await this.vectorIndex.remove(material);
+      } catch {
+        /* noop */
+      }
+      const result = await this.ensureVectorIndexFor(material, progress);
+      if (result.ok) {
+        processed++;
+      } else {
+        failed++;
+      }
+    }
+    return { ok: failed === 0, processed, failed };
+  }
+
+  /** 删除资料时连带清理向量索引。 */
+  async removeVectorIndexFor(material: MaterialEntry): Promise<void> {
+    if (this.vectorIndex) {
+      await this.vectorIndex.remove(material);
+    }
+  }
+
+  /** 仅查询当前资料的向量索引状态，用于设置页 UI 显示。 */
+  async getVectorIndexStats(material: MaterialEntry): Promise<{
+    exists: boolean;
+    chunks: number;
+    model?: string;
+    dimension?: number;
+    updatedAt?: string;
+  }> {
+    if (!this.vectorIndex) return { exists: false, chunks: 0 };
+    return this.vectorIndex.stats(material);
   }
 
   async ensureMaterialText(entry: MaterialEntry): Promise<string> {
@@ -1137,7 +1369,53 @@ export class MaterialManager {
       });
     }
 
-    // 关键词非空但没有命中任何 chunk：返回 []，不再调 fallback 凑数。
+    // === Hybrid 融合（若已注入 hybridRetriever 且用户启用了向量）===
+    const hybridConfig = this.getHybridConfig ? await this.getHybridConfig() : null;
+    if (
+      hybridConfig?.enabled &&
+      this.hybridRetriever &&
+      hybridConfig.hybridWeight > 0 &&
+      queryText
+    ) {
+      const kwCandidates: KeywordCandidate[] = results.map((r) => ({
+        materialId: r.materialId,
+        fileName: r.fileName,
+        // 从 sourceLabel 反解出 chunkIndex；keyword 路径走 chunks.forEach((,index)=>) 已经
+        // 把 index 写进 sourceLabel 形如 "xxx / 片段 N"，但更稳妥是单独保存 → 这里用"片段 N"匹配
+        chunkIndex: this._parseChunkIndexFromLabel(r.sourceLabel),
+        chunkText: r.excerpt,
+        score: r.score,
+        sectionLabel: r.sectionLabel,
+      }));
+
+      const fused: HybridResult[] = await this.hybridRetriever.fuse(
+        materials,
+        queryText,
+        kwCandidates,
+        {
+          hybridWeight: hybridConfig.hybridWeight,
+          maxExcerpts,
+          channelTopK: Math.max(maxExcerpts * 2, 8),
+        },
+      );
+
+      if (fused.length > 0) {
+        return fused.map((f) => ({
+          materialId: f.materialId,
+          fileName: f.fileName,
+          sourceLabel: `${f.fileName} / 片段 ${f.chunkIndex + 1}`,
+          excerpt: f.chunkText,
+          score: f.finalScore,
+          sectionLabel: f.sectionLabel,
+          retrievedBy: f.retrievedBy,
+          keywordScore: f.keywordScore,
+          vectorScore: f.vectorScore,
+        }));
+      }
+      // fused 空（embedding 完全失败 + 关键词也空）→ 落到下面的纯关键词分支
+    }
+
+    // === 纯关键词模式（hybrid 关闭 / embedding 不可用）===
     if (!results.length) {
       return [];
     }
@@ -1145,6 +1423,16 @@ export class MaterialManager {
     return results
       .sort((left, right) => right.score - left.score || left.excerpt.length - right.excerpt.length)
       .slice(0, maxExcerpts);
+  }
+
+  /** 从 sourceLabel "xxx / 片段 N" 解析出 0 基的 chunkIndex；解析失败回 0。 */
+  private _parseChunkIndexFromLabel(label: string): number {
+    const m = label.match(/片段\s*(\d+)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n >= 1) return n - 1;
+    }
+    return 0;
   }
 
   /**

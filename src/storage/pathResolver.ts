@@ -206,6 +206,11 @@ export class StoragePathResolver {
     return path.join(this.materialDir(subject, materialId), 'meta.json');
   }
 
+  /** 单个资料的向量索引文件（per-material .vec.json）。 */
+  materialVectorIndexPath(subject: Subject, materialId: string): string {
+    return path.join(this.materialDir(subject, materialId), 'vector-index.json');
+  }
+
   get workspaceRoot(): string {
     return path.join(this.storageRoot, 'workspaces', this.workspaceId);
   }

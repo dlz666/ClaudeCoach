@@ -2232,6 +2232,93 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        // ===== 向量检索 / Hybrid RAG =====
+
+        case 'testEmbedding': {
+          // 用临时 profile（msg 携带）测连通性，避免必须先 save 才能测
+          try {
+            const tempCfg = (msg as any).config || {};
+            const { EmbeddingClient: EC } = await import('../ai/embeddingClient');
+            const client = new EC(async () => ({
+              enabled: true,
+              baseUrl: String(tempCfg.baseUrl ?? '').trim(),
+              apiToken: String(tempCfg.apiToken ?? '').trim(),
+              model: String(tempCfg.model ?? '').trim() || 'BAAI/bge-m3',
+              dimension: Number(tempCfg.dimension) || undefined,
+            }));
+            const result = await client.testConnection();
+            this._post({ type: 'embeddingTestResult', data: result });
+            this._post({
+              type: 'log',
+              message: `Embedding 测试：${result.message}`,
+              level: result.ok ? 'info' : 'warn',
+            });
+          } catch (err: any) {
+            this._post({
+              type: 'embeddingTestResult',
+              data: { ok: false, message: err?.message || String(err) },
+            });
+          }
+          break;
+        }
+
+        case 'reindexAllVectors': {
+          const subject = (msg as any).subject as Subject | undefined;
+          if (!subject) {
+            this._post({ type: 'log', message: '请选择学科再重建向量索引', level: 'warn' });
+            break;
+          }
+          this._startTask(`向量化资料（${subject}）`, async () => {
+            const result = await this.materialManager.reindexAllVectors(subject, (event) => {
+              if (event.kind === 'start' || event.kind === 'chunk-batch') {
+                this._post({
+                  type: 'log',
+                  message: `[${event.fileName ?? ''}] ${event.message ?? ''}`,
+                  level: 'info',
+                });
+              } else if (event.kind === 'error') {
+                this._post({
+                  type: 'log',
+                  message: `[${event.fileName ?? ''}] ${event.message ?? '失败'}`,
+                  level: 'error',
+                });
+              }
+            });
+            this._post({
+              type: 'log',
+              message: `向量索引完成：成功 ${result.processed} 份，失败 ${result.failed} 份`,
+              level: result.ok ? 'info' : 'warn',
+            });
+            this._post({ type: 'vectorReindexComplete', data: result });
+          });
+          break;
+        }
+
+        case 'getVectorIndexStats': {
+          // 返回当前学科所有资料的索引状态
+          const subject = (msg as any).subject as Subject | undefined;
+          if (!subject) break;
+          try {
+            const idx = await this.materialManager.getIndex();
+            const subjectMaterials = idx.materials.filter((m) => m.subject === subject);
+            const stats = await Promise.all(
+              subjectMaterials.map(async (m) => ({
+                materialId: m.id,
+                fileName: m.fileName,
+                ...(await this.materialManager.getVectorIndexStats(m)),
+              })),
+            );
+            this._post({ type: 'vectorIndexStats', data: { subject, stats } });
+          } catch (err: any) {
+            this._post({
+              type: 'log',
+              message: `读取向量索引状态失败：${err?.message}`,
+              level: 'error',
+            });
+          }
+          break;
+        }
+
         // ===== Inline 内联编辑路由 =====
 
         case 'openLectureViewer': {

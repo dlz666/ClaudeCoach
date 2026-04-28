@@ -329,6 +329,17 @@
     retrievalCiteDefault: $('retrieval-cite-default'),
     retrievalSnippets: $('retrieval-snippets'),
     retrievalSnippetsValue: $('retrieval-snippets-value'),
+    // Hybrid RAG
+    embeddingEnabled: $('embedding-enabled'),
+    embeddingBaseUrl: $('embedding-baseUrl'),
+    embeddingToken: $('embedding-token'),
+    embeddingModel: $('embedding-model'),
+    embeddingDimension: $('embedding-dimension'),
+    embeddingHybridWeight: $('embedding-hybrid-weight'),
+    embeddingHybridWeightValue: $('embedding-hybrid-weight-value'),
+    btnTestEmbedding: $('btn-test-embedding'),
+    btnReindexVectors: $('btn-reindex-vectors'),
+    embeddingTestStatus: $('embedding-test-status'),
 
     // ===== 讲义阅读体验 =====
     lectureReaderModeRadios: Array.from(document.querySelectorAll('input[name="lecture-reader-mode"]')),
@@ -1702,6 +1713,17 @@
     if (els.retrievalSnippets) els.retrievalSnippets.value = String(snippets);
     if (els.retrievalSnippetsValue) els.retrievalSnippetsValue.textContent = String(snippets);
 
+    // Hybrid RAG embedding
+    const emb = merged.retrieval?.embedding || {};
+    if (els.embeddingEnabled) els.embeddingEnabled.checked = !!emb.enabled;
+    if (els.embeddingBaseUrl) els.embeddingBaseUrl.value = emb.baseUrl || 'https://api.siliconflow.cn/v1';
+    if (els.embeddingToken) els.embeddingToken.value = emb.apiToken || '';
+    if (els.embeddingModel) els.embeddingModel.value = emb.model || 'BAAI/bge-m3';
+    if (els.embeddingDimension) els.embeddingDimension.value = String(emb.dimension ?? 1024);
+    const hw = typeof emb.hybridWeight === 'number' ? emb.hybridWeight : 0.5;
+    if (els.embeddingHybridWeight) els.embeddingHybridWeight.value = String(hw);
+    if (els.embeddingHybridWeightValue) els.embeddingHybridWeightValue.textContent = String(hw);
+
     // ===== 讲义阅读体验 =====
     setRadioGroup(els.lectureReaderModeRadios, merged.coach?.lecture?.viewerMode || 'lecture-webview');
     setRadioGroup(els.lectureApplyModeRadios, merged.coach?.lecture?.applyMode || 'preview-confirm');
@@ -1816,6 +1838,14 @@
         strictness: getRadioGroup(els.retrievalStrictnessRadios) || current.retrieval?.strictness || 'balanced',
         citeSources: !!els.retrievalCiteDefault?.checked,
         maxExcerpts: Number(els.retrievalSnippets?.value ?? current.retrieval?.maxExcerpts ?? 4),
+        embedding: {
+          enabled: !!els.embeddingEnabled?.checked,
+          baseUrl: (els.embeddingBaseUrl?.value || '').trim() || (current.retrieval?.embedding?.baseUrl ?? 'https://api.siliconflow.cn/v1'),
+          apiToken: (els.embeddingToken?.value || '').trim() || (current.retrieval?.embedding?.apiToken ?? ''),
+          model: (els.embeddingModel?.value || '').trim() || (current.retrieval?.embedding?.model ?? 'BAAI/bge-m3'),
+          dimension: Number(els.embeddingDimension?.value ?? current.retrieval?.embedding?.dimension ?? 1024),
+          hybridWeight: Number(els.embeddingHybridWeight?.value ?? current.retrieval?.embedding?.hybridWeight ?? 0.5),
+        },
       },
       ui: {
         fontSize: Number(els.uiFontSize?.value ?? current.ui?.fontSize ?? 13),
@@ -2921,6 +2951,46 @@
     });
   }
 
+  // Hybrid RAG（向量检索）
+  bindAutoSave(els.embeddingEnabled);
+  bindAutoSave(els.embeddingBaseUrl, 'change');
+  bindAutoSave(els.embeddingToken, 'change');
+  bindAutoSave(els.embeddingModel, 'change');
+  bindAutoSave(els.embeddingDimension, 'change');
+  if (els.embeddingHybridWeight) {
+    els.embeddingHybridWeight.addEventListener('input', () => {
+      if (els.embeddingHybridWeightValue) els.embeddingHybridWeightValue.textContent = String(els.embeddingHybridWeight.value);
+      schedulePreferenceSave();
+    });
+  }
+  if (els.btnTestEmbedding) {
+    els.btnTestEmbedding.addEventListener('click', () => {
+      if (els.embeddingTestStatus) els.embeddingTestStatus.textContent = '测试中...';
+      vscode.postMessage({
+        type: 'testEmbedding',
+        config: {
+          baseUrl: (els.embeddingBaseUrl?.value || '').trim(),
+          apiToken: (els.embeddingToken?.value || '').trim(),
+          model: (els.embeddingModel?.value || 'BAAI/bge-m3').trim(),
+          dimension: Number(els.embeddingDimension?.value ?? 1024),
+        },
+      });
+    });
+  }
+  if (els.btnReindexVectors) {
+    els.btnReindexVectors.addEventListener('click', () => {
+      const subject = state?.selectedSubject || state?.activeSubject;
+      if (!subject) {
+        showToast('请先在课程页选定一个学科', 'warn');
+        return;
+      }
+      if (!confirm(`将为学科「${subject}」的所有资料重建向量索引。可能需要数分钟，是否继续？`)) {
+        return;
+      }
+      vscode.postMessage({ type: 'reindexAllVectors', subject });
+    });
+  }
+
   // 讲义阅读体验
   els.lectureReaderModeRadios?.forEach((r) => bindAutoSave(r));
   els.lectureApplyModeRadios?.forEach((r) => bindAutoSave(r));
@@ -3407,6 +3477,26 @@
       }
       case 'preferences': {
         renderPreferences(msg.data || null);
+        break;
+      }
+      case 'embeddingTestResult': {
+        const r = msg.data || {};
+        if (els.embeddingTestStatus) {
+          const symbol = r.ok ? '✓' : '✗';
+          const detail = r.dimension ? ` · ${r.dimension} 维` : '';
+          const time = r.latencyMs ? ` (${r.latencyMs}ms)` : '';
+          els.embeddingTestStatus.textContent = `${symbol} ${r.message || ''}${detail}${time}`;
+          els.embeddingTestStatus.style.color = r.ok ? 'var(--vscode-charts-green, #4ec9b0)' : 'var(--vscode-charts-red, #f48771)';
+        }
+        break;
+      }
+      case 'vectorReindexComplete': {
+        const r = msg.data || {};
+        addLog(`向量索引完成：成功 ${r.processed || 0} / 失败 ${r.failed || 0}`, r.ok ? 'info' : 'warn');
+        break;
+      }
+      case 'vectorIndexStats': {
+        // 后续可用于在资料卡片上显示"已向量化 N/M 块"
         break;
       }
       case 'diagnosis': {
