@@ -1207,6 +1207,15 @@
     });
 
     const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
+    const vectorStats = state.materials.vectorStats || {};
+    const renderVectorBadge = (item) => {
+      const stats = vectorStats[item.id];
+      if (!stats || !stats.exists || !stats.chunks) {
+        return '<span class="material-vector-badge unindexed" title="未建向量索引">●</span>';
+      }
+      const dimText = stats.dimension ? ` ${stats.dimension}维` : '';
+      return `<span class="material-vector-badge indexed" title="已向量化 · ${stats.chunks} 块${dimText}${stats.model ? ' · ' + stats.model : ''}">▣ ${stats.chunks}</span>`;
+    };
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
       <div class="material-group">
         <div class="material-group-title">${escapeHtml(subjectLabel(subject))}</div>
@@ -1214,6 +1223,7 @@
           <div class="material-item clickable library-material-item" data-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}">
             <span class="material-name">${escapeHtml(item.fileName)}</span>
             <span class="material-right">
+              ${renderVectorBadge(item)}
               <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
               ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
               <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
@@ -3429,6 +3439,8 @@
       }
       case 'materials': {
         state.materials = msg.data || { materials: [] };
+        // 把外层 vectorStats（不在 MaterialIndex 里）挂到 state.materials 上供 renderMaterials 用
+        state.materials.vectorStats = msg.vectorStats || {};
         if (
           state.selectedCourseMaterialId &&
           !state.materials.materials.some((item) => item.id === state.selectedCourseMaterialId)

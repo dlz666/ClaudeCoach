@@ -2109,6 +2109,25 @@ input[type="radio"] + * {
   background: var(--accent-soft);
 }
 
+/* 资料卡片：向量索引状态徽章 */
+.material-vector-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-right: 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: nowrap;
+}
+.material-vector-badge.indexed {
+  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 20%, transparent);
+  color: var(--vscode-charts-green, #4ec9b0);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 40%, transparent);
+}
+.material-vector-badge.unindexed {
+  color: var(--cc-text-tertiary, var(--vscode-descriptionForeground));
+  opacity: 0.5;
+}
+
 /* 设置页内的分组小标题 */
 .settings-divider {
   margin: 14px 0 6px;

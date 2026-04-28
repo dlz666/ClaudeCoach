@@ -128,8 +128,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private readonly examDeps?: SidebarExamDeps,
   ) {
     this.materialManager.onDidChangeIndex((index) => {
-      this._post({ type: 'materials', data: index });
-      void this._refreshSelectedMaterialPreview(index);
+      void this._collectVectorStats(index).then((vectorStats) => {
+        this._post({ type: 'materials', data: index, vectorStats });
+        void this._refreshSelectedMaterialPreview(index);
+      });
+    });
+    // 向量化进度向 webview 广播 log（可视化感知）
+    this.materialManager.onDidVectorize((event) => {
+      if (event.kind === 'done') {
+        this._post({
+          type: 'log',
+          message: `[向量化] ${event.fileName ?? ''} 完成`,
+          level: 'info',
+        });
+        // 索引变化后刷新一次资料列表，让卡片状态变绿
+        void this._refreshMaterials().catch(() => undefined);
+      } else if (event.kind === 'error') {
+        this._post({
+          type: 'log',
+          message: `[向量化失败] ${event.fileName ?? ''}：${event.message ?? ''}`,
+          level: 'warn',
+        });
+      }
     });
   }
 
@@ -196,8 +216,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async _refreshMaterials() {
     const index = await this.materialManager.getIndex();
-    this._post({ type: 'materials', data: index });
+    const vectorStats = await this._collectVectorStats(index);
+    this._post({ type: 'materials', data: index, vectorStats });
     await this._refreshSelectedMaterialPreview(index);
+  }
+
+  /**
+   * 收集 index 内所有资料的向量索引状态。
+   * 静态读单文件 + JSON parse，几十份资料 < 50ms，可接受。
+   */
+  private async _collectVectorStats(index: MaterialIndex): Promise<
+    Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }>
+  > {
+    const out: Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }> = {};
+    await Promise.all(
+      index.materials.map(async (m) => {
+        try {
+          const stats = await this.materialManager.getVectorIndexStats(m);
+          out[m.id] = {
+            exists: stats.exists,
+            chunks: stats.chunks,
+            model: stats.model,
+            dimension: stats.dimension,
+          };
+        } catch {
+          out[m.id] = { exists: false, chunks: 0 };
+        }
+      }),
+    );
+    return out;
   }
 
   private async _refreshSelectedMaterialPreview(index?: MaterialIndex) {
@@ -2847,7 +2894,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           const suffix = msg.fileName ? `：${msg.fileName}` : '';
           this._post({ type: 'log', message: `资料已删除${suffix}`, level: 'info' });
           const updatedIndex = await this.materialManager.getIndex();
-          this._post({ type: 'materials', data: updatedIndex });
+          const updatedStats = await this._collectVectorStats(updatedIndex);
+          this._post({ type: 'materials', data: updatedIndex, vectorStats: updatedStats });
           break;
         }
 
@@ -2865,7 +2913,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           await this.materialManager.deleteMaterial(msg.materialId);
           this._post({ type: 'log', message: `资料已删除：${fileName}`, level: 'info' });
           const updatedIndex = await this.materialManager.getIndex();
-          this._post({ type: 'materials', data: updatedIndex });
+          const updatedStats = await this._collectVectorStats(updatedIndex);
+          this._post({ type: 'materials', data: updatedIndex, vectorStats: updatedStats });
           break;
         }
 

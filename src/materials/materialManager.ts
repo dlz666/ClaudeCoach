@@ -81,6 +81,17 @@ export class MaterialManager {
   /** 防止同一资料并发向量化 */
   private readonly vectorizingMaterials = new Set<string>();
 
+  /** 向量化进度广播（StatusBar / 设置页订阅） */
+  private readonly vectorizeProgressEmitter = new vscode.EventEmitter<{
+    kind: 'start' | 'chunk-batch' | 'done' | 'error';
+    materialId?: string;
+    fileName?: string;
+    doneChunks?: number;
+    totalChunks?: number;
+    message?: string;
+  }>();
+  readonly onDidVectorize = this.vectorizeProgressEmitter.event;
+
   constructor() {
     this.paths = getStoragePathResolver();
     this.parser = new TextbookParser();
@@ -287,7 +298,41 @@ export class MaterialManager {
       }
     }
 
+    // === 自动向量化（fire-and-forget）===
+    // 用户开启了 hybrid embedding 时，资料文本就绪后立即在后台跑增量向量化。
+    // 失败不阻塞主流程，控制台 warn 即可——下次手动 / 查询时还会再 fallback。
+    void this._autoVectorizeReconciledMaterials(results).catch((err) => {
+      console.warn('[MaterialManager] auto-vectorize failed:', err);
+    });
+
     return results;
+  }
+
+  /**
+   * 后台增量向量化已完成索引的资料。
+   * - 仅当 hybrid embedding 启用时执行
+   * - 进度通过 onDidVectorize 事件向外广播（StatusBar / 设置页可订阅）
+   * - 同一资料正在向量化时跳过，避免重复
+   */
+  private async _autoVectorizeReconciledMaterials(materials: MaterialEntry[]): Promise<void> {
+    if (!this.embeddingClient || !this.vectorIndex || !this.getHybridConfig) return;
+    const config = await this.getHybridConfig();
+    if (!config?.enabled) return;
+
+    for (const material of materials) {
+      if (material.status !== 'indexed') continue;
+      if (this.vectorizingMaterials.has(material.id)) continue;
+      try {
+        const result = await this.ensureVectorIndexFor(material, (event) => {
+          this.vectorizeProgressEmitter.fire(event);
+        });
+        if (!result.ok && result.error) {
+          console.warn(`[MaterialManager] auto-vectorize ${material.fileName}: ${result.error}`);
+        }
+      } catch (err) {
+        console.warn(`[MaterialManager] auto-vectorize ${material.fileName} threw:`, err);
+      }
+    }
   }
 
   private async processEntry(entry: MaterialEntry): Promise<MaterialEntry> {
@@ -1011,6 +1056,18 @@ export class MaterialManager {
     return [chapter, sectionLabel, title].filter(Boolean).join(' / ');
   }
 
+  /**
+   * 切分资料文本为 chunk 列表。
+   *
+   * v2 增强：heading-aware chunking
+   * - 自动识别章节标题（"第 N 章"、"## "、"3.2 "、"Chapter N" 等）
+   * - 跟踪当前所在章节，把最近的 chapter / section 标题作为 [上下文头] 拼接到
+   *   chunk 开头，形如：[第 3 章 动态规划 / 3.2 最优子结构]\n\n<原文>
+   * - 同时利好关键词检索（章节词进入 IDF）和向量检索（语义边界更清晰）
+   *
+   * 副作用：行为变更会让旧的 vector-index.json 文本 hash 全部不命中，触发增量重建。
+   * 这是预期的——bge-m3 也会因此召回质量提升。
+   */
   private _chunkText(text: string): string[] {
     const normalized = text.replace(/\r\n/g, '\n').replace(/\t/g, ' ').trim();
     if (!normalized) { return []; }
@@ -1018,14 +1075,68 @@ export class MaterialManager {
     const chunks: string[] = [];
     const paragraphs = normalized.split(/\n{2,}/).map(paragraph => paragraph.trim()).filter(Boolean);
     let current = '';
+    let currentChapter = '';
+    let currentSection = '';
+
+    const updateHeading = (paragraph: string): boolean => {
+      // 章节级标题（更高优先级，会重置 section）
+      const chapterMatch = paragraph.match(
+        /^(?:#{1,2}\s+)?(第\s*[一二三四五六七八九十百零〇0-9]+\s*章[^\n]*|Chapter\s+\d+[^\n]*|第\s*\d+\s*部分[^\n]*)/i,
+      );
+      if (chapterMatch) {
+        currentChapter = this._normalizeHeading(chapterMatch[1]);
+        currentSection = ''; // 进入新章重置 section
+        return true;
+      }
+      // 节级标题（## 或 3.2 / 3.2.1）
+      const sectionMatch = paragraph.match(
+        /^(?:#{2,4}\s+)?(\d+\.\d+(?:\.\d+)?\s+[^\n]+|§\s*\d+(?:\.\d+)*[^\n]*)/,
+      );
+      if (sectionMatch) {
+        currentSection = this._normalizeHeading(sectionMatch[1]);
+        return true;
+      }
+      // markdown 标题，无编号
+      const mdHeadingMatch = paragraph.match(/^(#{1,4})\s+(.+)$/);
+      if (mdHeadingMatch) {
+        const level = mdHeadingMatch[1].length;
+        const title = this._normalizeHeading(mdHeadingMatch[2]);
+        if (level <= 2) {
+          currentChapter = title;
+          currentSection = '';
+        } else {
+          currentSection = title;
+        }
+        return true;
+      }
+      return false;
+    };
+
+    /** 把当前 heading 上下文拼回 chunk 开头。 */
+    const decorateChunk = (raw: string): string => {
+      const headingParts: string[] = [];
+      if (currentChapter) headingParts.push(currentChapter);
+      if (currentSection) headingParts.push(currentSection);
+      if (headingParts.length === 0) return raw;
+      // 如果 chunk 自身已经以 heading 开头，避免重复
+      const firstLine = raw.split('\n', 1)[0]?.trim() || '';
+      const headingText = headingParts.join(' / ');
+      if (firstLine.includes(headingParts[headingParts.length - 1])) {
+        return raw;
+      }
+      return `[${headingText}]\n\n${raw}`;
+    };
 
     for (const paragraph of paragraphs) {
+      // 先更新 heading 状态（即便段落是 heading，也照常进入 chunks，便于关键词命中）
+      updateHeading(paragraph);
+
       const segments = paragraph.length > 900 ? this._splitLongText(paragraph, 700) : [paragraph];
       for (const segment of segments) {
         if (!segment) { continue; }
         const next = current ? `${current}\n\n${segment}` : segment;
         if (next.length > 900 && current) {
-          chunks.push(current);
+          chunks.push(decorateChunk(current));
           current = segment;
         } else {
           current = next;
@@ -1034,10 +1145,19 @@ export class MaterialManager {
     }
 
     if (current) {
-      chunks.push(current);
+      chunks.push(decorateChunk(current));
     }
 
     return chunks;
+  }
+
+  /** 归一化 heading：去掉多余空白、行尾标点。 */
+  private _normalizeHeading(raw: string): string {
+    return raw
+      .replace(/\s+/g, ' ')
+      .replace(/[、。：:.,;；]+$/, '')
+      .trim()
+      .slice(0, 60);
   }
 
   private async _buildRelevantSummaryText(

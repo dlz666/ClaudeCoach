@@ -1246,7 +1246,12 @@ export type SidebarResponse =
   | { type: 'gradeResult'; result: GradeResult }
   | { type: 'diagnosis'; data: LatestDiagnosis | null }
   | { type: 'preferences'; data: LearningPreferences }
-  | { type: 'materials'; data: MaterialIndex }
+  | {
+      type: 'materials';
+      data: MaterialIndex;
+      /** 可选：每份资料的向量索引状态，用于资料卡片显示 */
+      vectorStats?: Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }>;
+    }
   | { type: 'materialPreview'; data: MaterialPreview }
   | { type: 'resolvedAIConfig'; data: ResolvedAIConfig; workspaceOverride: AIWorkspaceOverride }
   | { type: 'aiImportResult'; data: AIImportPreview }
