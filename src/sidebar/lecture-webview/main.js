@@ -159,15 +159,50 @@
     if (!els.popover || !info) return;
     const rect = info.rect;
     const top = window.scrollY + rect.bottom + 12;
-    const left = Math.max(16, Math.min(window.scrollX + rect.left, window.innerWidth - 380));
+    const left = Math.max(16, Math.min(window.scrollX + rect.left, window.innerWidth - 420));
     els.popover.style.top = `${top}px`;
     els.popover.style.left = `${left}px`;
     els.popover.innerHTML = '';
 
+    // 三种 mode：rewrite=改这段 / ask=提问 / idea=记一下想法（不改文件）
+    let currentMode = 'rewrite';
+
     const heading = document.createElement('div');
     heading.className = 'popover-heading';
-    heading.textContent = `让 AI 修改第 ${info.startLine + 1}–${info.endLine} 行`;
+    heading.textContent = `选中第 ${info.startLine + 1}–${info.endLine} 行`;
     els.popover.appendChild(heading);
+
+    // mode 切换条
+    const modeBar = document.createElement('div');
+    modeBar.className = 'popover-mode-bar';
+    const modes = [
+      { key: 'rewrite', label: '🛠 改这段', hint: 'AI 输出会替换/插入到选区' },
+      { key: 'ask', label: '❓ 提问', hint: 'AI 会以聊天形式回答，不动讲义' },
+      { key: 'idea', label: '💡 记想法', hint: '把你的想法以脚注形式追加到这段下方，不调 AI' },
+    ];
+    const modeButtons = modes.map((m) => {
+      const btn = document.createElement('button');
+      btn.className = 'popover-mode-btn' + (m.key === currentMode ? ' active' : '');
+      btn.textContent = m.label;
+      btn.title = m.hint;
+      btn.addEventListener('click', () => {
+        currentMode = m.key;
+        modeButtons.forEach((b) => b.classList.toggle('active', b === btn));
+        // 切换 placeholder + 提交按钮文案
+        textarea.placeholder = m.key === 'rewrite'
+          ? '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…'
+          : m.key === 'ask'
+            ? '关于这段你想问什么：「这步为什么成立」「能换种方式解释吗」…'
+            : '记下你自己的想法/疑问，会作为引用块追加到这段下方。';
+        btnSubmit.textContent = m.key === 'rewrite'
+          ? (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI')
+          : m.key === 'ask' ? '问 AI'
+          : '保存想法';
+      });
+      modeBar.appendChild(btn);
+      return btn;
+    });
+    els.popover.appendChild(modeBar);
 
     if (info.text) {
       const quote = document.createElement('div');
@@ -179,7 +214,7 @@
 
     const textarea = document.createElement('textarea');
     textarea.className = 'popover-textarea';
-    textarea.placeholder = '告诉 AI 你想怎么改：例如「补充一个例子」「化简这一段」「加一个公式推导」…';
+    textarea.placeholder = '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…';
     textarea.rows = 3;
     els.popover.appendChild(textarea);
 
@@ -206,7 +241,13 @@
         setTimeout(() => textarea.classList.remove('empty-flash'), 400);
         return;
       }
-      submitInlineSuggest(info, instruction);
+      if (currentMode === 'rewrite') {
+        submitInlineSuggest(info, instruction);
+      } else if (currentMode === 'ask') {
+        submitInlineAsk(info, instruction);
+      } else {
+        submitInlineIdea(info, instruction);
+      }
       hidePopover();
       hideChip();
     }
@@ -227,6 +268,50 @@
         e.preventDefault();
         submit();
       }
+    });
+  }
+
+  /** ask 模式：让 AI 以聊天形式回答，结果以建议气泡显示但不写回。 */
+  function submitInlineAsk(info, instruction) {
+    if (!vscode) return;
+    const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    state.activeTurns.set(turnId, {
+      info: { startLine: info.startLine, endLine: info.endLine, text: info.text || '', rect: info.rect },
+      instruction,
+      mode: 'ask',
+    });
+    showPendingBubble(turnId, info);
+    vscode.postMessage({
+      type: 'inlineSuggest',
+      request: {
+        filePath: state.filePath,
+        selectionText: info.text || '',
+        sourceLineStart: info.startLine,
+        sourceLineEnd: info.endLine,
+        instruction: '【模式：提问，仅回答，不修改文件】' + instruction,
+        applyMode: 'preview-confirm', // 强制 preview，禁止自动写回
+        turnId,
+        intent: 'ask',
+      },
+    });
+  }
+
+  /** idea 模式：本地直接把想法以引用块追加到选区下方，不调 AI。 */
+  function submitInlineIdea(info, instruction) {
+    if (!vscode) return;
+    const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    const ideaBlock = '\n\n> 💡 **我的想法**：' + instruction.replace(/\n/g, '\n> ');
+    vscode.postMessage({
+      type: 'inlineApply',
+      request: {
+        turnId,
+        filePath: state.filePath,
+        selectionText: info.text || '',
+        sourceLineStart: info.startLine,
+        sourceLineEnd: info.endLine,
+        finalContent: ideaBlock,
+        intent: 'idea',
+      },
     });
   }
 
@@ -303,19 +388,24 @@
     positionBubble(bubble, info.rect);
   }
 
-  function showPreviewBubble(turnId, suggestion) {
+  function showPreviewBubble(turnId, suggestion, intent) {
     const turn = state.activeTurns.get(turnId);
     if (!turn) return;
     const bubble = ensureBubble(turnId);
     bubble.classList.remove('pending', 'failed', 'applied');
     bubble.classList.add('preview');
 
+    // intent 优先取后端透传的，其次从 turn 里拿
+    const effectiveIntent = intent || turn.mode || 'rewrite';
+    bubble.classList.toggle('ask', effectiveIntent === 'ask');
+
     bubble.innerHTML = '';
 
     const header = document.createElement('div');
     header.className = 'bubble-header';
+    const tagLabel = effectiveIntent === 'ask' ? 'AI 回答' : 'AI 建议';
     header.innerHTML = `
-      <span class="bubble-tag">AI 建议</span>
+      <span class="bubble-tag">${tagLabel}</span>
       <span class="bubble-range">行 ${turn.info.startLine + 1}–${turn.info.endLine}</span>
     `;
     bubble.appendChild(header);
@@ -328,19 +418,50 @@
 
     const actions = document.createElement('div');
     actions.className = 'bubble-actions';
-    const btnAccept = document.createElement('button');
-    btnAccept.className = 'btn-primary';
-    btnAccept.textContent = '采纳';
-    const btnDiscard = document.createElement('button');
-    btnDiscard.className = 'btn-ghost';
-    btnDiscard.textContent = '丢弃';
-    actions.appendChild(btnAccept);
-    actions.appendChild(btnDiscard);
+
+    if (effectiveIntent === 'ask') {
+      // 提问模式：不写文件。提供"作为想法保存"和"关闭"两个按钮
+      const btnSaveAsIdea = document.createElement('button');
+      btnSaveAsIdea.className = 'btn-ghost';
+      btnSaveAsIdea.textContent = '把回答存到讲义';
+      btnSaveAsIdea.title = '把 AI 回答作为引用块追加到选区下方';
+      const btnClose = document.createElement('button');
+      btnClose.className = 'btn-primary';
+      btnClose.textContent = '收到，关闭';
+      actions.appendChild(btnSaveAsIdea);
+      actions.appendChild(btnClose);
+      btnSaveAsIdea.addEventListener('click', () => {
+        const note = '\n\n> 🤖 **AI 回答**：\n> ' + suggestion.replace(/\n/g, '\n> ');
+        if (!vscode) return;
+        vscode.postMessage({
+          type: 'inlineApply',
+          request: {
+            turnId,
+            filePath: state.filePath,
+            selectionText: turn.info.text || '',
+            sourceLineStart: turn.info.startLine,
+            sourceLineEnd: turn.info.endLine,
+            finalContent: note,
+            intent: 'ask',
+          },
+        });
+      });
+      btnClose.addEventListener('click', () => dismissSuggestion(turnId));
+    } else {
+      // rewrite 模式：原有"采纳/丢弃"
+      const btnAccept = document.createElement('button');
+      btnAccept.className = 'btn-primary';
+      btnAccept.textContent = '采纳';
+      const btnDiscard = document.createElement('button');
+      btnDiscard.className = 'btn-ghost';
+      btnDiscard.textContent = '丢弃';
+      actions.appendChild(btnAccept);
+      actions.appendChild(btnDiscard);
+      btnAccept.addEventListener('click', () => acceptSuggestion(turnId, suggestion));
+      btnDiscard.addEventListener('click', () => dismissSuggestion(turnId));
+    }
+
     bubble.appendChild(actions);
-
-    btnAccept.addEventListener('click', () => acceptSuggestion(turnId, suggestion));
-    btnDiscard.addEventListener('click', () => dismissSuggestion(turnId));
-
     positionBubble(bubble, bubbleAnchorRect(turnId));
   }
 
@@ -534,10 +655,10 @@
       }
       case 'inlineSuggestResult': {
         const result = msg.result || {};
-        const { turnId, status, suggestion, errorMessage, appliedRange } = result;
+        const { turnId, status, suggestion, errorMessage, appliedRange, intent } = result;
         if (!turnId) return;
         if (status === 'preview') {
-          showPreviewBubble(turnId, suggestion || '');
+          showPreviewBubble(turnId, suggestion || '', intent);
         } else if (status === 'applied') {
           if (appliedRange) flashChangedRange(appliedRange);
           removeBubble(turnId);

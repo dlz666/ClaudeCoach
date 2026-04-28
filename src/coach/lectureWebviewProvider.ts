@@ -261,6 +261,10 @@ export class LectureWebviewProvider {
       promptCtx = { scope: 'lecture-edit' };
     }
 
+    const intent = request.intent ?? 'rewrite';
+    // ask 模式：强制 preview，且用专门的"问答"system，不让 AI 输出修改片段
+    const effectiveApplyMode: LectureApplyMode = intent === 'ask' ? 'preview-confirm' : request.applyMode;
+
     let messages;
     try {
       const isEmptySelection = !request.selectionText || !request.selectionText.trim();
@@ -270,20 +274,37 @@ export class LectureWebviewProvider {
       const ctxEnd = Math.min(lines.length - 1, request.sourceLineEnd + 20);
       const cursorContext = lines.slice(ctxStart, ctxEnd + 1).join('\n');
 
-      messages = isEmptySelection
-        ? inlineInsertPrompt({
-            documentContext: fileContent,
-            cursorContext,
-            selectionText: request.selectionText || '',
-            instruction: request.instruction,
-            ctx: promptCtx,
-          })
-        : inlineRewritePrompt({
-            documentContext: fileContent,
-            selectionText: request.selectionText,
-            instruction: request.instruction,
-            ctx: promptCtx,
-          });
+      if (intent === 'ask') {
+        // 提问模式：用一个简短 system + 把选区 + 上下文 + 问题给 AI，要求"以聊天形式回答"
+        const askInstruction = [
+          '【任务模式：提问/解释，不修改讲义】',
+          '学生选中了讲义中的一段内容并提出问题。请直接回答，不要重写或修改原文。',
+          '回答可以是 Markdown，可以含公式 / 代码示例 / 列表。要简明、聚焦问题本身。',
+          '',
+          `用户问题：${request.instruction}`,
+        ].join('\n');
+        messages = inlineRewritePrompt({
+          documentContext: fileContent,
+          selectionText: request.selectionText || cursorContext,
+          instruction: askInstruction,
+          ctx: promptCtx,
+        });
+      } else {
+        messages = isEmptySelection
+          ? inlineInsertPrompt({
+              documentContext: fileContent,
+              cursorContext,
+              selectionText: request.selectionText || '',
+              instruction: request.instruction,
+              ctx: promptCtx,
+            })
+          : inlineRewritePrompt({
+              documentContext: fileContent,
+              selectionText: request.selectionText,
+              instruction: request.instruction,
+              ctx: promptCtx,
+            });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.panel.webview.postMessage({
@@ -315,7 +336,7 @@ export class LectureWebviewProvider {
 
     const cleaned = stripFenceWrapper(suggestion).trim();
 
-    if (request.applyMode === 'auto-apply') {
+    if (effectiveApplyMode === 'auto-apply') {
       const writeInput: WritebackInput = {
         filePath: ctx.args.filePath,
         sourceLineStart: request.sourceLineStart,
@@ -333,11 +354,13 @@ export class LectureWebviewProvider {
               status: 'applied',
               suggestion: cleaned,
               appliedRange: writeResult.appliedRange,
+              intent,
             }
           : {
               turnId: request.turnId,
               status: 'failed',
               errorMessage: writeResult.errorMessage ?? '写回失败。',
+              intent,
             },
       } satisfies { type: 'inlineSuggestResult'; result: InlineSuggestResult });
       return;
@@ -350,6 +373,7 @@ export class LectureWebviewProvider {
         turnId: request.turnId,
         status: 'preview',
         suggestion: cleaned,
+        intent,
       } satisfies InlineSuggestResult,
     });
   }

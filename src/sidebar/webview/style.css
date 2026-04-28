@@ -342,6 +342,13 @@ textarea,
   transition: 120ms ease;
 }
 
+/* 修复 select 展开下拉色：原生 option 默认浏览器白底，在暗色主题下看不清 */
+select option,
+select optgroup {
+  background-color: var(--vscode-dropdown-background, var(--vscode-input-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+}
+
 textarea {
   resize: vertical;
   min-height: 78px;
@@ -1486,6 +1493,10 @@ textarea:focus,
   font-size: 13px;
   opacity: 0.85;
   font-weight: 500;
+  /* 防止狭窄面板下汉字一字一行 */
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
 }
 
 .setting-row .hint {
@@ -1546,11 +1557,56 @@ textarea:focus,
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .per-subject-row .per-subject-label {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  /* 长学科名超出时省略而不是折断 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.per-subject-row select {
+  flex: 0 0 96px;
+  width: 96px;
+  padding: 4px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+/* 难度小按钮组（替代 select 下拉，更紧凑） */
+.difficulty-pill-group {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+.difficulty-pill {
+  border: none;
+  background: transparent;
+  color: var(--vscode-input-foreground);
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.difficulty-pill:hover {
+  background: color-mix(in srgb, var(--vscode-button-background) 30%, transparent);
+}
+.difficulty-pill.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-weight: 600;
 }
 
 .reset-group-btn {

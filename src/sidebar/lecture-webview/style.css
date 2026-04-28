@@ -286,10 +286,42 @@ html, body {
 }
 
 .popover-heading {
-  font-size: 13px;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+  margin-bottom: 6px;
+}
+
+.popover-mode-bar {
+  display: flex;
+  gap: 4px;
   margin-bottom: 8px;
+  padding: 3px;
+  background: var(--vscode-input-background, rgba(0,0,0,0.2));
+  border-radius: 8px;
+}
+
+.popover-mode-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: 120ms ease;
+  white-space: nowrap;
+}
+
+.popover-mode-btn:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.popover-mode-btn.active {
+  background: var(--accent);
+  color: var(--vscode-button-foreground, #fff);
+  font-weight: 600;
 }
 
 .popover-quote {

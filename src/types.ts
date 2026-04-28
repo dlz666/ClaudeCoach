@@ -500,6 +500,11 @@ export interface InlineSuggestRequest {
   applyMode: LectureApplyMode;
   /** 由前端生成的 turn id，用于关联 response。 */
   turnId: string;
+  /**
+   * 'rewrite'：默认。AI 输出会替换/插入到选区。
+   * 'ask'：仅回答问题，不修改讲义；webview 应渲染纯气泡，无"采纳"按钮。
+   */
+  intent?: 'rewrite' | 'ask';
 }
 
 export interface InlineSuggestResult {
@@ -509,6 +514,8 @@ export interface InlineSuggestResult {
   errorMessage?: string;
   /** auto-apply 模式时返回写回后的精确字符 range，便于前端高亮。 */
   appliedRange?: { startLine: number; endLine: number };
+  /** 透传 intent，让 webview 决定渲染样式（'ask' 模式不显示"采纳"按钮）。 */
+  intent?: 'rewrite' | 'ask';
 }
 
 export interface InlineApplyRequest {
@@ -770,18 +777,21 @@ export type SidebarCommand =
   // ===== AI Profile 完整编辑（Phase 2C） =====
   | { type: 'listAIProfiles' }
   | { type: 'saveAIProfile'; profile: Partial<AIProfile> & { name: string; provider: APIProvider; baseUrl: string; anthropicBaseUrl: string; model: string } }
-  | { type: 'deleteAIProfile'; profileId: string }
   | { type: 'duplicateAIProfile'; profileId: string }
   | { type: 'activateAIProfile'; profileId: string }
   | { type: 'saveWorkspaceAIOverride'; override: AIWorkspaceOverride }
   | { type: 'testAIProfile'; profile?: Partial<AIProfile> }
   | { type: 'exportAIProfile'; profileId: string; includeToken?: boolean }
   // ===== 数据管理（Phase 2D） =====
-  | { type: 'clearWrongQuestions'; subject: Subject }
-  | { type: 'clearDiagnosisHistory'; subject: Subject }
-  | { type: 'resetCourseProgress'; subject: Subject }
+  | { type: 'clearWrongQuestions'; subject: Subject; requireConfirm?: boolean }
+  | { type: 'clearDiagnosisHistory'; subject: Subject; requireConfirm?: boolean }
+  | { type: 'resetCourseProgress'; subject: Subject; requireConfirm?: boolean }
   | { type: 'exportLearningData' }
-  | { type: 'importLearningData' }
+  | { type: 'importLearningData'; requireConfirm?: boolean }
+  | { type: 'resetAllPreferences'; requireConfirm?: boolean }
+  | { type: 'exportPreferences' }
+  | { type: 'importPreferences' }
+  | { type: 'deleteAIProfile'; profileId: string; profileName?: string }
   // ===== Inline 内联编辑（Phase 1） =====
   | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }

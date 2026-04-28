@@ -1820,6 +1820,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case '__legacy_deleteAIProfile__':
         case 'deleteAIProfile': {
+          const profileName = String(msg.profileName ?? msg.profileId ?? 'profile');
+          const choice = await vscode.window.showWarningMessage(
+            `确认删除 AI Profile "${profileName}"？此操作不可撤销。`,
+            { modal: true },
+            '删除',
+          );
+          if (choice !== '删除') {
+            this._post({ type: 'log', message: '已取消删除 AI Profile', level: 'info' });
+            break;
+          }
           await this.aiProfiles.deleteProfile(msg.profileId);
           await this._afterAIConfigMutation('AI 配置已删除');
           const stateAfter = await this.aiProfiles.getState();
@@ -1881,7 +1891,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case '__legacy_exportAIProfile__':
         case 'exportAIProfile': {
-          await this.aiProfiles.exportProfile(msg.profileId, !!msg.includeToken);
+          // 让用户在原生 QuickPick 选择是否导出 token
+          const choice = await vscode.window.showQuickPick(
+            [
+              { label: '不含 Token（脱敏，默认推荐）', value: false },
+              { label: '含 Token（仅在你完全信任目标设备时）', value: true },
+            ],
+            { placeHolder: '导出 AI 配置 - 是否包含 Token？' },
+          );
+          if (!choice) {
+            this._post({ type: 'log', message: '已取消导出', level: 'info' });
+            break;
+          }
+          await this.aiProfiles.exportProfile(msg.profileId, choice.value);
           this._post({ type: 'log', message: 'AI 配置已导出', level: 'info' });
           break;
         }
@@ -1905,8 +1927,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'clearWrongQuestions': {
           const subject = msg.subject as Subject;
           if (!subject) break;
-          await this.courseManager.clearResolvedWrongQuestions(subject);
-          // 全清需要写空 book
+          if (msg.requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              `确认清空 "${subject}" 的错题本？此操作不可撤销。`,
+              { modal: true },
+              '清空',
+            );
+            if (choice !== '清空') {
+              this._post({ type: 'log', message: '已取消', level: 'info' });
+              break;
+            }
+          }
           const book = await this.courseManager.getWrongQuestionBook(subject);
           for (const q of book.questions) {
             await this.courseManager.resolveWrongQuestion(subject, q.id);
@@ -1920,6 +1951,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'clearDiagnosisHistory': {
           const subject = msg.subject as Subject;
           if (!subject) break;
+          if (msg.requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              `确认清空 "${subject}" 的诊断历史？最近一次诊断会保留。`,
+              { modal: true },
+              '清空',
+            );
+            if (choice !== '清空') break;
+          }
           try {
             const { rm } = await import('fs/promises');
             const paths = (await import('../storage/pathResolver')).getStoragePathResolver();
@@ -1934,6 +1973,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'resetCourseProgress': {
           const subject = msg.subject as Subject;
           if (!subject) break;
+          if (msg.requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              `确认重置 "${subject}" 的所有课时进度？讲义和练习文件会保留，但状态全部清零。`,
+              { modal: true },
+              '重置',
+            );
+            if (choice !== '重置') break;
+          }
           const outline = await this.courseManager.getCourseOutline(subject);
           if (!outline) {
             this._post({ type: 'dataOpResult', operation: 'resetCourseProgress', ok: false, message: '课程不存在' });
@@ -1950,7 +1997,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'exportLearningData': {
-          // 简化版：仅显示数据目录路径，让用户手动打包
           const dir = getDataDirectory();
           await ensureDir(dir);
           await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
@@ -1959,7 +2005,71 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'importLearningData': {
+          if (msg.requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              '导入学习数据会覆盖现有数据，确认继续？',
+              { modal: true },
+              '继续',
+            );
+            if (choice !== '继续') break;
+          }
           this._post({ type: 'dataOpResult', operation: 'importLearningData', ok: false, message: '请手动复制文件到数据目录后重启扩展。' });
+          break;
+        }
+
+        case 'resetAllPreferences': {
+          if (msg.requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              '确认恢复全部默认设置？所有偏好会被重置（AI 配置除外）。',
+              { modal: true },
+              '恢复默认',
+            );
+            if (choice !== '恢复默认') break;
+          }
+          await this.prefsStore.resetAll();
+          const fresh = await this.prefsStore.get();
+          this._post({ type: 'preferences', data: fresh });
+          this._post({ type: 'log', message: '已恢复全部默认设置', level: 'info' });
+          break;
+        }
+
+        case 'exportPreferences': {
+          try {
+            const data = await this.prefsStore.exportRaw();
+            const uri = await vscode.window.showSaveDialog({
+              defaultUri: vscode.Uri.file('claude-coach-preferences.json'),
+              filters: { 'JSON': ['json'] },
+              saveLabel: '导出偏好',
+            });
+            if (uri) {
+              const { writeFile } = await import('fs/promises');
+              await writeFile(uri.fsPath, JSON.stringify(data, null, 2), 'utf-8');
+              this._post({ type: 'log', message: `偏好已导出到 ${uri.fsPath}`, level: 'info' });
+            }
+          } catch (error: any) {
+            this._post({ type: 'log', message: `导出失败：${error?.message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'importPreferences': {
+          try {
+            const [uri] = await vscode.window.showOpenDialog({
+              canSelectFiles: true,
+              canSelectMany: false,
+              filters: { 'JSON': ['json'] },
+              openLabel: '导入偏好',
+            }) ?? [];
+            if (!uri) break;
+            const { readFile } = await import('fs/promises');
+            const text = await readFile(uri.fsPath, 'utf-8');
+            const parsed = JSON.parse(text);
+            const merged = await this.prefsStore.importRaw(parsed);
+            this._post({ type: 'preferences', data: merged });
+            this._post({ type: 'log', message: '偏好已导入', level: 'info' });
+          } catch (error: any) {
+            this._post({ type: 'log', message: `导入失败：${error?.message}`, level: 'error' });
+          }
           break;
         }
 

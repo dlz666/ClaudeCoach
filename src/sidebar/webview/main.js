@@ -221,6 +221,9 @@
     btnCloseAnswerSubmitModal: $('btn-close-answer-submit-modal'),
     answerSubmitLessonInfo: $('answer-submit-lesson-info'),
     answerSubmitTextarea: $('answer-submit-textarea'),
+    btnAnswerSubmitSaveDraft: $('btn-answer-submit-save-draft'),
+    btnAnswerSubmitClearDraft: $('btn-answer-submit-clear-draft'),
+    answerSubmitDraftStatus: $('answer-submit-draft-status'),
     answerSubmitError: $('answer-submit-error'),
     btnAnswerSubmitConfirm: $('btn-answer-submit-confirm'),
     btnAnswerSubmitCancel: $('btn-answer-submit-cancel'),
@@ -1250,13 +1253,46 @@
     vscode.postMessage({ type: 'getWrongQuestions', subject: state.selectedSubject });
   }
 
+  /** 草稿存储 key：按 subject + lessonId 区分。 */
+  function answerDraftKey(ctx) {
+    return `cc-answer-draft:${ctx.subject}:${ctx.topicId}:${ctx.lessonId}`;
+  }
+
+  function loadAnswerDraft(ctx) {
+    try {
+      const all = (vscode.getState() || {}).answerDrafts || {};
+      return all[answerDraftKey(ctx)] || '';
+    } catch { return ''; }
+  }
+
+  function saveAnswerDraft(ctx, text) {
+    try {
+      const cur = vscode.getState() || {};
+      const drafts = { ...(cur.answerDrafts || {}) };
+      const key = answerDraftKey(ctx);
+      if (text && text.trim()) {
+        drafts[key] = text;
+      } else {
+        delete drafts[key];
+      }
+      vscode.setState({ ...cur, answerDrafts: drafts });
+    } catch { /* ignore */ }
+  }
+
+  function clearAnswerDraft(ctx) {
+    saveAnswerDraft(ctx, '');
+  }
+
   function openAnswerSubmitModal(ctx) {
     state.answerSubmitContext = ctx;
     if (els.answerSubmitLessonInfo) {
-      els.answerSubmitLessonInfo.textContent = `当前讲义：${ctx.lessonTitle}`;
+      const draft = loadAnswerDraft(ctx);
+      const draftHint = draft ? '（已加载之前保存的草稿）' : '';
+      els.answerSubmitLessonInfo.textContent = `当前讲义：${ctx.lessonTitle}${draftHint}`;
     }
     if (els.answerSubmitTextarea) {
-      els.answerSubmitTextarea.value = '';
+      // 优先恢复草稿
+      els.answerSubmitTextarea.value = loadAnswerDraft(ctx);
     }
     if (els.answerSubmitError) {
       els.answerSubmitError.classList.add('hidden');
@@ -1264,10 +1300,24 @@
     }
     els.answerSubmitModal?.classList.remove('hidden');
     els.answerSubmitModal?.setAttribute('aria-hidden', 'false');
-    requestAnimationFrame(() => els.answerSubmitTextarea?.focus());
+    requestAnimationFrame(() => {
+      els.answerSubmitTextarea?.focus();
+      // 光标移到末尾（让用户继续在草稿后写）
+      try {
+        const len = els.answerSubmitTextarea?.value?.length || 0;
+        els.answerSubmitTextarea?.setSelectionRange(len, len);
+      } catch { /* ignore */ }
+    });
   }
 
   function closeAnswerSubmitModal() {
+    // 关闭时若有未提交内容，自动保存为草稿（用户没点保存草稿也算）
+    if (state.answerSubmitContext && els.answerSubmitTextarea) {
+      const text = els.answerSubmitTextarea.value || '';
+      if (text.trim()) {
+        saveAnswerDraft(state.answerSubmitContext, text);
+      }
+    }
     state.answerSubmitContext = null;
     els.answerSubmitModal?.classList.add('hidden');
     els.answerSubmitModal?.setAttribute('aria-hidden', 'true');
@@ -1345,27 +1395,41 @@
     }
     const perSubject = preferences?.difficulty?.perSubject || {};
     const globalLevel = preferences?.difficulty?.global || 'basic';
+    const levels = [
+      { value: 'beginner', label: '入门' },
+      { value: 'basic', label: '基础' },
+      { value: 'intermediate', label: '进阶' },
+      { value: 'challenge', label: '挑战' },
+    ];
+    // 用 pill 按钮组替代 select（更紧凑、不出现下拉白底问题）
     els.perSubjectDifficultyList.innerHTML = subjects.map((subject) => {
       const level = perSubject[subject] || globalLevel;
+      const pills = levels.map((lv) =>
+        `<button type="button" class="difficulty-pill${lv.value === level ? ' active' : ''}" data-subject-difficulty="${escapeHtml(subject)}" data-level="${lv.value}">${lv.label}</button>`
+      ).join('');
       return `
         <div class="per-subject-row" data-subject="${escapeHtml(subject)}">
-          <span class="per-subject-name">${escapeHtml(subjectLabel(subject))}</span>
-          <select class="per-subject-select" data-subject-difficulty="${escapeHtml(subject)}">
-            <option value="beginner"${level === 'beginner' ? ' selected' : ''}>入门</option>
-            <option value="basic"${level === 'basic' ? ' selected' : ''}>基础</option>
-            <option value="intermediate"${level === 'intermediate' ? ' selected' : ''}>进阶</option>
-            <option value="challenge"${level === 'challenge' ? ' selected' : ''}>挑战</option>
-          </select>
+          <span class="per-subject-label">${escapeHtml(subjectLabel(subject))}</span>
+          <div class="difficulty-pill-group" data-subject-pills="${escapeHtml(subject)}">${pills}</div>
         </div>
       `;
     }).join('');
 
-    els.perSubjectDifficultyList.querySelectorAll('[data-subject-difficulty]').forEach((sel) => {
-      sel.addEventListener('change', () => {
+    els.perSubjectDifficultyList.querySelectorAll('[data-subject-difficulty]').forEach((btn) => {
+      btn.addEventListener('click', () => {
         if (!state.preferences) return;
+        const subject = btn.getAttribute('data-subject-difficulty');
+        const level = btn.getAttribute('data-level');
         state.preferences.difficulty = state.preferences.difficulty || { global: 'basic', perSubject: {}, exerciseMix: { easy: 30, medium: 50, hard: 20 } };
         state.preferences.difficulty.perSubject = state.preferences.difficulty.perSubject || {};
-        state.preferences.difficulty.perSubject[sel.getAttribute('data-subject-difficulty')] = sel.value;
+        state.preferences.difficulty.perSubject[subject] = level;
+        // 更新同组按钮 active
+        const group = btn.parentElement;
+        if (group) {
+          group.querySelectorAll('.difficulty-pill').forEach((b) => {
+            b.classList.toggle('active', b === btn);
+          });
+        }
         schedulePreferenceSave();
       });
     });
@@ -1695,13 +1759,13 @@
       return;
     }
     if (action === 'export') {
-      const includeToken = window.confirm('导出包含 token？\n\n点击"确定"导出含 token 的版本，"取消"导出脱敏版本。');
-      vscode.postMessage({ type: 'exportAIProfile', profileId: profile.id, includeToken });
+      // 后端会弹 QuickPick 让用户选择是否含 token
+      vscode.postMessage({ type: 'exportAIProfile', profileId: profile.id });
       return;
     }
     if (action === 'delete') {
-      if (!window.confirm(`确认删除 Profile "${profile.name || profile.id}"？此操作不可撤销。`)) return;
-      vscode.postMessage({ type: 'deleteAIProfile', profileId: profile.id });
+      // 后端会弹原生 confirm（webview 的 window.confirm 在 VS Code 里不工作）
+      vscode.postMessage({ type: 'deleteAIProfile', profileId: profile.id, profileName: profile.name });
       return;
     }
   }
@@ -2290,8 +2354,52 @@
       lessonTitle: ctx.lessonTitle,
       answers: submissions,
     });
+    // 提交成功后清掉草稿
+    clearAnswerDraft(ctx);
     closeAnswerSubmitModal();
     addLog(`已提交 ${submissions.length} 道答案进入批改队列`, 'info');
+  });
+
+  els.btnAnswerSubmitSaveDraft?.addEventListener('click', () => {
+    const ctx = state.answerSubmitContext;
+    if (!ctx) return;
+    const text = els.answerSubmitTextarea?.value || '';
+    saveAnswerDraft(ctx, text);
+    if (els.answerSubmitDraftStatus) {
+      const stamp = new Date().toLocaleTimeString();
+      els.answerSubmitDraftStatus.textContent = `✓ 草稿已保存（${stamp}）。下次打开此课时答题模态会自动恢复。`;
+      setTimeout(() => {
+        if (els.answerSubmitDraftStatus) els.answerSubmitDraftStatus.textContent = '';
+      }, 4000);
+    }
+    addLog(`已保存草稿：${ctx.lessonTitle}`, 'info');
+  });
+
+  els.btnAnswerSubmitClearDraft?.addEventListener('click', () => {
+    const ctx = state.answerSubmitContext;
+    if (!ctx) return;
+    clearAnswerDraft(ctx);
+    if (els.answerSubmitTextarea) els.answerSubmitTextarea.value = '';
+    if (els.answerSubmitDraftStatus) {
+      els.answerSubmitDraftStatus.textContent = '✓ 草稿已清空。';
+      setTimeout(() => {
+        if (els.answerSubmitDraftStatus) els.answerSubmitDraftStatus.textContent = '';
+      }, 3000);
+    }
+  });
+
+  // textarea 输入时 debounce 300ms 自动保存草稿，防止意外丢失
+  let _draftAutoSaveTimer = null;
+  els.answerSubmitTextarea?.addEventListener('input', () => {
+    if (_draftAutoSaveTimer) clearTimeout(_draftAutoSaveTimer);
+    _draftAutoSaveTimer = setTimeout(() => {
+      const ctx = state.answerSubmitContext;
+      if (!ctx) return;
+      saveAnswerDraft(ctx, els.answerSubmitTextarea.value || '');
+      if (els.answerSubmitDraftStatus) {
+        els.answerSubmitDraftStatus.textContent = '✓ 已自动保存草稿';
+      }
+    }, 800);
   });
 
   els.btnChatSend?.addEventListener('click', () => {
@@ -2480,8 +2588,9 @@
       event.preventDefault();
       const groupKey = btn.getAttribute('data-reset-group');
       if (!groupKey) return;
-      if (!window.confirm(`确认恢复"${groupKey}"组的默认设置？`)) return;
+      // window.confirm 在 vscode webview 里不工作，直接执行
       resetPreferenceGroup(groupKey);
+      addLog(`已恢复"${groupKey}"分组默认设置`, 'info');
     });
   });
 
@@ -2629,25 +2738,23 @@
     return els.dataSubjectSelect?.value || state.selectedSubject || null;
   }
 
+  // 数据管理按钮：confirm 走后端原生 vscode.window.showWarningMessage
   els.btnClearWrongQuestions?.addEventListener('click', () => {
     const subject = getDataSubject();
     if (!subject) { addLog('请先选择学科。', 'warn'); return; }
-    if (!window.confirm(`确认清空"${subjectLabel(subject)}"的错题本？`)) return;
-    vscode.postMessage({ type: 'clearWrongQuestions', subject });
+    vscode.postMessage({ type: 'clearWrongQuestions', subject, requireConfirm: true });
   });
 
   els.btnClearDiagnosis?.addEventListener('click', () => {
     const subject = getDataSubject();
     if (!subject) { addLog('请先选择学科。', 'warn'); return; }
-    if (!window.confirm(`确认清空"${subjectLabel(subject)}"的诊断历史？`)) return;
-    vscode.postMessage({ type: 'clearDiagnosisHistory', subject });
+    vscode.postMessage({ type: 'clearDiagnosisHistory', subject, requireConfirm: true });
   });
 
   els.btnResetCourseProgress?.addEventListener('click', () => {
     const subject = getDataSubject();
     if (!subject) { addLog('请先选择学科。', 'warn'); return; }
-    if (!window.confirm(`确认重置"${subjectLabel(subject)}"的课程进度？所有讲义/练习状态会清零。`)) return;
-    vscode.postMessage({ type: 'resetCourseProgress', subject });
+    vscode.postMessage({ type: 'resetCourseProgress', subject, requireConfirm: true });
   });
 
   els.btnExportLearningData?.addEventListener('click', () => {
@@ -2655,8 +2762,7 @@
   });
 
   els.btnImportLearningData?.addEventListener('click', () => {
-    if (!window.confirm('导入学习数据会覆盖现有数据，确认继续？')) return;
-    vscode.postMessage({ type: 'importLearningData' });
+    vscode.postMessage({ type: 'importLearningData', requireConfirm: true });
   });
 
   // ===== 数据目录与高级 =====
@@ -2669,8 +2775,7 @@
   });
 
   els.btnResetAllPrefs?.addEventListener('click', () => {
-    if (!window.confirm('确认恢复全部默认设置？所有偏好会被重置。')) return;
-    resetPreferenceGroup('all');
+    vscode.postMessage({ type: 'resetAllPreferences', requireConfirm: true });
   });
 
   // ===== 今日 Coach 卡片交互 =====

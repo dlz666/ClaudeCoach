@@ -873,8 +873,11 @@
 你的答案..."></textarea>
         </section>
         <div id="answer-submit-error" class="feedback-line error-text hidden"></div>
+        <div id="answer-submit-draft-status" class="feedback-line muted"></div>
         <div class="actions-row">
           <button class="btn primary" id="btn-answer-submit-confirm" type="button">提交批改</button>
+          <button class="btn" id="btn-answer-submit-save-draft" type="button" title="保存当前内容为草稿，下次打开会自动恢复">💾 保存草稿</button>
+          <button class="btn ghost" id="btn-answer-submit-clear-draft" type="button" title="删除已保存的草稿">清空草稿</button>
           <button class="btn ghost" id="btn-answer-submit-cancel" type="button">取消</button>
         </div>
       </div>
