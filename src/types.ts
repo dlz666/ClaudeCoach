@@ -249,7 +249,7 @@ export interface LatestDiagnosis {
 // ===== Learning Preferences =====
 
 export type LessonDetailLevel = 'concise' | 'standard' | 'detailed';
-export type FeedbackTone = 'direct' | 'encouraging' | 'socratic';
+export type FeedbackTone = 'direct' | 'encouraging' | 'socratic' | 'push' | 'playful';
 export type ExplanationStyle = 'example-first' | 'formula-first' | 'intuition-first' | 'rigor-first';
 export type MathSymbolStyle = 'english-standard' | 'chinese';
 export type RetrievalStrictness = 'strict' | 'inclusive';

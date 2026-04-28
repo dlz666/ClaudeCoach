@@ -1438,15 +1438,94 @@
   function updateMixSumHint() {
     if (!els.mixSumHint) return;
     const sum = Number(els.mixEasy?.value || 0) + Number(els.mixMedium?.value || 0) + Number(els.mixHard?.value || 0);
-    els.mixSumHint.textContent = `当前合计：${sum}%`;
+    if (sum === 100) {
+      els.mixSumHint.textContent = '';
+    } else {
+      els.mixSumHint.textContent = `当前合计：${sum}%（应为 100%）`;
+    }
     els.mixSumHint.classList.toggle('warn-text', sum !== 100);
+    syncPresetButtonsActive('exercise-mix');
   }
 
   function updateExTypeSumHint() {
     if (!els.exTypeSumHint) return;
     const sum = Number(els.exTypeConcept?.value || 0) + Number(els.exTypeCalc?.value || 0) + Number(els.exTypeProof?.value || 0);
-    els.exTypeSumHint.textContent = `当前合计：${sum}%`;
+    if (sum === 100) {
+      els.exTypeSumHint.textContent = '';
+    } else {
+      els.exTypeSumHint.textContent = `当前合计：${sum}%（应为 100%）`;
+    }
     els.exTypeSumHint.classList.toggle('warn-text', sum !== 100);
+    syncPresetButtonsActive('exercise-type');
+  }
+
+  /** 当前数值匹配某个预设 → 把对应按钮设 active；否则只激活"自定义"。 */
+  function syncPresetButtonsActive(target) {
+    const group = document.querySelector(`.preset-group[data-preset-target="${target}"]`);
+    if (!group) return;
+    const values = target === 'exercise-mix'
+      ? [Number(els.mixEasy?.value || 0), Number(els.mixMedium?.value || 0), Number(els.mixHard?.value || 0)]
+      : [Number(els.exTypeConcept?.value || 0), Number(els.exTypeCalc?.value || 0), Number(els.exTypeProof?.value || 0)];
+    let matchedPreset = null;
+    group.querySelectorAll('.preset-btn[data-mix]').forEach((btn) => {
+      const preset = (btn.getAttribute('data-mix') || '').split(',').map(Number);
+      if (preset.length === 3 && preset.every((v, i) => v === values[i])) {
+        matchedPreset = btn;
+      }
+    });
+    group.querySelectorAll('.preset-btn').forEach((btn) => {
+      const isCustomToggle = btn.classList.contains('preset-custom-toggle');
+      if (matchedPreset) {
+        btn.classList.toggle('active', btn === matchedPreset);
+      } else {
+        // 没匹配任何预设 → 只激活自定义按钮
+        btn.classList.toggle('active', isCustomToggle);
+      }
+    });
+  }
+
+  function applyPreset(target, mixStr) {
+    const values = (mixStr || '').split(',').map(Number);
+    if (values.length !== 3 || values.some((v) => !Number.isFinite(v))) return;
+    if (target === 'exercise-mix') {
+      if (els.mixEasy) els.mixEasy.value = String(values[0]);
+      if (els.mixMedium) els.mixMedium.value = String(values[1]);
+      if (els.mixHard) els.mixHard.value = String(values[2]);
+      updateMixSumHint();
+    } else if (target === 'exercise-type') {
+      if (els.exTypeConcept) els.exTypeConcept.value = String(values[0]);
+      if (els.exTypeCalc) els.exTypeCalc.value = String(values[1]);
+      if (els.exTypeProof) els.exTypeProof.value = String(values[2]);
+      updateExTypeSumHint();
+    }
+    schedulePreferenceSave();
+  }
+
+  function bindPresetGroups() {
+    document.querySelectorAll('.preset-group').forEach((group) => {
+      const target = group.getAttribute('data-preset-target');
+      if (!target) return;
+      group.querySelectorAll('.preset-btn').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.preventDefault();
+          if (btn.classList.contains('preset-custom-toggle')) {
+            // 切换自定义区显示
+            const customAreaId = target === 'exercise-mix' ? 'mix-custom-area' : 'ex-type-custom-area';
+            const area = document.getElementById(customAreaId);
+            if (area) {
+              area.classList.toggle('hidden');
+              if (!area.classList.contains('hidden')) {
+                // 展开后聚焦第一个 input
+                area.querySelector('input')?.focus();
+              }
+            }
+            return;
+          }
+          const mix = btn.getAttribute('data-mix');
+          if (mix) applyPreset(target, mix);
+        });
+      });
+    });
   }
 
   function renderPreferences(preferences) {
@@ -2639,6 +2718,9 @@
     if (!el) return;
     el.addEventListener(eventName, schedulePreferenceSave);
   }
+
+  // preset 档位按钮（练习难度分布 / 练习类型分布）
+  bindPresetGroups();
 
   // 学习节奏与目标
   bindAutoSave(els.prefDifficulty);

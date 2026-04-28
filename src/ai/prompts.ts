@@ -38,9 +38,11 @@ function preferencesContext(prefs: LearningPreferences | null): string {
     detailed: '详尽（充分展开推导和例子，目标 3000-5000 字）',
   };
   const toneLabel: Record<string, string> = {
-    direct: '直接：开门见山，不寒暄',
+    direct: '直接：开门见山，不寒暄，错就是错对就是对',
     encouraging: '鼓励性：对正确部分明确肯定，对错误以建设性方式指出',
     socratic: '苏格拉底式：多用反问引导学生自己发现答案，不要直接给结论',
+    push: 'Push 型：把标准定得稍高于学生当前水平，明确指出懒散与回避；用紧迫感和高期望推动学生走出舒适区，但仍尊重事实',
+    playful: '有趣型：语气活泼，善用类比、脑洞例子、轻度调侃；可以用 emoji 调节气氛，但不可让玩笑遮盖知识点本身',
   };
   const styleLabelMap: Record<string, string> = {
     'example-first': '例子优先（先给具体场景再抽象）',

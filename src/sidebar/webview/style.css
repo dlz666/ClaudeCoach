@@ -1631,6 +1631,69 @@ input[type="radio"] + * {
   border-radius: 6px;
 }
 
+/* preset 档位按钮组：替代输入数字百分比 */
+.preset-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.preset-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  transition: 120ms ease;
+  white-space: nowrap;
+  word-break: keep-all;
+  flex: 1 1 auto;
+  min-width: 72px;
+}
+
+.preset-btn small {
+  font-size: 10px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  font-weight: normal;
+}
+
+.preset-btn:hover {
+  border-color: color-mix(in srgb, var(--vscode-button-background) 60%, var(--border));
+  background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+}
+
+.preset-btn.active {
+  border-color: var(--vscode-button-background);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-button-background) 30%, transparent);
+}
+
+.preset-btn.active small {
+  opacity: 0.9;
+  color: var(--vscode-button-foreground);
+}
+
+.preset-custom-toggle {
+  flex: 0 0 auto;
+  border-style: dashed;
+}
+
+.preset-custom-area {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-input-background) 50%, transparent);
+}
+
 /* 难度小按钮组（替代 select 下拉，更紧凑） */
 .difficulty-pill-group {
   display: inline-flex;

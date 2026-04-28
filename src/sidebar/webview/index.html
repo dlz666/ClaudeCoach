@@ -227,13 +227,20 @@
         </div>
 
         <div class="setting-row">
-          <label>练习难度分布（合计应为 100）</label>
-          <div class="range-group">
+          <label>练习难度分布</label>
+          <div class="preset-group" id="mix-preset-group" data-preset-target="exercise-mix">
+            <button type="button" class="preset-btn" data-preset="easy-heavy" data-mix="70,25,5">简单为主<small>70/25/5</small></button>
+            <button type="button" class="preset-btn" data-preset="balanced" data-mix="30,50,20">平衡<small>30/50/20</small></button>
+            <button type="button" class="preset-btn" data-preset="advanced" data-mix="15,40,45">进阶<small>15/40/45</small></button>
+            <button type="button" class="preset-btn" data-preset="challenge" data-mix="5,25,70">挑战<small>5/25/70</small></button>
+            <button type="button" class="preset-btn preset-custom-toggle" data-preset="custom">自定义</button>
+          </div>
+          <div class="range-group preset-custom-area hidden" id="mix-custom-area">
             <span>简单 <input type="number" id="mix-easy" value="30" min="0" max="100" class="num-input">%</span>
             <span>中等 <input type="number" id="mix-medium" value="50" min="0" max="100" class="num-input">%</span>
             <span>困难 <input type="number" id="mix-hard" value="20" min="0" max="100" class="num-input">%</span>
           </div>
-          <div id="mix-sum-hint" class="hint">当前合计：100%</div>
+          <div id="mix-sum-hint" class="hint"></div>
         </div>
 
         <div class="setting-row">
@@ -286,9 +293,11 @@
         <div class="setting-row">
           <label>反馈口吻</label>
           <div class="check-row" id="ai-feedback-tone">
-            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="direct"> 直接</label>
-            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="encouraging" checked> 鼓励</label>
-            <label class="inline-check"><input type="radio" name="ai-feedback-tone" value="socratic"> 苏格拉底式</label>
+            <label class="inline-check" title="开门见山，不寒暄"><input type="radio" name="ai-feedback-tone" value="direct"> 直接</label>
+            <label class="inline-check" title="对正确部分肯定，对错误建设性指出"><input type="radio" name="ai-feedback-tone" value="encouraging" checked> 鼓励</label>
+            <label class="inline-check" title="多用反问引导学生自己发现答案"><input type="radio" name="ai-feedback-tone" value="socratic"> 苏格拉底式</label>
+            <label class="inline-check" title="标准稍高于当前水平，紧迫感推动走出舒适区"><input type="radio" name="ai-feedback-tone" value="push"> Push 型</label>
+            <label class="inline-check" title="活泼，善用类比、脑洞例子、轻度调侃"><input type="radio" name="ai-feedback-tone" value="playful"> 有趣型</label>
           </div>
         </div>
 
@@ -311,13 +320,20 @@
         </div>
 
         <div class="setting-row">
-          <label>练习类型分布（合计应为 100）</label>
-          <div class="range-group">
+          <label>练习类型分布</label>
+          <div class="preset-group" id="ex-type-preset-group" data-preset-target="exercise-type">
+            <button type="button" class="preset-btn" data-preset="concept-heavy" data-mix="70,20,10">理解为主<small>70/20/10</small></button>
+            <button type="button" class="preset-btn" data-preset="balanced" data-mix="40,40,20">平衡<small>40/40/20</small></button>
+            <button type="button" class="preset-btn" data-preset="calc-heavy" data-mix="20,60,20">应用为主<small>20/60/20</small></button>
+            <button type="button" class="preset-btn" data-preset="proof-heavy" data-mix="20,30,50">证明为主<small>20/30/50</small></button>
+            <button type="button" class="preset-btn preset-custom-toggle" data-preset="custom">自定义</button>
+          </div>
+          <div class="range-group preset-custom-area hidden" id="ex-type-custom-area">
             <span>概念 <input type="number" id="ex-type-concept" value="40" min="0" max="100" class="num-input">%</span>
             <span>计算 <input type="number" id="ex-type-calc" value="40" min="0" max="100" class="num-input">%</span>
             <span>证明 <input type="number" id="ex-type-proof" value="20" min="0" max="100" class="num-input">%</span>
           </div>
-          <div id="ex-type-sum-hint" class="hint">当前合计：100%</div>
+          <div id="ex-type-sum-hint" class="hint"></div>
         </div>
 
         <div class="setting-row">
