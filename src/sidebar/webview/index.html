@@ -65,6 +65,8 @@
       </div>
       <div id="course-edit-menu" class="edit-menu hidden">
         <button class="edit-menu-item" data-action="set-course-tags">设置教学法 Tag</button>
+        <button class="edit-menu-item exam-menu-item" data-action="exam-prep">🎯 进入备考模式</button>
+        <button class="edit-menu-item exam-menu-item" data-action="manage-exam-sessions">📋 管理备考会话</button>
         <button class="edit-menu-item" data-action="rename-title">重命名课程</button>
         <button class="edit-menu-item" data-action="delete-title">删除课程</button>
       </div>
@@ -922,6 +924,46 @@
   </div>
 
   <div id="task-list" class="task-list"></div>
+
+  <!-- 备考会话管理模态 -->
+  <div id="exam-sessions-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="exam-sessions-title">
+      <div class="modal-header">
+        <div>
+          <h3 id="exam-sessions-title">🎯 备考会话管理</h3>
+          <p class="section-subtitle" id="exam-sessions-subject">课程：—</p>
+        </div>
+        <button class="btn ghost small fixed" id="btn-close-exam-sessions" type="button">关闭</button>
+      </div>
+      <div class="modal-body">
+        <section class="modal-section">
+          <div class="section-label">已有备考会话</div>
+          <div id="exam-sessions-list" class="muted">尚无备考会话</div>
+        </section>
+        <section class="modal-section">
+          <div class="section-label">新建备考会话</div>
+          <div class="setting-row">
+            <label for="exam-session-name">会话名</label>
+            <input type="text" id="exam-session-name" placeholder='例如："线代期末-12月"'>
+          </div>
+          <div class="setting-row">
+            <label for="exam-session-date">考试日期（可空）</label>
+            <input type="date" id="exam-session-date">
+          </div>
+          <div class="setting-row">
+            <label>关联真题资料（多选）</label>
+            <div id="exam-session-papers-list" class="check-row exam-papers-checklist">
+              <p class="hint">当前课程下还没有"真题/模拟卷"类型的资料。可在课程资料栏导入。</p>
+            </div>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btn-create-exam-session" type="button">创建并打开</button>
+            <button class="btn ghost" id="btn-cancel-create-exam-session" type="button">取消</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <script src="{{markdownItUri}}"></script>
   <script src="{{katexScriptUri}}"></script>

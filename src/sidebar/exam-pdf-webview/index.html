@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{katexStyleUri}}" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <title>📄 变体题预览</title>
+</head>
+<body>
+  <header class="no-print top-bar">
+    <div class="title-row">
+      <h2 id="paper-title">变体题集</h2>
+      <span id="paper-subtitle" class="paper-subtitle"></span>
+    </div>
+    <div class="actions">
+      <button id="btn-print" class="btn primary" type="button">🖨 打印 / 导出 PDF</button>
+      <span class="hint">将打开浏览器原生打印面板，目标选"另存为 PDF"。</span>
+    </div>
+  </header>
+
+  <main id="paper" class="paper-sheet">
+    <h1 class="paper-h1" id="paper-h1">变体题集</h1>
+    <div class="paper-meta" id="paper-meta"></div>
+    <ol id="questions" class="questions"></ol>
+    <div id="empty-state" class="muted hidden">尚无题目。</div>
+  </main>
+
+  <script nonce="{{nonce}}" src="{{markdownItUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexScriptUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexAutoRenderUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

@@ -143,6 +143,9 @@
     doNotDisturbUntil: null,
     settingsCollapsedGroups: saved.settingsCollapsedGroups || {},
     editingProfileId: null,
+    examSessions: [],
+    examSessionsLastSubject: null,
+    examSessionPendingOpen: false,
     rebuildModal: {
       open: false,
       mode: 'full',
@@ -261,6 +264,18 @@
     answerSubmitError: $('answer-submit-error'),
     btnAnswerSubmitConfirm: $('btn-answer-submit-confirm'),
     btnAnswerSubmitCancel: $('btn-answer-submit-cancel'),
+
+    // ===== 备考会话管理模态 =====
+    examSessionsModal: $('exam-sessions-modal'),
+    examSessionsTitle: $('exam-sessions-title'),
+    examSessionsSubject: $('exam-sessions-subject'),
+    examSessionsList: $('exam-sessions-list'),
+    examSessionName: $('exam-session-name'),
+    examSessionDate: $('exam-session-date'),
+    examSessionPapersList: $('exam-session-papers-list'),
+    btnCreateExamSession: $('btn-create-exam-session'),
+    btnCancelCreateExamSession: $('btn-cancel-create-exam-session'),
+    btnCloseExamSessions: $('btn-close-exam-sessions'),
 
     // ===== 设置页搜索 =====
     settingsSearch: $('settings-search'),
@@ -3066,6 +3081,8 @@
         });
       } else if (action === 'set-course-tags') {
         openCourseTagsModal(course);
+      } else if (action === 'exam-prep' || action === 'manage-exam-sessions') {
+        openExamSessionsModal(course);
       }
       els.editMenu?.classList.add('hidden');
     });
@@ -3136,6 +3153,126 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !els.courseTagsModal?.classList.contains('hidden')) {
       closeCourseTagsModal();
+    }
+  });
+
+  // ===== 备考会话管理模态 =====
+  let _examSessionsTargetCourse = null;
+
+  function openExamSessionsModal(course) {
+    if (!course) return;
+    _examSessionsTargetCourse = course;
+    state.examSessionsLastSubject = course.subject;
+    if (els.examSessionsSubject) {
+      els.examSessionsSubject.textContent = `课程：${course.title || course.subject}`;
+    }
+    if (els.examSessionsList) {
+      els.examSessionsList.innerHTML = '<p class="muted">加载中…</p>';
+    }
+    if (els.examSessionName) els.examSessionName.value = '';
+    if (els.examSessionDate) els.examSessionDate.value = '';
+    renderExamPapersChecklist(course);
+    els.examSessionsModal?.classList.remove('hidden');
+    els.examSessionsModal?.setAttribute('aria-hidden', 'false');
+    // 拉取会话列表
+    vscode.postMessage({ type: 'listExamSessions', subject: course.subject });
+  }
+
+  function closeExamSessionsModal() {
+    _examSessionsTargetCourse = null;
+    els.examSessionsModal?.classList.add('hidden');
+    els.examSessionsModal?.setAttribute('aria-hidden', 'true');
+  }
+
+  function renderExamPapersChecklist(course) {
+    if (!els.examSessionPapersList || !course) return;
+    const subjectMaterials = (state.materials?.materials || []).filter((m) => m.subject === course.subject);
+    const examPapers = subjectMaterials.filter((m) => m.materialType === 'exam-paper');
+    if (!examPapers.length) {
+      els.examSessionPapersList.innerHTML = '<p class="hint">当前课程下还没有"真题/模拟卷"类型的资料。可在课程资料栏导入并将类型标记为"📋 真题/模拟卷"。</p>';
+      return;
+    }
+    els.examSessionPapersList.innerHTML = examPapers.map((m) => `
+      <label class="inline-check exam-paper-row">
+        <input type="checkbox" data-paper-id="${escapeHtml(m.id)}">
+        <span>${escapeHtml(m.fileName || m.id)}</span>
+      </label>
+    `).join('');
+  }
+
+  function renderExamSessionsList() {
+    if (!els.examSessionsList) return;
+    const sessions = state.examSessions || [];
+    if (!sessions.length) {
+      els.examSessionsList.innerHTML = '<p class="muted">尚无备考会话。可在下方新建。</p>';
+      return;
+    }
+    els.examSessionsList.innerHTML = sessions.map((s) => {
+      const dateLabel = s.examDate ? new Date(s.examDate).toLocaleDateString('zh-CN') : '—';
+      const status = s.status === 'archived' ? '<span class="exam-status archived">已归档</span>' : '<span class="exam-status active">进行中</span>';
+      return `
+        <div class="exam-session-row" data-session-id="${escapeHtml(s.id)}">
+          <div class="esr-main">
+            <div class="esr-name">${escapeHtml(s.name || s.id)} ${status}</div>
+            <div class="esr-meta">考期：${escapeHtml(dateLabel)} · 真题 ${s.sourcePaperIds?.length || 0} 份 · 提交 ${s.submissions?.length || 0} 次</div>
+          </div>
+          <div class="esr-actions">
+            <button class="btn small primary" type="button" data-exam-action="open" data-session-id="${escapeHtml(s.id)}">打开</button>
+            ${s.status !== 'archived' ? `<button class="btn small ghost" type="button" data-exam-action="archive" data-session-id="${escapeHtml(s.id)}">归档</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+    els.examSessionsList.querySelectorAll('[data-exam-action]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const action = btn.getAttribute('data-exam-action');
+        const sessionId = btn.getAttribute('data-session-id');
+        if (!sessionId) return;
+        if (action === 'open') {
+          vscode.postMessage({ type: 'openExamWorkbench', sessionId });
+          closeExamSessionsModal();
+        } else if (action === 'archive') {
+          vscode.postMessage({ type: 'archiveExamSession', sessionId });
+          addLog(`已归档备考会话 ${sessionId}`, 'info');
+        }
+      });
+    });
+  }
+
+  els.btnCloseExamSessions?.addEventListener('click', closeExamSessionsModal);
+  els.btnCancelCreateExamSession?.addEventListener('click', closeExamSessionsModal);
+  els.examSessionsModal?.addEventListener('click', (event) => {
+    if (event.target === els.examSessionsModal) closeExamSessionsModal();
+  });
+
+  els.btnCreateExamSession?.addEventListener('click', () => {
+    const course = _examSessionsTargetCourse;
+    if (!course) return;
+    const name = (els.examSessionName?.value || '').trim();
+    if (!name) {
+      addLog('请输入会话名。', 'warn');
+      els.examSessionName?.focus();
+      return;
+    }
+    const examDate = els.examSessionDate?.value || undefined;
+    const sourcePaperIds = Array.from(els.examSessionPapersList?.querySelectorAll('input[type="checkbox"]:checked') || [])
+      .map((cb) => cb.getAttribute('data-paper-id'))
+      .filter(Boolean);
+    state.examSessionPendingOpen = true;
+    vscode.postMessage({
+      type: 'createExamSession',
+      subject: course.subject,
+      name,
+      examDate,
+      sourcePaperIds,
+    });
+    addLog(`正在创建备考会话"${name}"…`, 'info');
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !els.examSessionsModal?.classList.contains('hidden')) {
+      closeExamSessionsModal();
     }
   });
 
@@ -3445,6 +3582,27 @@
         if (ok) {
           refreshCoursePanelData(false);
           requestWrongQuestions();
+        }
+        break;
+      }
+      case 'examSessionsList': {
+        state.examSessions = Array.isArray(msg.data) ? msg.data : [];
+        renderExamSessionsList();
+        break;
+      }
+      case 'examSession': {
+        const session = msg.data;
+        if (!session) break;
+        // 把这个 session 同步进 state.examSessions
+        const idx = state.examSessions.findIndex((s) => s.id === session.id);
+        if (idx >= 0) state.examSessions[idx] = session;
+        else state.examSessions.unshift(session);
+        renderExamSessionsList();
+        // 如果是用户刚点了"创建"，自动打开工作台
+        if (state.examSessionPendingOpen) {
+          state.examSessionPendingOpen = false;
+          vscode.postMessage({ type: 'openExamWorkbench', sessionId: session.id });
+          closeExamSessionsModal();
         }
         break;
       }

@@ -2030,3 +2030,82 @@ input[type="radio"] + * {
 #learning-plan-modal .modal-panel {
   max-width: 480px;
 }
+
+/* ===== 备考菜单项 + 会话管理模态 ===== */
+.edit-menu-item.exam-menu-item {
+  color: color-mix(in srgb, var(--vscode-button-background) 90%, var(--vscode-foreground) 10%);
+  font-weight: 600;
+}
+.edit-menu-item.exam-menu-item:hover {
+  background: var(--accent-soft);
+}
+
+#exam-sessions-modal .modal-panel {
+  max-width: 560px;
+}
+
+.exam-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-1) 78%, transparent);
+}
+.esr-main { flex: 1; min-width: 0; }
+.esr-name {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.esr-meta {
+  font-size: 11px;
+  margin-top: 3px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
+}
+.esr-actions { display: flex; gap: 6px; }
+
+.exam-status {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+}
+.exam-status.active {
+  background: var(--success-soft);
+  color: rgb(76, 175, 80);
+}
+.exam-status.archived {
+  background: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 18%, transparent);
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 95%, transparent);
+}
+
+.exam-papers-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+}
+.exam-papers-checklist .exam-paper-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.exam-papers-checklist .exam-paper-row:hover {
+  background: var(--accent-soft);
+}
+

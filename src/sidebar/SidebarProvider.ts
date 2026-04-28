@@ -20,6 +20,9 @@ import {
   ChatGroundingMode,
   AIProfile,
   AIWorkspaceOverride,
+  ExamPrepSession,
+  ExamSubmission,
+  ExamGradingResult,
   LessonMeta,
   OutlineRebuildApplyRequest,
   OutlineRebuildImpactSummary,
@@ -89,6 +92,14 @@ export interface SidebarCoachDeps {
   learningPlanStore: import('../coach/learningPlanStore').LearningPlanStore;
 }
 
+/** 由 extension.ts 注入的备考模式共享实例。 */
+export interface SidebarExamDeps {
+  examPrepStore: import('../exam/examPrepStore').ExamPrepStore;
+  examAnalyzer: import('../exam/examAnalyzer').ExamAnalyzer;
+  examVariantGenerator: import('../exam/examVariantGenerator').ExamVariantGenerator;
+  examGrader: import('../exam/examGrader').ExamGrader;
+}
+
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private contentGen = new ContentGenerator();
@@ -114,6 +125,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private readonly aiProfiles: AIProfileManager,
     private readonly onAIConfigChanged?: () => void,
     private readonly coachDeps?: SidebarCoachDeps,
+    private readonly examDeps?: SidebarExamDeps,
   ) {
     this.materialManager.onDidChangeIndex((index) => {
       this._post({ type: 'materials', data: index });
@@ -914,6 +926,90 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
     }
     return { ...base, courseTags };
+  }
+
+  /**
+   * 给备考相关的 prompt 拼一份完整 ctx：复用 _buildCourseProfileContext + 学生画像 + 偏好。
+   */
+  private async _buildExamPromptContext(subject: Subject) {
+    const [prefs, profile, courseProfileContext] = await Promise.all([
+      this.prefsStore.get(),
+      this.progressStore.getProfile(),
+      this._buildCourseProfileContext(subject),
+    ]);
+    return { profile, preferences: prefs, ...courseProfileContext };
+  }
+
+  /**
+   * 备考批改后把错题归档到错题本（source='exam-session'）。
+   */
+  private async _archiveExamWrongQuestions(
+    session: ExamPrepSession,
+    variantSet: import('../types').ExamVariantSet | null,
+    grading: ExamGradingResult,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    for (const q of grading.perQuestion) {
+      if (q.correct === true) continue; // 只归档错题（含 partial）
+
+      // 找题面：优先 variantSet，其次 paperAnalyses 的 rawSnippet
+      let prompt = '';
+      let exerciseId = `exam-${session.id}-${q.questionNumber}`;
+      let topicId = `exam-prep`;
+      let topicTitle = '备考训练';
+      let lessonId = session.id;
+      let lessonTitle = session.name;
+
+      if (variantSet) {
+        const matched = variantSet.questions.find((vq) => vq.number === q.questionNumber || vq.id === q.questionNumber);
+        if (matched) {
+          prompt = matched.prompt;
+          exerciseId = `${variantSet.id}-${matched.id}`;
+        }
+      }
+      if (!prompt) {
+        for (const analysis of session.paperAnalyses) {
+          for (const sec of analysis.sections) {
+            const found = sec.questions.find((pq) => pq.number === q.questionNumber);
+            if (found) {
+              prompt = found.rawSnippet ?? `真题 ${q.questionNumber}（${found.knowledgePoints.join('、')}）`;
+              break;
+            }
+          }
+          if (prompt) break;
+        }
+      }
+      if (!prompt) {
+        prompt = `备考题 ${q.questionNumber}（${q.knowledgePoints.join('、') || '未识别考点'}）`;
+      }
+
+      const wrong: WrongQuestion = {
+        id: `wrong-${session.id}-${q.questionNumber}-${Date.now()}`,
+        exerciseId,
+        subject: session.subject,
+        topicId,
+        topicTitle,
+        lessonId,
+        lessonTitle,
+        prompt,
+        studentAnswer: q.studentAnswerOcr || '[未识别]',
+        score: Math.round((q.score / Math.max(1, q.maxScore)) * 100),
+        feedback: q.feedback,
+        weaknesses: q.knowledgePoints,
+        weaknessTags: q.weaknessTags ?? [],
+        attempts: 1,
+        firstFailedAt: now,
+        lastAttemptedAt: now,
+        resolved: false,
+        source: 'exam-session',
+        examSessionId: session.id,
+      };
+      try {
+        await this.courseManager.upsertWrongQuestion(session.subject, wrong);
+      } catch (err) {
+        console.warn('[ExamPrep] archive wrong question failed:', err);
+      }
+    }
   }
 
   private async _loadLessonExercises(subject: Subject, topicId: string, lessonId: string): Promise<Exercise[]> {
@@ -2255,6 +2351,344 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._post({
             type: 'activityLog',
             data: (await this.coachDeps.sessionLogger.recentActivity(50)) as any,
+          });
+          break;
+        }
+
+        // ===================================================================
+        // 备考模式（Exam Prep）13 个 case
+        // ===================================================================
+
+        case 'createExamSession': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const session = await this.examDeps.examPrepStore.createSession({
+            subject: msg.subject,
+            name: String(msg.name ?? '未命名备考'),
+            examDate: msg.examDate ? String(msg.examDate) : undefined,
+            sourcePaperIds: Array.isArray(msg.sourcePaperIds) ? msg.sourcePaperIds.map(String) : [],
+          });
+          this._post({ type: 'examSession', data: session });
+          this._post({ type: 'log', message: `已创建备考会话：${session.name}`, level: 'info' });
+          break;
+        }
+
+        case 'listExamSessions': {
+          if (!this.examDeps) {
+            this._post({ type: 'examSessionsList', subject: msg.subject, data: [] });
+            break;
+          }
+          const sessions = await this.examDeps.examPrepStore.listSessions(msg.subject);
+          this._post({ type: 'examSessionsList', subject: msg.subject, data: sessions });
+          break;
+        }
+
+        case 'getExamSession': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const session = await this.examDeps.examPrepStore.getSession(String(msg.sessionId));
+          if (session) {
+            this._post({ type: 'examSession', data: session });
+          } else {
+            this._post({ type: 'error', message: `备考会话不存在：${msg.sessionId}` });
+          }
+          break;
+        }
+
+        case 'archiveExamSession': {
+          if (!this.examDeps) break;
+          await this.examDeps.examPrepStore.archiveSession(String(msg.sessionId));
+          this._post({ type: 'log', message: `已归档备考会话 ${msg.sessionId}`, level: 'info' });
+          // 推一份最新列表
+          const list = await this.examDeps.examPrepStore.listSessions();
+          this._post({ type: 'examSessionsList', data: list });
+          break;
+        }
+
+        case 'analyzeExamPaper': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const paperId = String(msg.paperId);
+          const examDeps = this.examDeps;
+          this._startTask(`分析真题 ${paperId}`, async () => {
+            const session = await examDeps.examPrepStore.getSession(sessionId);
+            if (!session) throw new Error(`备考会话不存在：${sessionId}`);
+            const promptCtx = await this._buildExamPromptContext(session.subject);
+            const analysis = await examDeps.examAnalyzer.analyzePaper(paperId, promptCtx);
+            await examDeps.examPrepStore.addPaperAnalysis(sessionId, analysis);
+            this._post({ type: 'examPaperAnalyzed', sessionId, analysis });
+          });
+          break;
+        }
+
+        case 'generateExamVariants': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const count = Number.isFinite(Number(msg.count)) ? Math.max(1, Math.min(20, Number(msg.count))) : 5;
+          const focusMode = (msg.focusMode === 'cover-all' || msg.focusMode === 'mock-full')
+            ? msg.focusMode
+            : 'reinforce-weakness';
+          const examDeps = this.examDeps;
+          this._startTask(`生成 ${count} 道变体`, async () => {
+            const session = await examDeps.examPrepStore.getSession(sessionId);
+            if (!session) throw new Error(`备考会话不存在：${sessionId}`);
+            const wrongs = await this.courseManager.listWrongQuestions(session.subject, {
+              onlyUnresolved: true,
+              limit: 30,
+            });
+            const weakKnowledgePoints = Array.from(new Set(wrongs.flatMap((w) => w.weaknesses).filter(Boolean)));
+            const promptCtx = await this._buildExamPromptContext(session.subject);
+            const set = await examDeps.examVariantGenerator.generate({
+              session,
+              paperAnalyses: session.paperAnalyses,
+              weakKnowledgePoints,
+              count,
+              focusMode,
+              promptCtx,
+            });
+            await examDeps.examPrepStore.addVariantSet(sessionId, set);
+            this._post({ type: 'examVariantsGenerated', sessionId, variantSet: set });
+          });
+          break;
+        }
+
+        case 'exportExamVariantsPdf': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          await vscode.commands.executeCommand('claudeCoach.openExamVariantsPreview', {
+            sessionId: String(msg.sessionId),
+            variantSetId: String(msg.variantSetId),
+          });
+          break;
+        }
+
+        case 'uploadExamSubmissionImages': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const variantSetId = msg.variantSetId ? String(msg.variantSetId) : undefined;
+          const session = await this.examDeps.examPrepStore.getSession(sessionId);
+          if (!session) {
+            this._post({ type: 'error', message: `备考会话不存在：${sessionId}` });
+            break;
+          }
+          const incoming: Array<{ name: string; mimeType: string; base64: string }> = Array.isArray(msg.images) ? msg.images : [];
+          if (incoming.length === 0) {
+            this._post({ type: 'error', message: '没有要上传的图片。' });
+            break;
+          }
+          const submissionId = `sub-${Date.now()}`;
+          const imagePaths: string[] = [];
+          for (const [i, img] of incoming.entries()) {
+            const safeName = img.name && /\.(png|jpe?g|webp)$/i.test(img.name)
+              ? `${i + 1}-${img.name}`
+              : `${i + 1}.png`;
+            const fullPath = await this.examDeps.examPrepStore.saveSubmissionImage(sessionId, submissionId, {
+              name: safeName,
+              mimeType: img.mimeType ?? 'image/png',
+              base64: img.base64 ?? '',
+            });
+            imagePaths.push(fullPath);
+          }
+          const submission: ExamSubmission = {
+            id: submissionId,
+            sessionId,
+            variantSetId,
+            uploadedAt: new Date().toISOString(),
+            imagePaths,
+          };
+          await this.examDeps.examPrepStore.addSubmission(sessionId, submission);
+          this._post({ type: 'examSubmissionUploaded', sessionId, submission });
+          break;
+        }
+
+        case 'gradeExamSubmission': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const submissionId = String(msg.submissionId);
+          const examDeps = this.examDeps;
+          this._startTask('AI 视觉批改', async () => {
+            try {
+              const session = await examDeps.examPrepStore.getSession(sessionId);
+              const sub = session?.submissions.find((s) => s.id === submissionId);
+              if (!session || !sub) throw new Error(`提交不存在：${submissionId}`);
+
+              const variantSet = sub.variantSetId
+                ? await examDeps.examPrepStore.getVariantSet(sessionId, sub.variantSetId)
+                : null;
+              const promptCtx = await this._buildExamPromptContext(session.subject);
+
+              // 读图片为 base64
+              const fsMod = await import('fs/promises');
+              const images = await Promise.all(sub.imagePaths.map(async (p) => {
+                const data = await fsMod.readFile(p);
+                const lower = p.toLowerCase();
+                const mimeType = lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+                  ? 'image/jpeg'
+                  : lower.endsWith('.webp')
+                    ? 'image/webp'
+                    : 'image/png';
+                return { filePath: p, base64: data.toString('base64'), mimeType };
+              }));
+
+              const grading = await examDeps.examGrader.gradeWithImages({
+                images,
+                variantSet,
+                paperAnalyses: session.paperAnalyses,
+                promptCtx,
+              });
+              await examDeps.examPrepStore.updateSubmissionGrading(sessionId, submissionId, grading);
+
+              // 错题归档
+              await this._archiveExamWrongQuestions(session, variantSet, grading);
+
+              // 自动重算就绪度
+              if (this.coachDeps) {
+                const { ExamReadinessCalculator } = await import('../exam/examReadinessCalculator');
+                const calc = new ExamReadinessCalculator(
+                  this.courseManager,
+                  this.courseProfileStore,
+                  this.coachDeps.learningPlanStore,
+                  this.aiClient,
+                );
+                const refreshed = await examDeps.examPrepStore.getSession(sessionId);
+                if (refreshed) {
+                  const snapshot = await calc.compute(refreshed, promptCtx);
+                  await examDeps.examPrepStore.updateReadiness(sessionId, snapshot);
+                  this._post({ type: 'examReadinessUpdated', sessionId, snapshot });
+                }
+              }
+
+              const updatedSession = await examDeps.examPrepStore.getSession(sessionId);
+              const updatedSub = updatedSession?.submissions.find((s) => s.id === submissionId);
+              if (updatedSub) {
+                this._post({ type: 'examSubmissionGraded', sessionId, submission: updatedSub });
+              }
+            } catch (err: any) {
+              if (err?.name === 'VisionUnsupportedError') {
+                this._post({
+                  type: 'examVisionUnsupported',
+                  modelName: err.modelName,
+                  suggestedModels: err.suggestedModels ?? [],
+                });
+                return;
+              }
+              throw err;
+            }
+          });
+          break;
+        }
+
+        case 'submitExamTextAnswers': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const variantSetId = msg.variantSetId ? String(msg.variantSetId) : undefined;
+          const answers: Array<{ questionNumber: string; answer: string }> = Array.isArray(msg.answers) ? msg.answers : [];
+          const examDeps = this.examDeps;
+          this._startTask('文字答案批改', async () => {
+            const session = await examDeps.examPrepStore.getSession(sessionId);
+            if (!session) throw new Error(`备考会话不存在：${sessionId}`);
+            const variantSet = variantSetId
+              ? await examDeps.examPrepStore.getVariantSet(sessionId, variantSetId)
+              : null;
+            const promptCtx = await this._buildExamPromptContext(session.subject);
+
+            const grading = await examDeps.examGrader.gradeWithText({
+              answers,
+              variantSet,
+              paperAnalyses: session.paperAnalyses,
+              promptCtx,
+            });
+
+            const submissionId = `sub-${Date.now()}`;
+            const submission: ExamSubmission = {
+              id: submissionId,
+              sessionId,
+              variantSetId,
+              uploadedAt: new Date().toISOString(),
+              imagePaths: [],
+              textAnswers: answers,
+              gradingResult: grading,
+            };
+            await examDeps.examPrepStore.addSubmission(sessionId, submission);
+            await this._archiveExamWrongQuestions(session, variantSet, grading);
+
+            // 自动重算就绪度
+            if (this.coachDeps) {
+              const { ExamReadinessCalculator } = await import('../exam/examReadinessCalculator');
+              const calc = new ExamReadinessCalculator(
+                this.courseManager,
+                this.courseProfileStore,
+                this.coachDeps.learningPlanStore,
+                this.aiClient,
+              );
+              const refreshed = await examDeps.examPrepStore.getSession(sessionId);
+              if (refreshed) {
+                const snapshot = await calc.compute(refreshed, promptCtx);
+                await examDeps.examPrepStore.updateReadiness(sessionId, snapshot);
+                this._post({ type: 'examReadinessUpdated', sessionId, snapshot });
+              }
+            }
+
+            this._post({ type: 'examSubmissionUploaded', sessionId, submission });
+            this._post({ type: 'examSubmissionGraded', sessionId, submission });
+          });
+          break;
+        }
+
+        case 'recomputeExamReadiness': {
+          if (!this.examDeps) {
+            this._post({ type: 'error', message: '备考模块未初始化。' });
+            break;
+          }
+          if (!this.coachDeps) {
+            this._post({ type: 'error', message: 'Coach 模块未初始化，无法计算就绪度。' });
+            break;
+          }
+          const sessionId = String(msg.sessionId);
+          const examDeps = this.examDeps;
+          const coachDeps = this.coachDeps;
+          this._startTask('计算备考就绪度', async () => {
+            const session = await examDeps.examPrepStore.getSession(sessionId);
+            if (!session) throw new Error(`备考会话不存在：${sessionId}`);
+            const promptCtx = await this._buildExamPromptContext(session.subject);
+            const { ExamReadinessCalculator } = await import('../exam/examReadinessCalculator');
+            const calc = new ExamReadinessCalculator(
+              this.courseManager,
+              this.courseProfileStore,
+              coachDeps.learningPlanStore,
+              this.aiClient,
+            );
+            const snapshot = await calc.compute(session, promptCtx);
+            await examDeps.examPrepStore.updateReadiness(sessionId, snapshot);
+            this._post({ type: 'examReadinessUpdated', sessionId, snapshot });
+          });
+          break;
+        }
+
+        case 'openExamWorkbench': {
+          await vscode.commands.executeCommand('claudeCoach.openExamWorkbench', {
+            sessionId: String(msg.sessionId),
           });
           break;
         }

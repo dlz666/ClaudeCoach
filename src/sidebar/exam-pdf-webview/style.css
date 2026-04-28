@@ -1,0 +1,291 @@
+/* exam-pdf-webview/style.css — 变体题预览（屏幕 + 打印） */
+
+:root {
+  --paper-bg: #ffffff;
+  --paper-fg: #1a1a1a;
+  --paper-meta: #555;
+  --paper-rule: #cfcfcf;
+  --paper-blank: #999;
+  --tag-bg: #eef2ff;
+  --tag-fg: #4338ca;
+  --accent: #4338ca;
+  --bar-bg: #f4f4f6;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bar-bg);
+  color: var(--paper-fg);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", Georgia, serif;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* ===== 顶部工具栏（不打印） ===== */
+.top-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 28px;
+  background: rgba(20, 20, 30, 0.85);
+  color: white;
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.title-row { display: flex; flex-direction: column; gap: 2px; }
+.title-row h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.paper-subtitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.actions { display: flex; align-items: center; gap: 12px; }
+.actions .hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 7px 14px;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  transition: 120ms ease;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.18); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.btn.primary:hover { background: #5b50d9; }
+
+/* ===== A4 纸面 ===== */
+.paper-sheet {
+  max-width: 800px;
+  margin: 28px auto;
+  padding: 36px 48px 60px;
+  background: var(--paper-bg);
+  color: var(--paper-fg);
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  min-height: 80vh;
+}
+
+.paper-h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+.paper-meta {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--paper-meta);
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--paper-rule);
+}
+.meta-piece { white-space: nowrap; }
+
+.questions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 18px;
+}
+
+.question {
+  padding: 10px 0;
+  border-bottom: 1px dotted #e3e3e3;
+}
+.question:last-child { border-bottom: none; }
+
+.q-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.q-num {
+  font-weight: 700;
+  font-size: 14px;
+  min-width: 28px;
+}
+.q-type-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 10px;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  font-weight: 600;
+}
+.q-diff {
+  font-size: 11px;
+  color: #c97e02;
+}
+.q-score {
+  font-size: 11px;
+  color: var(--paper-meta);
+}
+.q-points {
+  font-size: 11px;
+  color: #6b7280;
+  margin-left: auto;
+}
+
+.q-prompt {
+  margin: 4px 0 8px 24px;
+  line-height: 1.7;
+}
+.q-prompt p { margin: 0 0 6px; }
+.q-prompt p:last-child { margin-bottom: 0; }
+.q-prompt code {
+  background: #f4f4f6;
+  border: 1px solid #e0e0e2;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.q-prompt pre {
+  background: #f4f4f6;
+  border: 1px solid #e0e0e2;
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+/* ===== 选择题选项 ===== */
+.q-options {
+  margin: 6px 0 10px 36px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 18px;
+  list-style-type: upper-alpha;
+}
+.q-options li {
+  margin: 0;
+  padding-left: 4px;
+  font-size: 13px;
+}
+.q-answer-line {
+  margin: 8px 0 0 24px;
+  font-size: 13px;
+}
+.answer-label { font-weight: 600; }
+.answer-fill { letter-spacing: 4px; color: var(--paper-blank); }
+
+/* ===== 填空 / 自由作答区 ===== */
+.q-answer-blanks,
+.q-answer-area {
+  margin: 8px 0 0 24px;
+  display: grid;
+  gap: 12px;
+}
+.blank-line {
+  height: 1.6em;
+  border-bottom: 1px dotted var(--paper-blank);
+}
+/* 证明、编程类需要更大空间 */
+.q-answer-area.type-proof,
+.q-answer-area.type-code {
+  min-height: 12em;
+}
+.q-answer-area.type-free {
+  min-height: 7em;
+}
+.q-answer-area.type-short {
+  min-height: 5em;
+}
+
+/* 题型颜色细微区分（屏幕上） */
+.question.type-choice .q-type-tag { background: #fef3c7; color: #92400e; }
+.question.type-fill .q-type-tag { background: #dbeafe; color: #1e40af; }
+.question.type-free .q-type-tag,
+.question.type-short .q-type-tag { background: #e0e7ff; color: #4338ca; }
+.question.type-proof .q-type-tag { background: #ede9fe; color: #6d28d9; }
+.question.type-code .q-type-tag { background: #d1fae5; color: #047857; font-family: var(--vscode-editor-font-family, "Consolas", monospace); }
+
+.muted { color: #999; text-align: center; margin: 30px 0; }
+.hidden { display: none !important; }
+
+/* ===== 打印样式 ===== */
+@media print {
+  html, body { background: white; color: black; }
+  .no-print { display: none !important; }
+
+  body { font-size: 11pt; line-height: 1.55; }
+
+  .paper-sheet {
+    margin: 0;
+    padding: 0;
+    background: white;
+    border: none;
+    box-shadow: none;
+    max-width: none;
+  }
+
+  .paper-h1 { font-size: 18pt; margin-bottom: 4pt; }
+  .paper-meta { font-size: 9pt; margin-bottom: 14pt; padding-bottom: 8pt; }
+
+  .question {
+    page-break-inside: avoid;
+    margin-bottom: 14pt;
+    padding: 6pt 0;
+    border-bottom: none;
+  }
+
+  .q-num { font-size: 12pt; }
+  .q-type-tag { background: white !important; color: black !important; border: 1px solid #999; }
+  .q-diff, .q-score, .q-points { color: #555; }
+
+  .q-prompt { margin-left: 16pt; }
+  .q-options { margin-left: 28pt; gap: 3pt 14pt; }
+
+  .blank-line {
+    height: 1.4em;
+    border-bottom: 1px dotted #888;
+    margin: 4pt 0;
+  }
+
+  .q-answer-area.type-proof,
+  .q-answer-area.type-code {
+    min-height: 14em;
+  }
+  .q-answer-area.type-free {
+    min-height: 8em;
+  }
+  .q-answer-area.type-short {
+    min-height: 5em;
+  }
+  .q-answer-blanks {
+    min-height: 3em;
+  }
+
+  /* 隐藏多色块 */
+  .question.type-choice .q-type-tag,
+  .question.type-fill .q-type-tag,
+  .question.type-free .q-type-tag,
+  .question.type-short .q-type-tag,
+  .question.type-proof .q-type-tag,
+  .question.type-code .q-type-tag { background: white !important; color: black !important; }
+
+  @page { margin: 18mm 16mm; }
+}

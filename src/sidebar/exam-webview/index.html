@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{katexStyleUri}}" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <title>🎯 备考工作台</title>
+</head>
+<body>
+  <div class="exam-workbench">
+    <header class="exam-header">
+      <h1 id="exam-name">🎯 备考会话：—</h1>
+      <div class="exam-meta">
+        <span id="exam-days-to" class="meta-pill"></span>
+        <span id="exam-subject" class="meta-pill"></span>
+        <span id="exam-status" class="meta-pill"></span>
+      </div>
+    </header>
+
+    <!-- 区块 1：真题分析 -->
+    <section class="exam-section" id="section-paper-analyses">
+      <div class="section-head">
+        <h2>📋 真题分析</h2>
+        <p class="section-subtitle">让 AI 拆解真题结构，识别高频考点。</p>
+      </div>
+      <div id="paper-analyses-list" class="muted">尚未分析任何真题。</div>
+      <div class="actions-row">
+        <button class="btn primary" id="btn-analyze-paper" type="button">+ 上传/分析新真题</button>
+      </div>
+      <div id="knowledge-heatmap" class="hidden">
+        <h3 class="subsection-title">高频考点热力图</h3>
+        <div id="heatmap-bars"></div>
+      </div>
+    </section>
+
+    <!-- 区块 2：变体出题 -->
+    <section class="exam-section" id="section-variants">
+      <div class="section-head">
+        <h2>🎲 变体出题</h2>
+        <p class="section-subtitle">基于真题考点生成变体（不是换皮，而是角度迁移 / 场景换 / 知识点组合）。</p>
+      </div>
+      <div class="variant-controls">
+        <label>题量
+          <select id="variant-count">
+            <option value="5">5 题</option>
+            <option value="10" selected>10 题</option>
+            <option value="15">15 题</option>
+            <option value="20">20 题</option>
+          </select>
+        </label>
+        <label>策略
+          <select id="variant-focus">
+            <option value="reinforce-weakness">强化弱项</option>
+            <option value="cover-all">覆盖全卷考点</option>
+            <option value="mock-full">模考整套</option>
+          </select>
+        </label>
+        <button class="btn primary" id="btn-generate-variants" type="button">▶ 生成</button>
+      </div>
+      <div id="variant-sets-list" class="muted">尚无变体题集。</div>
+    </section>
+
+    <!-- 区块 3：提交答题截图 -->
+    <section class="exam-section" id="section-submit">
+      <div class="section-head">
+        <h2>📷 提交答题截图</h2>
+        <p class="section-subtitle">手写答完拍照，或直接截屏。AI 视觉模型会 OCR + 批改。</p>
+      </div>
+      <div class="submission-config">
+        <label>关联题集
+          <select id="submission-variant-set">
+            <option value="">— 直接答真题 —</option>
+          </select>
+        </label>
+      </div>
+      <div id="image-dropzone" class="image-dropzone">
+        <div class="dropzone-text">
+          📂 拖拽图片到这里 / Ctrl+V 粘贴 / <button class="btn small" id="btn-pick-image" type="button">选择文件</button>
+        </div>
+        <input type="file" id="file-input" accept="image/*" multiple style="display:none" />
+      </div>
+      <div id="image-thumbs" class="image-thumbs"></div>
+      <div class="actions-row">
+        <button class="btn primary" id="btn-grade-submission" type="button" disabled>▶ 开始 AI 批改</button>
+        <button class="btn ghost" id="btn-clear-images" type="button">清空</button>
+      </div>
+
+      <div id="vision-fallback" class="warn-box hidden">
+        <p class="warn-text">当前 AI Profile 不支持图片输入。可以切换到支持视觉的模型，或者：</p>
+        <button class="btn" id="btn-switch-to-text" type="button">切换到文字答题</button>
+      </div>
+
+      <!-- 文字答题 fallback 模态 -->
+      <div id="text-fallback-modal" class="modal-overlay hidden" aria-hidden="true">
+        <div class="modal-panel" role="dialog" aria-modal="true">
+          <div class="modal-header">
+            <h3>文字答题（vision fallback）</h3>
+            <button class="btn ghost small" id="btn-cancel-text-fallback" type="button">关闭</button>
+          </div>
+          <div class="modal-body">
+            <p class="hint">按"## 第 N 题"格式输入答案，每题一段。</p>
+            <textarea id="text-fallback-textarea" rows="14" placeholder="## 第 1 题
+你的答案...
+
+## 第 2 题
+你的答案..."></textarea>
+            <div class="actions-row">
+              <button class="btn primary" id="btn-submit-text-answers" type="button">提交批改</button>
+              <button class="btn ghost" id="btn-cancel-text-fallback-2" type="button">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 区块 4：历次提交 -->
+    <section class="exam-section" id="section-submissions">
+      <div class="section-head">
+        <h2>📊 历次提交</h2>
+        <p class="section-subtitle">所有批改过的提交。</p>
+      </div>
+      <div id="submissions-table-wrap" class="table-wrap">
+        <table id="submissions-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>题集</th>
+              <th>得分</th>
+              <th>弱项</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="submissions-tbody">
+            <tr class="empty-row"><td colspan="5">尚无提交。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 区块 5：综合就绪度 -->
+    <section class="exam-section" id="section-readiness">
+      <div class="section-head">
+        <h2>🧭 综合分析（就绪度）</h2>
+        <p class="section-subtitle">基于真题分析、提交表现、错题剩余、计划进度的综合评估。</p>
+      </div>
+      <div class="readiness-display">
+        <div id="ready-score-big" class="ready-score">— / 100</div>
+        <div class="readiness-controls">
+          <button class="btn small" id="btn-recompute-readiness" type="button">🔄 重新分析</button>
+        </div>
+      </div>
+      <div id="readiness-components" class="readiness-components hidden">
+        <div class="rc-cell"><span class="rc-label">模考表现</span><span class="rc-value" id="rc-exam">0/40</span></div>
+        <div class="rc-cell"><span class="rc-label">错题剩余</span><span class="rc-value" id="rc-wrong">0/30</span></div>
+        <div class="rc-cell"><span class="rc-label">考点覆盖</span><span class="rc-value" id="rc-coverage">0/20</span></div>
+        <div class="rc-cell"><span class="rc-label">计划进度</span><span class="rc-value" id="rc-plan">0/10</span></div>
+      </div>
+      <div class="readiness-blocks">
+        <div class="rb mastered">
+          <h4>✓ 已掌握</h4>
+          <ul id="rb-mastered"></ul>
+        </div>
+        <div class="rb wobbly">
+          <h4>⚠ 待巩固</h4>
+          <ul id="rb-wobbly"></ul>
+        </div>
+        <div class="rb untouched">
+          <h4>✗ 未涉及</h4>
+          <ul id="rb-untouched"></ul>
+        </div>
+      </div>
+      <div id="pre-exam-checklist" class="hidden">
+        <h4>考前建议</h4>
+        <ol id="checklist-items"></ol>
+      </div>
+    </section>
+
+    <!-- 真题选择模态 -->
+    <div id="paper-picker-modal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-panel" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <h3>选择真题资料</h3>
+          <button class="btn ghost small" id="btn-close-paper-picker" type="button">关闭</button>
+        </div>
+        <div class="modal-body">
+          <p class="hint">仅显示当前课程关联的"真题/模拟卷"。</p>
+          <div id="paper-picker-list" class="selection-list muted">加载中…</div>
+          <div class="actions-row">
+            <button class="btn ghost" id="btn-cancel-paper-picker" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- task / loading 提示 -->
+    <div id="loading-banner" class="loading-banner hidden">
+      <div class="spinner-small"></div><span id="loading-text">处理中…</span>
+    </div>
+
+    <!-- 全局日志区 -->
+    <div id="exam-log" class="exam-log"></div>
+  </div>
+
+  <script nonce="{{nonce}}" src="{{markdownItUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexScriptUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexAutoRenderUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

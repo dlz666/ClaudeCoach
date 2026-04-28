@@ -10,11 +10,13 @@ import {
   CourseTag,
   COURSE_TAG_LABELS,
   COURSE_TAG_PLAYBOOK,
+  ExamPaperAnalysis,
   FeedbackStrengthTag,
   FeedbackWeaknessTag,
   subjectLabel,
 } from '../types';
 import { PromptContextScope } from '../types';
+import type { MultimodalChatMessage } from './client';
 
 function preferencesContext(prefs: LearningPreferences | null): string {
   if (!prefs) { return ''; }
@@ -197,7 +199,7 @@ function strengthTagContext(tags: FeedbackStrengthTag[]): string {
   return tags.length ? tags.join('、') : '';
 }
 
-interface PromptContext {
+export interface PromptContext {
   profile?: StudentProfile | null;
   preferences?: LearningPreferences | null;
   diagnosis?: LatestDiagnosis | null;
@@ -1141,6 +1143,308 @@ export function inlineRewritePrompt(args: {
         '',
         '请直接输出重写后的 markdown，不要解释。',
       ].join('\n'),
+    },
+  ];
+}
+
+// =====================================================================
+// 备考模式（Exam Prep）
+// =====================================================================
+
+/**
+ * 试卷分析：拆出 sections / questions / knowledgeFrequency / toneAndDifficulty。
+ * 输入是 OCR/抽取后的试卷文本，已截断到 ~12000 字。
+ */
+export function examPaperAnalysisPrompt(paperText: string, ctx: PromptContext): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'exercise-gen' };
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你是一位经验丰富的命题分析专家。请分析下面这份真题/模拟卷，输出严格 JSON：
+{
+  "documentType": "past-paper" | "mock-exam" | "practice-set" | "unknown",
+  "sections": [
+    {
+      "title": "一、选择题（每题 5 分）",
+      "questions": [
+        {
+          "number": "1",
+          "type": "choice" | "fill" | "free" | "proof" | "code" | "short" | "unknown",
+          "estimatedDifficulty": 3,
+          "knowledgePoints": ["矩阵秩", "线性方程组解的判定"],
+          "estimatedScore": 5,
+          "rawSnippet": "原文片段，最多 200 字"
+        }
+      ]
+    }
+  ],
+  "knowledgeFrequency": { "矩阵秩": 3, "二次型": 2 },
+  "toneAndDifficulty": "整体难度中偏上，强调矩阵理论的综合运用",
+  "totalEstimatedScore": 100
+}
+
+要求：
+- knowledgePoints 必须是具体可识别的考点名词（中文为主），不要写"线代基础"这种泛泛而谈的标签。
+- 同一道大题包含多个小问时，可以合并为一个 question，但 knowledgePoints 要并集。
+- 题号尽量保留原始格式（"1"、"1.(1)"、"二.5"）。
+- knowledgeFrequency 是对所有 question 的 knowledgePoints 做计数汇总。
+- 如果某道题看不清/被截断，type 用 "unknown"，rawSnippet 留 "[文本不完整]"。
+- 只输出 JSON，不要 markdown 代码围栏，不要解释。`,
+    },
+    {
+      role: 'user',
+      content: `试卷文本（已截断）：\n\n${paperText}`,
+    },
+  ];
+}
+
+/**
+ * 变体题生成：基于真题分析 + 薄弱点，深度变体（不是换皮）。
+ */
+export function examVariantPrompt(args: {
+  paperAnalyses: ExamPaperAnalysis[];
+  weakKnowledgePoints: string[];
+  count: number;
+  focusMode: 'cover-all' | 'reinforce-weakness' | 'mock-full';
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { paperAnalyses, weakKnowledgePoints, count, focusMode, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'exercise-gen' };
+
+  const focusModeDescription: Record<typeof focusMode, string> = {
+    'cover-all': '尽量均匀覆盖所有真题考点，让学生整体过一遍',
+    'reinforce-weakness': '重点强化薄弱考点，70% 题量覆盖薄弱点',
+    'mock-full': '模拟一整套考卷的题型分布与难度梯度',
+  };
+
+  // 抽取真题考点 + 题型分布给 AI
+  const allKnowledge = new Set<string>();
+  const typeBuckets: Record<string, number> = {};
+  const sampleQuestions: Array<{ number: string; type: string; knowledgePoints: string[]; rawSnippet?: string }> = [];
+  for (const analysis of paperAnalyses) {
+    for (const section of analysis.sections) {
+      for (const q of section.questions) {
+        q.knowledgePoints.forEach((kp) => allKnowledge.add(kp));
+        typeBuckets[q.type] = (typeBuckets[q.type] ?? 0) + 1;
+        if (sampleQuestions.length < 12) {
+          sampleQuestions.push({
+            number: q.number,
+            type: q.type,
+            knowledgePoints: q.knowledgePoints,
+            rawSnippet: q.rawSnippet?.slice(0, 200),
+          });
+        }
+      }
+    }
+  }
+
+  const knowledgeList = Array.from(allKnowledge).slice(0, 30);
+  const weakList = weakKnowledgePoints.slice(0, 15);
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你是一位经验丰富的命题人。请基于下面给出的真题考点分布与学生薄弱点，生成 ${count} 道"深度变体题"。
+
+输出严格 JSON 数组：
+[
+  {
+    "number": "1",
+    "type": "choice" | "fill" | "free" | "proof" | "code" | "short",
+    "difficulty": 3,
+    "prompt": "题面（Markdown，含必要的 LaTeX）",
+    "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+    "knowledgePoints": ["考点1", "考点2"],
+    "sourceQuestionRef": "派生自原题 3.(2)（可选）",
+    "variantStrategy": ["angle-shift" | "new-scenario" | "combine-points" | "reverse"],
+    "estimatedScore": 5
+  }
+]
+
+== 深度变体的硬性约束（这是你与"换皮题"的根本区别） ==
+不要保留原题的：题面表述、具体数字、变量名、场景设定。
+必须保留原题的：考点、题型、目标难度。
+每道变体题必须做到至少 2 项：
+  - 改变考点的呈现角度（例："求行列式" → "判断矩阵可逆性"）
+  - 引入新场景（数学题加应用背景；代码题换语言/API；理论题换被推证的对象）
+  - 组合 2 个以上考点（让题目同时覆盖多个 knowledgePoints）
+  - 反向出题（给结论求条件；给结果反推过程）
+
+== 出题模式 ==
+focusMode = ${focusMode}：${focusModeDescription[focusMode]}
+
+== 输出规则 ==
+- 题号 number 从 "1" 开始顺序编号。
+- choice 类型必须给 options（4 选项），其他类型 options 留空数组或省略。
+- variantStrategy 至少 2 个标签。
+- prompt 必须是完整可独立作答的题面，不要写"参考原题"。
+- 题面 Markdown 中数学公式严格用 $...$（行内）和 $$...$$（独立式）。
+- 如果使用代码题，给出明确的输入输出格式或 starter code。
+- 只输出 JSON 数组，不要 markdown 代码围栏，不要解释。
+
+== 真题考点分布 ==
+全卷考点（去重）：${knowledgeList.join('、') || '（无）'}
+题型分布：${Object.entries(typeBuckets).map(([k, v]) => `${k}=${v}`).join(', ') || '（无）'}
+
+== 学生薄弱考点（按重要性递减） ==
+${weakList.length ? weakList.join('、') : '（暂无明显薄弱点，按 focusMode 分布即可）'}`,
+    },
+    {
+      role: 'user',
+      content: `请生成 ${count} 道深度变体题。
+
+参考真题题样（用于学习考点风格，不要照抄题面）：
+${sampleQuestions.length
+        ? sampleQuestions.map((q) => `- 题号 ${q.number} | 题型 ${q.type} | 考点 [${q.knowledgePoints.join(', ')}]${q.rawSnippet ? `\n  原文片段：${q.rawSnippet}` : ''}`).join('\n')
+        : '（无可参考题样）'}
+
+请输出 JSON 数组。`,
+    },
+  ];
+}
+
+/**
+ * Vision 批改：图像 + 题面 JSON → 学生答案 OCR + 评分 + 反馈。
+ * 调用方应往 user 消息里塞 images。
+ */
+export function examVisionGradingPrompt(args: {
+  questionsJson: string;
+  ctx: PromptContext;
+}): MultimodalChatMessage[] {
+  const { questionsJson, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'grade' };
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你将看到学生的手写答题截图（可能多张）。请：
+1. OCR 提取每道题学生写的答案（中文/数学符号/代码 OCR）。
+2. 对照下面给出的题面 JSON，给每题打分。
+3. 输出严格 JSON：
+{
+  "perQuestion": [
+    {
+      "questionNumber": "1",
+      "studentAnswerOcr": "OCR 出来的学生答案；不清楚时填 [未识别]",
+      "correct": true | false | "partial",
+      "score": 8,
+      "maxScore": 10,
+      "feedback": "1-3 句中文简明反馈",
+      "knowledgePoints": ["矩阵秩"],
+      "weaknessTags": ["concept" | "syntax" | "logic" | "edge-case" | "complexity" | "debugging" | "other"]
+    }
+  ],
+  "overall": {
+    "totalScore": 70,
+    "maxScore": 100,
+    "percentage": 70,
+    "strengths": ["计算准确"],
+    "weaknesses": ["证明步骤不严谨"],
+    "nextSteps": ["复习二次型正定性判定", "练 3 道反向出题"]
+  }
+}
+
+要求：
+- weaknessTags 只能从 concept / syntax / logic / edge-case / complexity / debugging / other 中选；如无则空数组。
+- OCR 不清楚时填 "[未识别]" 但仍尝试根据上下文给出判断；correct 用 false。
+- 每题反馈以"鼓励但精确"为原则，1-3 句中文，避免空话套话。
+- overall.weaknesses 按"由弱→强"排序，让学生先看到最重要的。
+- nextSteps 给出 2-4 条可执行建议（"复习 X 章"、"再做 N 道 Y 类题"）。
+- 只输出 JSON，不要 markdown 代码围栏，不要解释，不要任何前缀。`,
+    },
+    {
+      role: 'user',
+      content: `题面 JSON：\n${questionsJson}\n\n请对照下面的图片打分。`,
+    },
+  ];
+}
+
+/**
+ * 文字 fallback 批改：vision 不可用时让用户手动输入答案。
+ */
+export function examTextGradingPrompt(args: {
+  questionsJson: string;
+  studentAnswers: Array<{ questionNumber: string; answer: string }>;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { questionsJson, studentAnswers, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'grade' };
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n请对照题面 JSON 给学生答案打分，输出严格 JSON：
+{
+  "perQuestion": [
+    {
+      "questionNumber": "1",
+      "studentAnswerOcr": "原样回写学生输入",
+      "correct": true | false | "partial",
+      "score": 8,
+      "maxScore": 10,
+      "feedback": "1-3 句中文简明反馈",
+      "knowledgePoints": ["矩阵秩"],
+      "weaknessTags": ["concept" | "syntax" | "logic" | "edge-case" | "complexity" | "debugging" | "other"]
+    }
+  ],
+  "overall": {
+    "totalScore": 70,
+    "maxScore": 100,
+    "percentage": 70,
+    "strengths": ["计算准确"],
+    "weaknesses": ["证明步骤不严谨"],
+    "nextSteps": ["复习二次型正定性判定"]
+  }
+}
+
+要求：
+- weaknessTags 只能从 concept / syntax / logic / edge-case / complexity / debugging / other 中选。
+- 学生未作答的题 score=0、correct=false、studentAnswerOcr="[未作答]"。
+- 反馈以"鼓励但精确"为原则，1-3 句。
+- overall.weaknesses 按由弱→强排序。
+- 只输出 JSON，不要 markdown 代码围栏，不要解释。`,
+    },
+    {
+      role: 'user',
+      content: `题面 JSON：\n${questionsJson}\n\n学生答案：\n${JSON.stringify(studentAnswers, null, 2)}`,
+    },
+  ];
+}
+
+/**
+ * 就绪度的 AI 部分：根据弱点 + 距考天数 + 最近成绩，生成 3-5 条考前 checklist。
+ */
+export function examReadinessAnalysisPrompt(args: {
+  weakSpots: string[];
+  daysToExam?: number;
+  latestPercentage?: number;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { weakSpots, daysToExam, latestPercentage, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'diagnosis' };
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你正在为学生生成"考前行动清单"。请输出严格 JSON：
+{
+  "preExamChecklist": [
+    "考前 7 天：用 30 分钟过一遍二次型 4 类典型题",
+    "考前 3 天：完成 1 套整卷限时模考"
+  ]
+}
+
+要求：
+- 数组长度 3 到 5。
+- 每条以"什么时候 + 做什么 + 多久"的可执行格式给出（中文）。
+- 优先针对弱点；如果没弱点，优先针对距考天数的节奏（远=广覆盖；近=专项 + 整卷）。
+- 不要写"加油 / 多做题"这种空话。
+- 只输出 JSON，不要 markdown 代码围栏，不要解释。`,
+    },
+    {
+      role: 'user',
+      content: `当前弱点（按重要性递减）：${weakSpots.length ? weakSpots.join('、') : '（暂无明显弱点）'}
+距考天数：${typeof daysToExam === 'number' ? `${daysToExam} 天` : '未设定'}
+最近模考成绩：${typeof latestPercentage === 'number' ? `${latestPercentage}%` : '未做过模考'}
+
+请生成 preExamChecklist。`,
     },
   ];
 }

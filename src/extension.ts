@@ -17,7 +17,13 @@ import { SuggestionStore } from './coach/suggestionStore';
 import { SessionLogger } from './coach/sessionLogger';
 import { LearningPlanStore } from './coach/learningPlanStore';
 import { CourseManager } from './courses/courseManager';
+import { MaterialManager } from './materials/materialManager';
 import { getStoragePathResolver } from './storage/pathResolver';
+import { ExamPrepStore } from './exam/examPrepStore';
+import { ExamAnalyzer } from './exam/examAnalyzer';
+import { ExamVariantGenerator } from './exam/examVariantGenerator';
+import { ExamGrader } from './exam/examGrader';
+import { ExamWebviewProvider } from './coach/examWebviewProvider';
 
 async function revealAIConfigCard(sidebarProvider: SidebarProvider): Promise<void> {
   await vscode.commands.executeCommand('workbench.view.extension.claude-coach');
@@ -39,6 +45,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const adaptiveEngine = new AdaptiveEngine();
   const courseProfileStore = new CourseProfileStore();
   const courseManager = new CourseManager();
+  const materialManager = new MaterialManager();
 
   // ===== Coach 框架 =====
   const paths = getStoragePathResolver();
@@ -47,6 +54,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const suggestionStore = new SuggestionStore(paths);
   const sessionLogger = new SessionLogger(paths, coachEventBus);
   const learningPlanStore = new LearningPlanStore(paths);
+
+  // ===== 备考模式（Exam Prep） =====
+  const examPrepStore = new ExamPrepStore(paths);
+  const examAnalyzer = new ExamAnalyzer(ai, materialManager);
+  const examVariantGenerator = new ExamVariantGenerator(ai);
+  const examGrader = new ExamGrader(ai);
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusBar);
@@ -61,6 +74,12 @@ export async function activate(context: vscode.ExtensionContext) {
       suggestionStore,
       sessionLogger,
       learningPlanStore,
+    },
+    {
+      examPrepStore,
+      examAnalyzer,
+      examVariantGenerator,
+      examGrader,
     },
   );
 
@@ -110,6 +129,21 @@ export async function activate(context: vscode.ExtensionContext) {
     progressStore,
     adaptiveEngine,
     courseProfileStore,
+  });
+
+  // ===== 备考工作台 webview provider（注册 openExamWorkbench / openExamVariantsPreview 命令） =====
+  ExamWebviewProvider.register(context, context.extensionUri, {
+    ai,
+    preferencesStore,
+    progressStore,
+    adaptiveEngine,
+    courseProfileStore,
+    courseManager,
+    materialManager,
+    examPrepStore,
+    examAnalyzer,
+    examVariantGenerator,
+    examGrader,
   });
 
   // ===== Inline 编辑命令（Alt+I / 右键 / CodeLens） =====
