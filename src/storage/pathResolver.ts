@@ -257,6 +257,43 @@ export class StoragePathResolver {
     return path.join(this.courseSubjectDir(subject), 'sr-queue.json');
   }
 
+  // ===== 备考模式路径 =====
+
+  /** Per-subject 备考会话根目录。 */
+  examPrepSubjectDir(subject: Subject): string {
+    return path.join(this.courseSubjectDir(subject), 'exam-prep');
+  }
+
+  examSessionDir(subject: Subject, sessionId: string): string {
+    return path.join(this.examPrepSubjectDir(subject), sessionId);
+  }
+
+  /** 单个备考会话的元数据（含 paperAnalyses / variantSets / submissions 引用）。 */
+  examSessionMetaPath(subject: Subject, sessionId: string): string {
+    return path.join(this.examSessionDir(subject, sessionId), 'session.json');
+  }
+
+  examSessionVariantSetPath(subject: Subject, sessionId: string, variantSetId: string): string {
+    return path.join(this.examSessionDir(subject, sessionId), 'variants', `${variantSetId}.json`);
+  }
+
+  examSessionSubmissionDir(subject: Subject, sessionId: string, submissionId: string): string {
+    return path.join(this.examSessionDir(subject, sessionId), 'submissions', submissionId);
+  }
+
+  examSessionSubmissionPath(subject: Subject, sessionId: string, submissionId: string): string {
+    return path.join(this.examSessionSubmissionDir(subject, sessionId, submissionId), 'submission.json');
+  }
+
+  examSessionSubmissionImagePath(subject: Subject, sessionId: string, submissionId: string, fileName: string): string {
+    return path.join(this.examSessionSubmissionDir(subject, sessionId, submissionId), fileName);
+  }
+
+  /** 全局备考会话索引（让 listExamSessions 不用扫所有 subject 目录）。 */
+  get examSessionsIndexPath(): string {
+    return path.join(this.appDir, 'exam-sessions-index.json');
+  }
+
   /** Coach 全局目录：plans / sessions / suggestions / activity / brief cache。 */
   get coachDir(): string {
     return path.join(this.appDir, 'coach');

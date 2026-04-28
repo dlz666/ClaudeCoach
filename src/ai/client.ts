@@ -9,6 +9,46 @@ const REQUEST_TIMEOUT_MS = 180000;
 type ResponsesInputRole = 'user' | 'assistant';
 type ResponsesContentType = 'input_text' | 'output_text';
 
+/** 多模态消息：在普通 ChatMessage 基础上可附带图片。 */
+export interface MultimodalContent {
+  /** base64 编码的图片二进制（不含 data:image/... 前缀）。 */
+  base64: string;
+  /** image/png / image/jpeg 等。 */
+  mimeType: string;
+}
+
+export interface MultimodalChatMessage extends ChatMessage {
+  images?: MultimodalContent[];
+}
+
+/** 当前使用的 model 是否支持视觉？用于在调多模态前给前端友好报错。 */
+export class VisionUnsupportedError extends Error {
+  readonly modelName: string;
+  readonly suggestedModels: string[];
+  constructor(modelName: string, suggestedModels: string[]) {
+    super(`当前 AI Profile 的模型 "${modelName}" 不支持图片输入。建议切换到：${suggestedModels.join(' / ')}`);
+    this.name = 'VisionUnsupportedError';
+    this.modelName = modelName;
+    this.suggestedModels = suggestedModels;
+  }
+}
+
+const VISION_OPENAI_MODELS = [
+  'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4-vision', 'gpt-4.1', 'gpt-4.1-mini', 'o1', 'o3', 'o4-mini',
+];
+const VISION_ANTHROPIC_MODELS = [
+  'claude-3', 'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3.7-sonnet', 'claude-4', 'claude-opus', 'claude-sonnet',
+];
+
+function isVisionCapable(provider: string, model: string): boolean {
+  const m = model.toLowerCase();
+  if (provider === 'anthropic') {
+    return VISION_ANTHROPIC_MODELS.some((prefix) => m.startsWith(prefix));
+  }
+  // OpenAI 兼容：含上面任一前缀视为支持
+  return VISION_OPENAI_MODELS.some((prefix) => m.startsWith(prefix));
+}
+
 export class AIClient {
   private config?: AIConfig;
 
@@ -31,6 +71,165 @@ export class AIClient {
     }
 
     return this.openaiChat(config, messages, options);
+  }
+
+  /**
+   * 多模态 chat：在 user 消息里夹带图片。
+   * 当前 model 不支持 vision 时抛 VisionUnsupportedError，调用方可捕获并提示用户切 profile。
+   */
+  async chatCompletionMultimodal(
+    messages: MultimodalChatMessage[],
+    options?: { temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const config = await this.getConfig();
+    if (!config.apiToken) {
+      throw new Error('未配置 API Token，请先在设置中完善 AI 配置。');
+    }
+
+    if (!isVisionCapable(config.provider, config.model)) {
+      throw new VisionUnsupportedError(
+        config.model,
+        config.provider === 'anthropic'
+          ? ['claude-3.5-sonnet', 'claude-3.7-sonnet']
+          : ['gpt-4o', 'gpt-4.1', 'gpt-4o-mini'],
+      );
+    }
+
+    if (config.provider === 'anthropic') {
+      return this.anthropicChatMultimodal(config, messages, options);
+    }
+    // OpenAI 多模态用标准 chat/completions（responses API 也支持但走 chat 更普适）
+    return this.openaiChatMultimodal(config, messages, options);
+  }
+
+  private async openaiChatMultimodal(
+    config: ResolvedAIConfig | AIConfig,
+    messages: MultimodalChatMessage[],
+    options?: { temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+    const apiMessages = messages.map((message) => {
+      // 没有图片时退化为简单字符串 content（兼容性最好）
+      if (!message.images || message.images.length === 0) {
+        return { role: message.role, content: message.content };
+      }
+      // 含图片时用 OpenAI vision 数组格式
+      const parts: Array<Record<string, unknown>> = [];
+      if (message.content && message.content.trim()) {
+        parts.push({ type: 'text', text: message.content });
+      }
+      for (const img of message.images) {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+        });
+      }
+      return { role: message.role, content: parts };
+    });
+
+    const body = {
+      model: config.model,
+      messages: apiMessages,
+      temperature: options?.temperature ?? 0.3,
+      max_tokens: options?.maxTokens ?? config.maxTokens ?? 4096,
+    };
+
+    const resp = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        Authorization: `Bearer ${config.apiToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      throw await this.buildApiError(resp, config.baseUrl);
+    }
+    const json = await resp.json() as { choices?: { message?: { content?: string } }[] };
+    const content = json.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error('多模态 API 返回了空内容。');
+    }
+    return content;
+  }
+
+  private async anthropicChatMultimodal(
+    config: ResolvedAIConfig | AIConfig,
+    messages: MultimodalChatMessage[],
+    options?: { temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const url = `${config.anthropicBaseUrl.replace(/\/+$/, '')}/v1/messages`;
+
+    const systemPrompt = messages
+      .filter((m) => m.role === 'system' && m.content?.trim())
+      .map((m) => m.content.trim())
+      .join('\n\n')
+      .trim();
+    const conversation = messages.filter((m) => m.role !== 'system');
+
+    const apiMessages = conversation.map((message) => {
+      const role = message.role === 'assistant' ? 'assistant' : 'user';
+      if (!message.images || message.images.length === 0) {
+        return { role, content: message.content };
+      }
+      const blocks: Array<Record<string, unknown>> = [];
+      if (message.content && message.content.trim()) {
+        blocks.push({ type: 'text', text: message.content });
+      }
+      for (const img of message.images) {
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+        });
+      }
+      return { role, content: blocks };
+    });
+
+    const body: Record<string, unknown> = {
+      model: config.model,
+      messages: apiMessages,
+      temperature: options?.temperature ?? 0.3,
+      max_tokens: options?.maxTokens ?? config.maxTokens ?? 4096,
+    };
+    if (systemPrompt) body.system = systemPrompt;
+
+    const resp = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-api-key': config.apiToken,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      throw await this.buildApiError(resp, config.anthropicBaseUrl);
+    }
+    const json = await resp.json() as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const textBlock = json.content?.find((b) => b.type === 'text');
+    if (textBlock?.text) return textBlock.text;
+    throw new Error(`多模态 API 返回了空内容：${JSON.stringify(json).slice(0, 200)}`);
+  }
+
+  /** JSON 形式的多模态调用（vision 直接返回结构化结果）。 */
+  async chatJsonMultimodal<T>(
+    messages: MultimodalChatMessage[],
+    options?: { temperature?: number; maxTokens?: number },
+  ): Promise<T> {
+    const raw = await this.chatCompletionMultimodal(messages, {
+      ...options,
+      temperature: options?.temperature ?? 0.2,
+    });
+    const parsed = this.tryParseJsonText<T>(raw);
+    if (parsed !== undefined) return parsed;
+    throw new Error(`多模态返回内容不是合法 JSON。开头：${raw.slice(0, 120)}`);
   }
 
   async chatJson<T>(messages: ChatMessage[], options?: { temperature?: number; maxTokens?: number }): Promise<T> {

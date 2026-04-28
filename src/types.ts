@@ -898,6 +898,139 @@ export interface OutlineRebuildPreviewResult {
   instruction?: string;
 }
 
+// ===== 备考模式（Exam Prep Mode） =====
+
+/** 一道真题里的单个题目（试卷分析 AI 拆出来）。 */
+export interface ExamPaperQuestion {
+  number: string;                // "1" / "1.(1)" / "二.5"
+  type: 'choice' | 'fill' | 'free' | 'proof' | 'code' | 'short' | 'unknown';
+  estimatedDifficulty: number;   // 1-5
+  knowledgePoints: string[];
+  estimatedScore?: number;       // 估算分值
+  rawSnippet?: string;           // 原文片段（截断）
+}
+
+export interface ExamPaperSection {
+  title: string;
+  questions: ExamPaperQuestion[];
+}
+
+/** AI 对一份真题的结构化分析结果。 */
+export interface ExamPaperAnalysis {
+  schemaVersion: number;
+  paperId: string;               // 来源 materialId
+  paperFileName: string;
+  parsedAt: string;
+  documentType: 'past-paper' | 'mock-exam' | 'practice-set' | 'unknown';
+  sections: ExamPaperSection[];
+  knowledgeFrequency: Record<string, number>;  // 考点 → 在本卷出现次数
+  toneAndDifficulty: string;     // 整体风格 + 难度描述（短）
+  totalEstimatedScore?: number;
+}
+
+/** AI 生成的"变体题"（基于真题的深度变体，不是换皮）。 */
+export interface ExamVariantQuestion {
+  id: string;                    // 'vq-1' / 'vq-2' ...
+  number: string;                // 显示用题号
+  type: 'choice' | 'fill' | 'free' | 'proof' | 'code' | 'short';
+  difficulty: number;            // 1-5
+  prompt: string;                // 题面（Markdown）
+  options?: string[];            // 选择题选项（A/B/C/D）
+  knowledgePoints: string[];     // 这道题考的点
+  sourceQuestionRef?: string;    // 哪道原题派生的（题号引用）
+  variantStrategy: string[];     // 'angle-shift' | 'new-scenario' | 'combine-points' | 'reverse'
+  estimatedScore?: number;
+}
+
+export interface ExamVariantSet {
+  id: string;                    // 'vset-<timestamp>'
+  sessionId: string;
+  generatedAt: string;
+  focusMode: 'cover-all' | 'reinforce-weakness' | 'mock-full';
+  count: number;
+  questions: ExamVariantQuestion[];
+  sourcePaperIds: string[];
+  /** 用户导出的 PDF 路径（如果导过）。 */
+  exportedPdfPath?: string;
+}
+
+/** 用户上传的截图答题（多张图属于同一次提交）。 */
+export interface ExamSubmission {
+  id: string;                    // 'sub-<timestamp>'
+  sessionId: string;
+  variantSetId?: string;         // 哪一套题（可空：直接答真题也允许）
+  uploadedAt: string;
+  imagePaths: string[];          // 落盘后绝对路径
+  /** vision 不可用时用户改用文字答题（Q-D2 fallback）。 */
+  textAnswers?: Array<{ questionNumber: string; answer: string }>;
+  gradingResult?: ExamGradingResult;
+}
+
+export interface ExamGradedQuestion {
+  questionNumber: string;
+  studentAnswerOcr: string;      // OCR 出来的学生答案（或 textAnswers 里的）
+  correct: boolean | 'partial';
+  score: number;
+  maxScore: number;
+  feedback: string;              // 简明反馈，1-3 句
+  knowledgePoints: string[];     // 本题考的点
+  weaknessTags?: FeedbackWeaknessTag[];
+}
+
+export interface ExamGradingResult {
+  schemaVersion: number;
+  perQuestion: ExamGradedQuestion[];
+  overall: {
+    totalScore: number;
+    maxScore: number;
+    percentage: number;          // 0-100
+    strengths: string[];
+    weaknesses: string[];        // 由弱→强排序的考点描述
+    nextSteps: string[];
+  };
+  gradedAt: string;
+  gradingMode: 'vision' | 'text-fallback';
+}
+
+/** 备考模式综合"就绪度"分析结果。 */
+export interface ExamReadinessSnapshot {
+  schemaVersion: number;
+  sessionId: string;
+  computedAt: string;
+  readyScore: number;            // 0-100
+  components: {
+    examScoreComponent: number;        // 0-40：最近模考表现
+    wrongQuestionComponent: number;    // 0-30：错题剩余比例
+    coverageComponent: number;         // 0-20：知识点覆盖
+    planAdherenceComponent: number;    // 0-10：计划进度
+  };
+  knowledgeStatus: Array<{
+    point: string;
+    status: 'mastered' | 'wobbly' | 'untouched';
+    evidence: string;            // 简短证据描述
+  }>;
+  weakSpots: string[];           // 待巩固考点（有序）
+  preExamChecklist: string[];    // "考前 N 天建议清单"，3-5 条
+  daysToExam?: number;           // 距考天数（如果 session 设了 examDate）
+}
+
+/** 一次完整的备考会话——把所有上述对象串起来。 */
+export interface ExamPrepSession {
+  schemaVersion: number;
+  id: string;                    // 'exam-<timestamp>'
+  subject: Subject;
+  name: string;                  // 用户填的会话名："线代期末-12月"
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+  examDate?: string;             // ISO，可选
+  sourcePaperIds: string[];      // 关联的真题 materialId
+  paperAnalyses: ExamPaperAnalysis[];
+  variantSets: ExamVariantSet[];
+  submissions: ExamSubmission[];
+  latestReadiness?: ExamReadinessSnapshot;
+}
+
 // ===== Token Budget =====
 export interface TokenBudget {
   modelContextWindow: number;
@@ -928,6 +1061,10 @@ export interface WrongQuestion {
   lastAttemptedAt: string;
   resolved: boolean;
   resolvedAt?: string;
+  /** 错题来源：日常练习 vs 备考模式提交。决定它在错题本面板里如何归类。 */
+  source?: 'lesson' | 'exam-session';
+  /** 备考来源时填 sessionId，方便回溯。 */
+  examSessionId?: string;
 }
 
 export interface WrongQuestionBook {
@@ -1054,7 +1191,20 @@ export type SidebarCommand =
   | { type: 'updateLearningPlanMilestones'; subject: Subject; milestones: PlanMilestone[] }
   | { type: 'metacogAnswer'; subject: Subject; topicId: string; lessonId: string; question: string; answer: string }
   | { type: 'getCoachSuggestions' }
-  | { type: 'getActivityLog' };
+  | { type: 'getActivityLog' }
+  // ===== 备考模式（Exam Prep） =====
+  | { type: 'createExamSession'; subject: Subject; name: string; examDate?: string; sourcePaperIds: string[] }
+  | { type: 'listExamSessions'; subject?: Subject }
+  | { type: 'getExamSession'; sessionId: string }
+  | { type: 'archiveExamSession'; sessionId: string }
+  | { type: 'analyzeExamPaper'; sessionId: string; paperId: string }
+  | { type: 'generateExamVariants'; sessionId: string; count: number; focusMode?: 'cover-all' | 'reinforce-weakness' | 'mock-full' }
+  | { type: 'exportExamVariantsPdf'; sessionId: string; variantSetId: string }
+  | { type: 'uploadExamSubmissionImages'; sessionId: string; variantSetId?: string; images: Array<{ name: string; mimeType: string; base64: string }> }
+  | { type: 'gradeExamSubmission'; sessionId: string; submissionId: string }
+  | { type: 'submitExamTextAnswers'; sessionId: string; variantSetId?: string; answers: Array<{ questionNumber: string; answer: string }> }
+  | { type: 'recomputeExamReadiness'; sessionId: string }
+  | { type: 'openExamWorkbench'; sessionId: string };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
@@ -1088,6 +1238,15 @@ export type SidebarResponse =
   | { type: 'aiProfilesList'; data: AIProfile[]; activeProfileId: string }
   // ===== 数据管理响应 =====
   | { type: 'dataOpResult'; operation: string; ok: boolean; message?: string }
+  // ===== 备考模式响应 =====
+  | { type: 'examSessionsList'; subject?: Subject; data: ExamPrepSession[] }
+  | { type: 'examSession'; data: ExamPrepSession }
+  | { type: 'examPaperAnalyzed'; sessionId: string; analysis: ExamPaperAnalysis }
+  | { type: 'examVariantsGenerated'; sessionId: string; variantSet: ExamVariantSet }
+  | { type: 'examSubmissionUploaded'; sessionId: string; submission: ExamSubmission }
+  | { type: 'examSubmissionGraded'; sessionId: string; submission: ExamSubmission }
+  | { type: 'examReadinessUpdated'; sessionId: string; snapshot: ExamReadinessSnapshot }
+  | { type: 'examVisionUnsupported'; modelName?: string; suggestedModels: string[] }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };
