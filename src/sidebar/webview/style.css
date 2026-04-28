@@ -1508,15 +1508,66 @@ textarea:focus,
   display: flex;
   flex-wrap: wrap;
   gap: 10px 14px;
+  align-items: center;
 }
 
+/*
+ * 短标签控件（checkbox / radio）必须保持横向单行：
+ * - 整个 .inline-check 作为不可压缩 flex item（flex: 0 0 auto + width: max-content）
+ * - 不限定 max-width，因为用户面板宽度不可预测，宁可整体换行也不要在标签内部断字
+ * - 父 .check-row flex-wrap: wrap 决定整行级换行
+ * - keep-all 同时确保中文不会逐字断行
+ *
+ * !important 在 inline-flex/nowrap 上必须加，防止上层 flex container（.setting-row 是 column flex）
+ * 在某些浏览器里把 anonymous text node 提升后被父规则覆盖。
+ */
 .inline-check {
-  display: inline-flex;
+  display: inline-flex !important;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap !important;
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  flex: 0 0 auto !important;
+  width: max-content;
+  max-width: 100%;
+  line-height: 1.6;
+}
+
+.inline-check input[type="checkbox"],
+.inline-check input[type="radio"] {
+  flex: 0 0 auto;
+  margin: 0;
+  width: 14px;
+  height: 14px;
+}
+
+/* label 的直接 text node 也强制 nowrap（通过 flex item baseline）*/
+.inline-check > * {
+  white-space: nowrap !important;
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  flex: 0 0 auto;
+}
+
+/* 通用：所有 radio / checkbox 紧跟的兄弟元素也 nowrap */
+input[type="checkbox"] + *,
+input[type="radio"] + * {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+/* check-row / radio-row / checkbox-row：横向 flex-wrap 整行换，gap 留呼吸 */
+.check-row,
+.radio-row,
+.checkbox-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
 }
 
 .slider-row {
