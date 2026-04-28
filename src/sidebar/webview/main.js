@@ -2552,6 +2552,23 @@
     addLog('学习偏好已提交保存。', 'info');
   });
 
+  // ===== 设置页折叠状态持久化 + Accordion 互斥（同时只能开一个） =====
+  // 标志位提前声明，防搜索 listener TDZ
+  let _accordionMutating = false;
+
+  // 启动时：保留上次记忆，但若有多组同时为 open，仅保留第一个
+  let _accordionFirstOpenSeen = false;
+  els.settingsGroups?.forEach((group) => {
+    const groupId = group.id || group.getAttribute('data-group') || '';
+    if (!groupId) return;
+    if (state.settingsCollapsedGroups[groupId] === false && !_accordionFirstOpenSeen) {
+      group.setAttribute('open', '');
+      _accordionFirstOpenSeen = true;
+    } else {
+      group.removeAttribute('open');
+    }
+  });
+
   // ===== 设置页搜索 =====
   els.settingsSearch?.addEventListener('input', () => {
     const q = (els.settingsSearch.value || '').trim().toLowerCase();
@@ -2562,21 +2579,44 @@
       row.classList.toggle('hl', !!q && match);
     });
     if (q) {
-      document.querySelectorAll('.settings-group').forEach((g) => g.setAttribute('open', ''));
+      // 搜索时绕过 accordion 互斥，全部展开方便扫
+      _accordionMutating = true;
+      try {
+        document.querySelectorAll('.settings-group').forEach((g) => g.setAttribute('open', ''));
+      } finally {
+        _accordionMutating = false;
+      }
     }
   });
-
-  // ===== 设置页折叠状态持久化 =====
   els.settingsGroups?.forEach((group) => {
     const groupId = group.id || group.getAttribute('data-group') || '';
     if (!groupId) return;
-    if (state.settingsCollapsedGroups[groupId] === true) {
-      group.removeAttribute('open');
-    } else if (state.settingsCollapsedGroups[groupId] === false) {
-      group.setAttribute('open', '');
-    }
+
     group.addEventListener('toggle', () => {
-      state.settingsCollapsedGroups[groupId] = !group.open;
+      if (_accordionMutating) return;
+      // 用户刚把这一组打开 → 关闭其他所有
+      if (group.open) {
+        _accordionMutating = true;
+        try {
+          els.settingsGroups.forEach((other) => {
+            if (other !== group && other.open) other.removeAttribute('open');
+          });
+        } finally {
+          _accordionMutating = false;
+        }
+        // 持久化：只记当前打开的那一组
+        const newState = {};
+        els.settingsGroups.forEach((g) => {
+          const id = g.id || g.getAttribute('data-group') || '';
+          if (!id) return;
+          newState[id] = !g.open; // collapsed = !open
+        });
+        state.settingsCollapsedGroups = newState;
+      } else {
+        // 用户主动关掉 → 全部 collapsed
+        const id = group.id || group.getAttribute('data-group') || '';
+        if (id) state.settingsCollapsedGroups[id] = true;
+      }
       persist();
     });
   });
