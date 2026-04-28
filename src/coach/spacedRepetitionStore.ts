@@ -79,14 +79,23 @@ export class SpacedRepetitionStore {
     });
   }
 
-  /** 把一道错题加入队列。如果已存在同 sourceWrongQuestionId 则跳过。 */
-  async add(subject: Subject, wq: WrongQuestion): Promise<SpacedRepetitionItem | null> {
+  /** 把一道错题加入队列。如果已存在同 sourceWrongQuestionId 则跳过。
+   * @param options.initialIntervalDays 课程教学法 tag 决定的初始间隔（语言类 1，技能类 2 等）
+   */
+  async add(
+    subject: Subject,
+    wq: WrongQuestion,
+    options?: { initialIntervalDays?: number },
+  ): Promise<SpacedRepetitionItem | null> {
     const queue = await this.getQueue(subject);
     const existing = queue.items.find((it) => it.sourceWrongQuestionId === wq.id);
     if (existing) {
       return null;
     }
     const now = Date.now();
+    const interval = Number.isFinite(options?.initialIntervalDays) && (options!.initialIntervalDays as number) > 0
+      ? (options!.initialIntervalDays as number)
+      : INITIAL_INTERVAL_DAYS;
     const item: SpacedRepetitionItem = {
       id: newItemId(),
       sourceWrongQuestionId: wq.id,
@@ -95,8 +104,8 @@ export class SpacedRepetitionStore {
       lessonId: wq.lessonId,
       repetitionCount: 0,
       easeFactor: INITIAL_EASE,
-      intervalDays: INITIAL_INTERVAL_DAYS,
-      nextDueAt: new Date(now + INITIAL_INTERVAL_DAYS * DAY_MS).toISOString(),
+      intervalDays: interval,
+      nextDueAt: new Date(now + interval * DAY_MS).toISOString(),
       lastReviewedAt: null,
       lastQuality: undefined,
     };

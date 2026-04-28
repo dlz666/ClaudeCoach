@@ -60,6 +60,207 @@ export interface ChatMessage {
 // ===== Subjects =====
 export type Subject = string;
 
+// ===== 课程教学法分类 =====
+
+/**
+ * 课程标签：标识一门课的"教学法类型"。
+ * 一门课可同时挂多个 tag（如算法课同时是 cs-theory + math-foundation）。
+ * v1 落地的 tag：cs-skill / cs-theory / math-foundation / language / exam-prep。
+ * 其他 5 个先留 stub，UI 可选但 prompt 暂不细化。
+ */
+export type CourseTag =
+  | 'cs-skill'
+  | 'cs-theory'
+  | 'math-foundation'
+  | 'math-advanced'
+  | 'physics'
+  | 'engineering'
+  | 'language'
+  | 'exam-prep'
+  | 'humanities'
+  | 'research';
+
+export const COURSE_TAG_LABELS: Record<CourseTag, string> = {
+  'cs-skill': '计算机技能',
+  'cs-theory': '计算机系统课',
+  'math-foundation': '数学基础',
+  'math-advanced': '数学进阶',
+  'physics': '物理',
+  'engineering': '工程方法',
+  'language': '语言学习',
+  'exam-prep': '考试备考',
+  'humanities': '人文社科',
+  'research': '研究/论文',
+};
+
+export const COURSE_TAG_DESCRIPTIONS: Record<CourseTag, string> = {
+  'cs-skill': '编程语言、框架、工具（如 React、Python、SQL、Git）',
+  'cs-theory': '算法、操作系统、数据库、网络等系统课',
+  'math-foundation': '微积分、线性代数、概率论、离散数学',
+  'math-advanced': '实分析、抽象代数、拓扑、泛函',
+  'physics': '力学、电磁、量子、热统',
+  'engineering': '系统设计、架构、设计模式、产品思维',
+  'language': '英语、二外，重在词汇/语法/听说读写',
+  'exam-prep': '考研、托福、CFA、AP 等有固定题型的备考',
+  'humanities': '哲学、历史、心理学、社会学',
+  'research': '论文阅读、ML 理论、密码学进阶',
+};
+
+/** 单个 tag 的"教学范式"，会注入 prompt + 影响出题/简报/SR。 */
+export interface CourseTagPlaybook {
+  label: string;
+  /** 讲义结构骨架，写到 lesson-gen prompt 末尾。 */
+  lessonStructure: string;
+  /** 默认练习题型分布 hint，覆盖全局 aiStyle.exerciseTypeMix。 */
+  defaultExerciseMix?: { multipleChoice: number; freeResponse: number; code: number };
+  /** 出题时给 AI 的额外指令。 */
+  exerciseHint: string;
+  /** 批改风格 hint。 */
+  feedbackHint: string;
+  /** 每日简报话术模板。 */
+  briefStyleHint: string;
+  /** 资料检索倾向 hint（让 AI 在 grounding 时优先什么）。 */
+  retrievalHint: string;
+  /** SR 第一次复习的间隔天数；默认 1。语言类缩短为 1 但后续节奏更密。 */
+  srInitialInterval?: number;
+  /** SR 间隔序列（覆盖默认 SM-2）。语言类用更密的 1/2/4/8/16。 */
+  srIntervalSequence?: number[];
+}
+
+export const COURSE_TAG_PLAYBOOK: Record<CourseTag, CourseTagPlaybook> = {
+  'cs-skill': {
+    label: '计算机技能',
+    lessonStructure:
+      '讲义结构：① 关键概念（≤3 句） → ② 一段可运行的最小代码示例（含必要注释）→ ③ 常见踩坑/反例 → ④ 进阶变体或链接到官方文档',
+    defaultExerciseMix: { multipleChoice: 5, freeResponse: 15, code: 80 },
+    exerciseHint:
+      '出题以"动手编码"为主：给真实场景，要求写代码或调试代码。少出纯概念选择题。如果用户语言偏好允许，提供 starter code 和测试用例。',
+    feedbackHint:
+      '批改时重点看：能不能跑、是否优雅、是否考虑了边界。错的不只是说"错了"，要指出"在哪一行出错、为什么"。',
+    briefStyleHint:
+      '日报话术：今天写了 X 道编程题，跑通 Y / 失败 Z。强调"动手量"。',
+    retrievalHint:
+      '资料检索时优先官方文档、API 参考、changelog；引用时附文档链接。',
+    srInitialInterval: 2,
+  },
+  'cs-theory': {
+    label: '计算机系统课',
+    lessonStructure:
+      '讲义结构：① 直觉/类比 → ② 形式定义 → ③ 算法伪码（带行号注释）→ ④ 复杂度分析（时间+空间）→ ⑤ 一个实现要点或经典优化',
+    defaultExerciseMix: { multipleChoice: 30, freeResponse: 40, code: 30 },
+    exerciseHint:
+      '题型混合：概念辨析（判断/选择）、算法推演（手算 trace）、代码实现（关键步骤）。每道至少标注复杂度。',
+    feedbackHint:
+      '批改时关注：算法步骤是否正确、复杂度是否最优、是否考虑边界。指出更优解时给出复杂度对比。',
+    briefStyleHint:
+      '日报话术：今天过了 X 个算法/数据结构，掌握 Y 个复杂度分析。',
+    retrievalHint:
+      '资料检索时优先经典教材章节（CLRS/SICP）和论文摘要。',
+  },
+  'math-foundation': {
+    label: '数学基础',
+    lessonStructure:
+      '讲义结构：① 直觉/几何意义（图或类比）→ ② 形式定义（精确符号）→ ③ 主要定理 + 证明大纲 → ④ 至少 2 道由浅到深的计算例题（含完整步骤）→ ⑤ 易错点提醒',
+    defaultExerciseMix: { multipleChoice: 15, freeResponse: 60, code: 25 }, // freeResponse 当作"计算+证明"
+    exerciseHint:
+      '题型偏向"计算+证明"：60% 计算题（分步给中间结果）、25% 证明题（要求严谨步骤）、15% 概念辨析。题面避免无意义口语。',
+    feedbackHint:
+      '批改时指出：哪一步推导跳了、哪个量纲/符号写错、是否有"会做但写不严谨"。证明题要看清逻辑链每一环。',
+    briefStyleHint:
+      '日报话术：今天证了 X 个定理 / 完成 Y 道计算 / 卡住 Z 个步骤。',
+    retrievalHint:
+      '资料检索时优先教材习题集与例题；引用时给出章节号。',
+  },
+  'math-advanced': {
+    label: '数学进阶',
+    lessonStructure:
+      '讲义结构：① 历史动机/为何引入 → ② 公理/定义 → ③ 主要定理及证明（关键步骤展开）→ ④ 反例/边界讨论 → ⑤ 推广方向',
+    defaultExerciseMix: { multipleChoice: 5, freeResponse: 80, code: 15 },
+    exerciseHint:
+      '70% 证明题（强调严谨）+ 30% 概念辨析（含反例构造）。计算题极少。',
+    feedbackHint:
+      '批改重点：证明逻辑是否完备、是否漏掉了非平凡情况、记号是否标准。',
+    briefStyleHint: '日报话术：今天读了 X 节，证明了 Y 个命题，构造了 Z 个反例。',
+    retrievalHint: '资料检索优先经典原著（Rudin/Lang/Hatcher 等）。',
+  },
+  'physics': {
+    label: '物理',
+    lessonStructure:
+      '讲义结构：① 物理现象 → ② 物理图像/类比 → ③ 数学建模（含量纲）→ ④ 推导公式 → ⑤ 应用/估算/极限情况检验',
+    defaultExerciseMix: { multipleChoice: 20, freeResponse: 60, code: 20 },
+    exerciseHint:
+      '题型：50% 计算题（带量纲核对）、30% 概念图理解（画力图/势能图）、20% 实验/估算。',
+    feedbackHint:
+      '批改重点：物理图像是否清晰、量纲是否一致、极限情况是否合理（如 v→c）。',
+    briefStyleHint: '日报话术：今天理解了 X 个现象的物理图像，跑通 Y 个估算。',
+    retrievalHint: '资料优先教材习题 + Feynman Lectures 类经典。',
+  },
+  'engineering': {
+    label: '工程方法',
+    lessonStructure:
+      '讲义结构：① 真实问题场景 → ② 候选方案 ABC → ③ 取舍矩阵（成本/可维护性/扩展性）→ ④ 真实公司案例参考',
+    defaultExerciseMix: { multipleChoice: 10, freeResponse: 80, code: 10 },
+    exerciseHint:
+      '出开放题：给一个业务场景，要求设计方案 + 取舍说明。不追求"标准答案"，追求"决策路径清晰"。',
+    feedbackHint: '批改时看：是否考虑了多个维度、取舍是否清楚、对约束条件是否敏感。',
+    briefStyleHint: '日报话术：今天分析了 X 个系统/案例，权衡了 Y 个取舍。',
+    retrievalHint: '资料优先工业界文章、System Design 经典著作、公司技术博客。',
+  },
+  'language': {
+    label: '语言学习',
+    lessonStructure:
+      '讲义结构：① 高频词汇（含例句）→ ② 重点语法点（错例对比）→ ③ 听力/口语段落 → ④ 翻译练习 → ⑤ 自由输出引导',
+    defaultExerciseMix: { multipleChoice: 30, freeResponse: 50, code: 0 }, // freeResponse 当作"翻译/写作"
+    exerciseHint:
+      '题型：30% 词汇填空、30% 语法判断、20% 中外互译、20% 短文自由写作。强调"频次而非难度"。',
+    feedbackHint:
+      '批改重点：母语干扰错误（如中式英语/日语助词）、地道表达替换、语法精度。',
+    briefStyleHint:
+      '日报话术：连续打卡 X 天，新词 Y 个，复习 Z 个。强调"连续性"和"节奏感"。',
+    retrievalHint: '资料优先例句库、影视字幕、地道表达词典。',
+    // 语言类 SR 节奏更密：1/2/4/8/16 天
+    srInitialInterval: 1,
+    srIntervalSequence: [1, 2, 4, 8, 16, 32],
+  },
+  'exam-prep': {
+    label: '考试备考',
+    lessonStructure:
+      '讲义结构：① 高频考点定位 → ② 典型题型模板 → ③ 秒杀技巧/排除法 → ④ 历年真题对照 → ⑤ 易错陷阱',
+    defaultExerciseMix: { multipleChoice: 60, freeResponse: 35, code: 5 },
+    exerciseHint:
+      '题型 80% 真题或真题变体 + 20% 考点 review。每题标注真题年份/考次（编造也要标"模拟"）。强调时限。',
+    feedbackHint:
+      '批改时除了对错，要指出"如果是真题在多长时间内必须做对"和"用什么套路秒杀"。',
+    briefStyleHint:
+      '日报话术：距考试还有 X 天，今日真题正确率 Y%，弱项 Z。',
+    retrievalHint: '资料优先真题集、考纲、历年套卷。',
+    // 考试型错题反复刷：1/1/2/4 间隔（前几次密集）
+    srIntervalSequence: [1, 1, 2, 4, 8],
+  },
+  'humanities': {
+    label: '人文社科',
+    lessonStructure:
+      '讲义结构：① 代表人物/学派 → ② 核心命题 → ③ 反对意见与代表性反例 → ④ 关键引文（带出处）→ ⑤ 当代相关性',
+    defaultExerciseMix: { multipleChoice: 10, freeResponse: 80, code: 10 },
+    exerciseHint:
+      '70% 论述题（要求引文支撑）、20% 概念辨析、10% 引文出处。强调"多视角"，避免单一立场。',
+    feedbackHint: '批改重点：论据是否扎实、引文是否贴切、是否给出对立观点。',
+    briefStyleHint: '日报话术：今天读了 X 个学派/X 篇文献，对 Y 命题有了新理解。',
+    retrievalHint: '资料优先经典著作 + 学术评论。',
+  },
+  'research': {
+    label: '研究/论文',
+    lessonStructure:
+      '讲义结构：① 论文摘要梳理 → ② 方法核心创新 → ③ 实验设计与结果 → ④ 复现要点（数据/代码/超参）→ ⑤ 批判与扩展方向',
+    defaultExerciseMix: { multipleChoice: 5, freeResponse: 70, code: 25 },
+    exerciseHint:
+      '题型：50% 复现（写代码/算公式）、30% 批判性问答、20% 数学推导。鼓励质疑论文。',
+    feedbackHint: '批改重点：复现是否到位、批判是否有理、是否能提出 next-step 实验。',
+    briefStyleHint: '日报话术：今天读了 X 篇论文，复现了 Y 个实验。',
+    retrievalHint: '资料优先 arXiv / 顶会论文 / 知名 lab blog。',
+  },
+};
+
 export const SUBJECT_LABELS: Record<string, string> = {
   'calculus': '微积分',
   'linear-algebra': '线性代数',
@@ -79,6 +280,8 @@ export interface CourseOutline {
   title: string;
   topics: TopicOutline[];
   createdAt: string;
+  /** 教学法分类 tag。一门课可挂多个（如 cs-theory + math-foundation）。 */
+  tags?: CourseTag[];
 }
 
 export interface TopicOutline {
@@ -771,6 +974,7 @@ export type SidebarCommand =
   | { type: 'getPreferences' }
   | { type: 'savePreferences'; preferences: LearningPreferences }
   | { type: 'getCourses' }
+  | { type: 'setCourseTags'; subject: Subject; tags: CourseTag[] }
   | { type: 'getMaterials' }
   | { type: 'importAIProfile'; source: AIImportSource }
   | { type: 'getResolvedAIConfig' }

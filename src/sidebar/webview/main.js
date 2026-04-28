@@ -3,6 +3,21 @@
   const vscode = acquireVsCodeApi();
   const saved = vscode.getState() || {};
 
+  // 课程教学法 Tag 元数据（与 types.ts 的 COURSE_TAG_LABELS/DESCRIPTIONS 同步）
+  const COURSE_TAGS = [
+    { value: 'cs-skill', label: '计算机技能', desc: '编程语言、框架、工具（如 React、Python、SQL、Git）' },
+    { value: 'cs-theory', label: '计算机系统课', desc: '算法、操作系统、数据库、网络等系统课' },
+    { value: 'math-foundation', label: '数学基础', desc: '微积分、线性代数、概率论、离散数学' },
+    { value: 'math-advanced', label: '数学进阶', desc: '实分析、抽象代数、拓扑、泛函' },
+    { value: 'physics', label: '物理', desc: '力学、电磁、量子、热统' },
+    { value: 'engineering', label: '工程方法', desc: '系统设计、架构、设计模式、产品思维' },
+    { value: 'language', label: '语言学习', desc: '英语、二外，重在词汇/语法/听说读写' },
+    { value: 'exam-prep', label: '考试备考', desc: '考研、托福、CFA、AP 等有固定题型的备考' },
+    { value: 'humanities', label: '人文社科', desc: '哲学、历史、心理学、社会学' },
+    { value: 'research', label: '研究/论文', desc: '论文阅读、ML 理论、密码学进阶' },
+  ];
+  const COURSE_TAG_LABEL_MAP = COURSE_TAGS.reduce((m, t) => { m[t.value] = t.label; return m; }, {});
+
   const SUBJECT_LABELS = {
     calculus: '微积分',
     'linear-algebra': '线性代数',
@@ -224,6 +239,12 @@
     btnAnswerSubmitSaveDraft: $('btn-answer-submit-save-draft'),
     btnAnswerSubmitClearDraft: $('btn-answer-submit-clear-draft'),
     answerSubmitDraftStatus: $('answer-submit-draft-status'),
+    courseTagsModal: $('course-tags-modal'),
+    courseTagsChecklist: $('course-tags-checklist'),
+    courseTagsSubtitle: $('course-tags-subtitle'),
+    btnSaveCourseTags: $('btn-save-course-tags'),
+    btnCancelCourseTags: $('btn-cancel-course-tags'),
+    btnCloseCourseTagsModal: $('btn-close-course-tags-modal'),
     answerSubmitError: $('answer-submit-error'),
     btnAnswerSubmitConfirm: $('btn-answer-submit-confirm'),
     btnAnswerSubmitCancel: $('btn-answer-submit-cancel'),
@@ -365,6 +386,14 @@
 
   function subjectLabel(subject) {
     return SUBJECT_LABELS[subject] || subject || '未命名课程';
+  }
+
+  /** 渲染一组 tag 徽章 HTML（用于课程标题旁、下拉菜单内）。 */
+  function renderCourseTagBadges(tags) {
+    if (!Array.isArray(tags) || tags.length === 0) return '';
+    return `<span class="course-tag-badges">${tags
+      .map((t) => `<span class="course-tag-badge">${escapeHtml(COURSE_TAG_LABEL_MAP[t] || t)}</span>`)
+      .join('')}</span>`;
   }
 
   function hasCourse(subject) {
@@ -734,7 +763,7 @@
 
     const items = state.courses.map((course) => `
       <div class="dropdown-item${course.subject === state.selectedSubject ? ' selected' : ''}" data-subject="${escapeHtml(course.subject)}">
-        <span>${escapeHtml(course.title || subjectLabel(course.subject))}</span>
+        <span>${escapeHtml(course.title || subjectLabel(course.subject))} ${renderCourseTagBadges(course.tags)}</span>
         <span class="muted">${escapeHtml(subjectLabel(course.subject))}</span>
       </div>
     `);
@@ -793,7 +822,9 @@
 
     els.courseTitleRow.classList.remove('hidden');
     els.courseTitleRow.classList.add('open');
-    els.courseTitleText.textContent = course.title;
+    // 标题旁渲染 tag 徽章
+    const tagsHtml = renderCourseTagBadges(course.tags);
+    els.courseTitleText.innerHTML = `${escapeHtml(course.title)}${tagsHtml ? ' ' + tagsHtml : ''}`;
     els.courseTree.classList.remove('hidden');
 
     els.courseTree.innerHTML = course.topics.map((topic, topicIndex) => `
@@ -3001,9 +3032,79 @@
           subject: course.subject,
           title: course.title,
         });
+      } else if (action === 'set-course-tags') {
+        openCourseTagsModal(course);
       }
       els.editMenu?.classList.add('hidden');
     });
+  });
+
+  // ===== 课程教学法 Tag 模态 =====
+  let _courseTagsEditTarget = null;
+
+  function openCourseTagsModal(course) {
+    if (!course) return;
+    _courseTagsEditTarget = course;
+    const currentTags = new Set(course.tags || []);
+    if (els.courseTagsSubtitle) {
+      els.courseTagsSubtitle.textContent = `课程：${course.title || course.subject}。可多选；不同 tag 会让 AI 在讲义结构、出题分布、批改风格上区别对待。`;
+    }
+    if (els.courseTagsChecklist) {
+      els.courseTagsChecklist.innerHTML = COURSE_TAGS.map((t) => {
+        const checked = currentTags.has(t.value);
+        return `
+          <label class="course-tag-row${checked ? ' checked' : ''}">
+            <input type="checkbox" data-course-tag="${escapeHtml(t.value)}"${checked ? ' checked' : ''}>
+            <div>
+              <div class="ct-label">${escapeHtml(t.label)}</div>
+              <div class="ct-desc">${escapeHtml(t.desc)}</div>
+            </div>
+          </label>
+        `;
+      }).join('');
+      // 行点击同步 checkbox + active 状态
+      els.courseTagsChecklist.querySelectorAll('.course-tag-row').forEach((row) => {
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (!cb) return;
+        cb.addEventListener('change', () => {
+          row.classList.toggle('checked', cb.checked);
+        });
+      });
+    }
+    els.courseTagsModal?.classList.remove('hidden');
+    els.courseTagsModal?.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeCourseTagsModal() {
+    _courseTagsEditTarget = null;
+    els.courseTagsModal?.classList.add('hidden');
+    els.courseTagsModal?.setAttribute('aria-hidden', 'true');
+  }
+
+  els.btnCloseCourseTagsModal?.addEventListener('click', closeCourseTagsModal);
+  els.btnCancelCourseTags?.addEventListener('click', closeCourseTagsModal);
+  els.courseTagsModal?.addEventListener('click', (event) => {
+    if (event.target === els.courseTagsModal) closeCourseTagsModal();
+  });
+
+  els.btnSaveCourseTags?.addEventListener('click', () => {
+    if (!_courseTagsEditTarget) { closeCourseTagsModal(); return; }
+    const tags = Array.from(els.courseTagsChecklist?.querySelectorAll('input[type="checkbox"]:checked') || [])
+      .map((cb) => cb.getAttribute('data-course-tag'))
+      .filter(Boolean);
+    vscode.postMessage({
+      type: 'setCourseTags',
+      subject: _courseTagsEditTarget.subject,
+      tags,
+    });
+    addLog(`提交教学法 tag：${tags.join(' / ') || '（无）'}`, 'info');
+    closeCourseTagsModal();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !els.courseTagsModal?.classList.contains('hidden')) {
+      closeCourseTagsModal();
+    }
   });
 
   els.courseTitleRow?.addEventListener('click', (event) => {

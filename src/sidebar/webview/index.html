@@ -64,6 +64,7 @@
         <button class="edit-btn" id="btn-edit-course-title" title="编辑课程">⋯</button>
       </div>
       <div id="course-edit-menu" class="edit-menu hidden">
+        <button class="edit-menu-item" data-action="set-course-tags">设置教学法 Tag</button>
         <button class="edit-menu-item" data-action="rename-title">重命名课程</button>
         <button class="edit-menu-item" data-action="delete-title">删除课程</button>
       </div>
@@ -895,6 +896,26 @@
           <button class="btn" id="btn-answer-submit-save-draft" type="button" title="保存当前内容为草稿，下次打开会自动恢复">💾 保存草稿</button>
           <button class="btn ghost" id="btn-answer-submit-clear-draft" type="button" title="删除已保存的草稿">清空草稿</button>
           <button class="btn ghost" id="btn-answer-submit-cancel" type="button">取消</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 课程教学法 Tag 选择模态 -->
+  <div id="course-tags-modal" class="modal-overlay hidden" aria-hidden="true">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="course-tags-title">
+      <div class="modal-header">
+        <div>
+          <h3 id="course-tags-title">教学法 Tag</h3>
+          <p class="section-subtitle" id="course-tags-subtitle">不同类型课程会有不同的讲义骨架、出题分布、批改重点。可多选。</p>
+        </div>
+        <button class="btn ghost small fixed" id="btn-close-course-tags-modal" type="button">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="course-tags-checklist" class="course-tags-checklist"></div>
+        <div class="actions-row">
+          <button class="btn primary" id="btn-save-course-tags" type="button">保存</button>
+          <button class="btn ghost" id="btn-cancel-course-tags" type="button">取消</button>
         </div>
       </div>
     </div>

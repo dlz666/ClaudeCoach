@@ -38,6 +38,8 @@ interface GenerationContext {
   materialExerciseSummary?: string;
   retrievedExcerpts?: string;
   selectedMaterialTitle?: string;
+  /** 课程教学法 tag，会进入 prompt 决定讲义骨架/题型分布。 */
+  courseTags?: import('../types').CourseTag[];
 }
 
 export class ContentGenerator {

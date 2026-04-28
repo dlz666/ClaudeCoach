@@ -898,7 +898,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _buildCourseProfileContext(subject?: Subject, topicId?: string) {
-    return this.courseProfileStore.buildPromptContext(subject, topicId);
+    const base = await this.courseProfileStore.buildPromptContext(subject, topicId);
+    // 课程教学法 tag：从课程大纲读取，与 courseProfileContext 一起注入到 prompt ctx
+    let courseTags: import('../types').CourseTag[] | undefined;
+    if (subject) {
+      try {
+        const outline = await this.courseManager.getCourseOutline(subject);
+        if (outline?.tags && outline.tags.length > 0) {
+          courseTags = outline.tags;
+        }
+      } catch (error) {
+        console.warn('[SidebarProvider] failed to read course tags:', error);
+      }
+    }
+    return { ...base, courseTags };
   }
 
   private async _loadLessonExercises(subject: Subject, topicId: string, lessonId: string): Promise<Exercise[]> {
@@ -1197,6 +1210,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
         case 'getCourses': {
           await this._refreshCourses();
+          break;
+        }
+
+        case 'setCourseTags': {
+          const subject = msg.subject as Subject;
+          const tags = Array.isArray(msg.tags) ? msg.tags : [];
+          if (!subject) break;
+          const ok = await this.courseManager.setCourseTags(subject, tags);
+          if (ok) {
+            this._post({
+              type: 'log',
+              message: `已为 "${subject}" 设置教学法 tag：${tags.join(' / ') || '（无）'}`,
+              level: 'info',
+            });
+            await this._refreshCourses();
+          } else {
+            this._post({ type: 'log', message: `设置 tag 失败：课程不存在`, level: 'warn' });
+          }
           break;
         }
 

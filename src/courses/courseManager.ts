@@ -364,6 +364,15 @@ export class CourseManager {
     return courses;
   }
 
+  /** 更新课程教学法 tag（多选）。会写回 outline.json。 */
+  async setCourseTags(subject: Subject, tags: import('../types').CourseTag[]): Promise<boolean> {
+    const outline = await this.getCourseOutline(subject);
+    if (!outline) return false;
+    outline.tags = Array.from(new Set(tags));
+    await this.saveCourseOutline(subject, outline);
+    return true;
+  }
+
   async deleteCourse(subject: Subject): Promise<void> {
     for (const filePath of [this.paths.courseOutlinePath(subject), this.paths.legacyCourseOutlinePath(subject)]) {
       try {

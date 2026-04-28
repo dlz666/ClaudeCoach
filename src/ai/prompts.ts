@@ -7,6 +7,9 @@ import {
   CourseOutline,
   CourseProfile,
   CourseProfileChapter,
+  CourseTag,
+  COURSE_TAG_LABELS,
+  COURSE_TAG_PLAYBOOK,
   FeedbackStrengthTag,
   FeedbackWeaknessTag,
   subjectLabel,
@@ -208,6 +211,8 @@ interface PromptContext {
   retrievedExcerpts?: string;
   selectedMaterialTitle?: string;
   scope?: PromptContextScope;
+  /** 当前课程的教学法 tag（多选）。决定讲义骨架 / 出题分布 / 批改风格。 */
+  courseTags?: CourseTag[];
 }
 
 type PromptInjectField =
@@ -223,7 +228,8 @@ type PromptInjectField =
   | 'selectedMaterialTitle'
   | 'materialSummary'
   | 'materialExerciseSummary'
-  | 'retrievedExcerpts';
+  | 'retrievedExcerpts'
+  | 'courseTags';
 
 function shouldInclude(field: PromptInjectField, scope: PromptContextScope): boolean {
   switch (scope) {
@@ -239,30 +245,34 @@ function shouldInclude(field: PromptInjectField, scope: PromptContextScope): boo
       if (field === 'diagnosis') { return false; }
       return true;
     case 'grade':
-      // profile + chapterProfile + preferences + 公式规则
+      // profile + chapterProfile + preferences + courseTags + 公式规则
       return field === 'profile'
         || field === 'chapterProfile'
-        || field === 'preferences';
+        || field === 'preferences'
+        || field === 'courseTags';
     case 'diagnosis':
-      // profile + courseProfile + preferences + 公式规则
+      // profile + courseProfile + preferences + courseTags + 公式规则
       return field === 'profile'
         || field === 'courseProfile'
         || field === 'preferences'
-        || field === 'profileEvidenceSummary';
+        || field === 'profileEvidenceSummary'
+        || field === 'courseTags';
     case 'outline-gen':
-      // profile + preferences + materialSummary + 公式规则
+      // profile + preferences + materialSummary + courseTags + 公式规则
       return field === 'profile'
         || field === 'preferences'
         || field === 'currentCourseTitle'
         || field === 'selectedMaterialTitle'
-        || field === 'materialSummary';
+        || field === 'materialSummary'
+        || field === 'courseTags';
     case 'lecture-edit':
-      // profile + chapterProfile + preferences + courseOutlineSummary + 公式规则
+      // profile + chapterProfile + preferences + courseOutlineSummary + courseTags + 公式规则
       return field === 'profile'
         || field === 'chapterProfile'
         || field === 'preferences'
         || field === 'currentCourseTitle'
-        || field === 'courseOutlineSummary';
+        || field === 'courseOutlineSummary'
+        || field === 'courseTags';
     default:
       return true;
   }
@@ -309,6 +319,64 @@ function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, 
   return `\n${lines.map(line => `- ${line}`).join('\n')}`;
 }
 
+/**
+ * 把课程的教学法 tag 注入 prompt：每个 tag 的 lessonStructure / exerciseHint /
+ * feedbackHint / retrievalHint 按当前 scope 选择性输出。
+ *
+ * 多 tag 时合并各自范式（顺序保留），但相同字段会去重。
+ * 当 tag 为空时返回空串（让 AI 走通用范式）。
+ */
+function courseTagContext(tags: CourseTag[] | undefined, scope: PromptContextScope): string {
+  if (!tags || tags.length === 0) return '';
+  const playbooks = tags.map((tag) => COURSE_TAG_PLAYBOOK[tag]).filter(Boolean);
+  if (playbooks.length === 0) return '';
+
+  const labels = tags.map((tag) => COURSE_TAG_LABELS[tag] ?? tag).filter(Boolean);
+  const lines: string[] = [];
+  lines.push(`\n本课程的教学法分类：${labels.join(' + ')}`);
+  lines.push('请严格遵循下面这门课特有的教学范式（覆盖通用范式）：');
+
+  // 按 scope 选择哪些 hint 进 prompt
+  const wantStructure = scope === 'lesson-gen' || scope === 'lecture-edit' || scope === 'outline-gen';
+  const wantExercise = scope === 'exercise-gen';
+  const wantFeedback = scope === 'grade';
+  const wantRetrieval = scope === 'lesson-gen' || scope === 'exercise-gen' || scope === 'chat';
+  const isChatLikeScope = scope === 'chat' || scope === 'diagnosis';
+
+  if (wantStructure || isChatLikeScope) {
+    const structures = Array.from(new Set(playbooks.map((p) => p.lessonStructure))).filter(Boolean);
+    structures.forEach((s) => lines.push(`- ${s}`));
+  }
+
+  if (wantExercise || isChatLikeScope) {
+    const exHints = Array.from(new Set(playbooks.map((p) => p.exerciseHint))).filter(Boolean);
+    exHints.forEach((s) => lines.push(`- 出题指引：${s}`));
+
+    // 默认题型分布：取所有 tag 的 defaultExerciseMix 平均（如果有多个）
+    const mixes = playbooks.map((p) => p.defaultExerciseMix).filter(Boolean) as Array<NonNullable<typeof playbooks[number]['defaultExerciseMix']>>;
+    if (mixes.length > 0) {
+      const avg = {
+        multipleChoice: Math.round(mixes.reduce((s, m) => s + m.multipleChoice, 0) / mixes.length),
+        freeResponse: Math.round(mixes.reduce((s, m) => s + m.freeResponse, 0) / mixes.length),
+        code: Math.round(mixes.reduce((s, m) => s + m.code, 0) / mixes.length),
+      };
+      lines.push(`- 题型分布建议：选择 ${avg.multipleChoice}% / 问答(含证明/翻译/论述) ${avg.freeResponse}% / 代码 ${avg.code}%`);
+    }
+  }
+
+  if (wantFeedback || isChatLikeScope) {
+    const fbHints = Array.from(new Set(playbooks.map((p) => p.feedbackHint))).filter(Boolean);
+    fbHints.forEach((s) => lines.push(`- 批改指引：${s}`));
+  }
+
+  if (wantRetrieval) {
+    const retHints = Array.from(new Set(playbooks.map((p) => p.retrievalHint))).filter(Boolean);
+    retHints.forEach((s) => lines.push(`- 资料偏好：${s}`));
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
 function buildSystemBase(ctx: PromptContext): string {
   const scope: PromptContextScope = ctx.scope ?? 'chat';
   let sys = '你是一位经验丰富、耐心清晰的大学老师，正在辅导一位计算机专业大一学生。\n';
@@ -322,6 +390,14 @@ function buildSystemBase(ctx: PromptContext): string {
   if (shouldInclude('chapterProfile', scope)) {
     sys += chapterProfileContext(ctx.chapterProfile ?? null);
   }
+
+  // courseTags 在 preferences 之前注入：课程教学范式是"硬约束"，个人偏好是"软调整"。
+  // 当两者冲突时（如 cs-skill 默认 80% 代码 vs 用户偏好 30% 代码），用户偏好在
+  // preferencesContext 里仍会覆盖（出现在更后面），但 AI 会同时知道两者，能做有意识的取舍。
+  if (shouldInclude('courseTags', scope)) {
+    sys += courseTagContext(ctx.courseTags, scope);
+  }
+
   if (shouldInclude('preferences', scope)) {
     sys += preferencesContext(ctx.preferences ?? null);
   }

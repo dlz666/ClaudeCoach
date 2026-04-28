@@ -1,4 +1,4 @@
-import { Subject, WrongQuestion } from '../../types';
+import { Subject, WrongQuestion, COURSE_TAG_PLAYBOOK, CourseTag } from '../../types';
 import { CourseManager } from '../../courses/courseManager';
 import { CoachAgent, CoachLoop } from '../coachAgent';
 import { CoachEvent } from '../coachEventBus';
@@ -184,7 +184,22 @@ export function createSpacedRepetitionLoop(
             meta.exerciseId,
           );
           if (wq) {
-            await deps.sr.add(subject, wq);
+            // 按课程教学法 tag 决定 SR 初始间隔（语言类 1 天，技能类 2 天，默认 1）
+            let initialIntervalDays: number | undefined;
+            try {
+              const outline = await deps.courseManager.getCourseOutline(subject);
+              const tags = outline?.tags ?? [];
+              for (const tag of tags as CourseTag[]) {
+                const pb = COURSE_TAG_PLAYBOOK[tag];
+                if (pb?.srInitialInterval && (initialIntervalDays === undefined || pb.srInitialInterval < initialIntervalDays)) {
+                  // 多 tag 时取最短的（语言学习的密度优先）
+                  initialIntervalDays = pb.srInitialInterval;
+                }
+              }
+            } catch (err) {
+              console.warn('[SRLoop] read course tags failed:', err);
+            }
+            await deps.sr.add(subject, wq, { initialIntervalDays });
           }
         } else if (Number.isFinite(score) && score >= SCORE_PERFECT) {
           // 找队列中同 exerciseId / 同 lesson 的 item，回写一次成功复习
