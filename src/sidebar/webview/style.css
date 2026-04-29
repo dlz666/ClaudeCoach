@@ -2201,6 +2201,22 @@ button.material-vector-badge:hover {
   color: var(--vscode-charts-red, #f48771);
   border-color: color-mix(in srgb, var(--vscode-charts-red, #f48771) 35%, transparent);
 }
+/* Marker 深度提取按钮（公式 LaTeX + 多列正确） */
+.material-marker-btn {
+  font-size: 11px;
+  padding: 2px 5px;
+  margin-left: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-charts-purple, #9c5fc4) 20%, transparent);
+  color: var(--vscode-charts-purple, #9c5fc4);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #9c5fc4) 45%, transparent);
+  cursor: pointer;
+}
+.material-marker-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
 /* 重新解析章节按钮（章节识别不全时出现） */
 .material-reparse-btn {
   font-size: 9px;

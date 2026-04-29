@@ -1233,15 +1233,18 @@
       const hasChapters = chapterCount > 0;
       const dimText = stats.dimension ? `${stats.dimension}维` : '';
       const modelText = stats.model || '';
+      // marker 提取按钮（深度提取，含公式 LaTeX + 章节正确识别）— 总是显示
+      const markerBtn = `<button class="material-marker-btn" data-vec-action="marker" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="用 marker 深度提取（公式 LaTeX + 多列布局正确处理 + 章节自动识别）· 慢但精准" type="button">🔬</button>`;
+
       if (hasChapters) {
         // 章节过少（< 3）暗示 textbookParser 没识全 → 给个修复入口
         // 重新解析按钮：会触发 reparseMaterialSummary，后端跑完会自动触发 rebuild
         const reparseHint = chapterCount < 3 && stats.chunks > 200
           ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析+重建" type="button">⚠ 重新解析</button>`
           : '';
-        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}`;
+        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}${markerBtn}`;
       }
-      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>`;
+      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>${markerBtn}`;
     };
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
       <div class="material-group">
@@ -1307,6 +1310,17 @@
         if (!materialId || !subject) return;
         vscode.postMessage({ type: 'reparseMaterialSummary', materialId, subject });
         addLog(`已开始重新解析章节 (${subject})`, 'info');
+      });
+    });
+    // Marker 深度提取（OCR + 公式 LaTeX + 章节正确）— 慢但极准
+    els.materialsList.querySelectorAll('[data-vec-action="marker"]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const materialId = button.getAttribute('data-material-id');
+        const subject = button.getAttribute('data-subject');
+        if (!materialId || !subject) return;
+        vscode.postMessage({ type: 'reextractMaterialMarker', materialId, subject });
+        addLog(`已开始 Marker 深度提取 (${subject})—— 单本 5-30 分钟，请保持后台`, 'info');
       });
     });
   }

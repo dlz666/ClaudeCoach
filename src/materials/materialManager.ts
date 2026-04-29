@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { GroundingSource, MaterialEntry, MaterialExerciseMapping, MaterialIndex, MaterialSectionMapping, MaterialSummary, Subject } from '../types';
 import { readJson, writeJson, ensureDir, writeText, fileExists } from '../utils/fileSystem';
-import { extractTextFromFile } from './textExtractor';
+import { extractTextFromFile, ExtractProgressCallback } from './textExtractor';
 import { StoragePathResolver, getStoragePathResolver } from '../storage/pathResolver';
 import { TextbookParser } from './textbookParser';
 import { EmbeddingClient } from '../ai/embeddingClient';
@@ -772,13 +772,68 @@ export class MaterialManager {
       }
     }
 
-    const extracted = await extractTextFromFile(entry.filePath);
+    // marker / OCR 进度通过 vectorize 通道广播（共用同一条 webview log channel）
+    const onProgress: ExtractProgressCallback = (event) => {
+      this.vectorizeProgressEmitter.fire({
+        kind: event.stage === 'done' || event.stage === 'fallback' ? 'chunk-batch' : event.stage === 'error' ? 'error' : 'start',
+        materialId: entry.id,
+        fileName: entry.fileName,
+        doneChunks: event.pages,
+        totalChunks: event.totalPages,
+        message: event.message ?? `[提取] ${event.stage}`,
+      });
+    };
+    const extracted = await extractTextFromFile(entry.filePath, { strategy: 'auto', onProgress });
     if (!extracted.replace(/\s/g, '').length) {
       throw new Error('未能从资料中提取到可用文本');
     }
 
     await writeText(entry.textPath, extracted);
     return extracted;
+  }
+
+  /**
+   * 强制重新用 marker 提取（用户手动触发）。删旧 extracted.txt + summary.json，
+   * 然后重跑 ensureMaterialIndexed 走完整流水线（提取 → 解析 summary → 自动向量化）。
+   */
+  async reextractMaterialWithMarker(materialId: string, onProgress?: ExtractProgressCallback): Promise<{
+    ok: boolean;
+    chars: number;
+    error?: string;
+  }> {
+    try {
+      const material = await this.getMaterialById(materialId);
+      if (!material) return { ok: false, chars: 0, error: '资料不存在' };
+
+      // 删旧文本 / 汇总；保留 source.pdf 和 vector-index.json
+      try { await fs.unlink(material.textPath); } catch { /* noop */ }
+      try { await fs.unlink(material.summaryPath); } catch { /* noop */ }
+
+      const text = await extractTextFromFile(material.filePath, { strategy: 'marker-only', onProgress });
+      if (!text.replace(/\s/g, '').length) {
+        return { ok: false, chars: 0, error: 'marker 提取失败' };
+      }
+      await writeText(material.textPath, text);
+
+      // 重新跑 textbookParser
+      const summary = await this.parser.parse(text, material.subject);
+      summary.materialId = material.id;
+      await writeJson(material.summaryPath, summary);
+
+      // 标 status 为 indexed 并重置错误（如有）
+      await this._setEntryState(material, 'indexed', {
+        indexedAt: new Date().toISOString(),
+        lastError: undefined,
+      });
+
+      return { ok: true, chars: text.length };
+    } catch (err) {
+      return {
+        ok: false,
+        chars: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   private async _setEntryState(

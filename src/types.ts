@@ -1235,6 +1235,7 @@ export type SidebarCommand =
   | { type: 'reindexSingleMaterial'; subject: Subject; materialId: string }
   | { type: 'reindexAllSubjectsAllVectors'; requireConfirm?: boolean }
   | { type: 'reparseMaterialSummary'; subject: Subject; materialId: string }
+  | { type: 'reextractMaterialMarker'; subject: Subject; materialId: string }
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Adaptive Insights =====
   | { type: 'getCourseProfile'; subject: Subject }

@@ -2512,6 +2512,64 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'reextractMaterialMarker': {
+          // 用 marker 重新提取（GPU/CPU 自动）+ 重新解析章节 + 重建向量索引一条龙
+          const materialId = String((msg as any).materialId ?? '');
+          if (!materialId) break;
+          this._startTask(`Marker 重提取 + 重建 · ${materialId}`, async () => {
+            const idx = await this.materialManager.getIndex();
+            const material = idx.materials.find((m) => m.id === materialId);
+            if (!material) {
+              this._post({ type: 'log', message: `未找到资料 ${materialId}`, level: 'warn' });
+              return;
+            }
+            this._post({
+              type: 'log',
+              message: `Marker 提取启动（首次会下载 ~3GB 模型；之后单本约 5-30 分钟）`,
+              level: 'info',
+            });
+            const reextract = await this.materialManager.reextractMaterialWithMarker(materialId, (event) => {
+              const headline = event.pages && event.totalPages
+                ? `Marker [${event.pages}/${event.totalPages}]`
+                : `Marker [${event.stage}]`;
+              this._post({
+                type: 'log',
+                message: `[${material.subject}] ${headline} ${event.message ?? ''}`,
+                level: event.stage === 'error' ? 'warn' : 'info',
+              });
+            });
+            if (!reextract.ok) {
+              this._post({
+                type: 'log',
+                message: `Marker 提取失败：${reextract.error ?? '未知'}（提示：pip install marker-pdf；CUDA torch 可加速 5-10x）`,
+                level: 'error',
+              });
+              return;
+            }
+            this._post({
+              type: 'log',
+              message: `Marker 提取成功（${reextract.chars} 字符），开始重建向量索引...`,
+              level: 'info',
+            });
+            // 删旧 vector index 强制完全重建（chunks 内容也变了）
+            await this.materialManager.removeVectorIndexFor(material);
+            const buildResult = await this.materialManager.ensureVectorIndexFor(material, (event) => {
+              if (event.kind === 'error') {
+                this._post({ type: 'log', message: `[向量化] ${event.fileName}：${event.message ?? ''}`, level: 'warn' });
+              }
+            });
+            this._post({
+              type: 'log',
+              message: buildResult.ok
+                ? `Marker 流水线完成：文本 ${reextract.chars} 字符 + ${buildResult.chunks} 块 + 章节索引`
+                : `Marker 流水线最后一步失败：${buildResult.error ?? '未知'}`,
+              level: buildResult.ok ? 'info' : 'warn',
+            });
+            await this._refreshMaterials();
+          });
+          break;
+        }
+
         case 'reparseMaterialSummary': {
           // 重新解析 summary.json 的章节结构 + **自动级联重建** 向量索引应用新章节
           const materialId = String((msg as any).materialId ?? '');
