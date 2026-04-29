@@ -915,12 +915,23 @@ export class MaterialManager {
       // === Two-stage retrieval：建章节级 embedding 索引（v2 增强）===
       // 用 MaterialSummary.chapters 的 title + summary + keyPoints 作为章节代表文本
       // 同时按 chunk text 反查每章在 chunks 数组里的 [start, end) 范围
-      const chapterVectors = await this._buildChapterVectorIndex(
+      let chapterVectors = await this._buildChapterVectorIndex(
         material,
         chunks,
         config.model,
         existing,
       );
+
+      // 关键容错：本次构建结果为空，但 existing 有 chapters → 保留 existing.chapters
+      // （避免一次失败把整本书的章节索引抹掉，导致后续每次都要重 embed 又失败的死循环）
+      if (chapterVectors.length === 0 && existing?.chapters && existing.chapters.length > 0) {
+        // chunks 数变了 → existing.chapters 的 chunkRange 可能错位，但总比丢失好
+        // 后续如果章节内 chunk 范围对不上，retrieve 时只是粗筛精度差点，不致命
+        chapterVectors = existing.chapters;
+        console.warn(
+          `[VectorIndex] ${material.fileName}: 本次章节构建失败，保留旧 ${existing.chapters.length} 章索引（chunkRange 可能略漂移）`,
+        );
+      }
 
       await this.vectorIndex.merge(material, config.model, dimension, keep, fresh, chapterVectors);
       progress?.({
@@ -1043,22 +1054,40 @@ export class MaterialManager {
 
     // 章节数通常 < 100，一次性批量 embed
     if (todoTexts.length > 0) {
-      const vecs = await this.embeddingClient.embed(todoTexts);
-      if (!vecs) {
-        // embedding 失败：本次先不写章节索引（不影响 chunk 索引），下次再试
-        return [];
+      // 改用单条 retry 模式：哪怕一条失败也不影响其他成功的；保留所有 reused 不丢失。
+      // 之前的 bug：批量失败 → return []，把 keep 也抹掉 → 文件保存 chapters=undefined
+      // → 下次 existing 没 chapters → 又全部要 embed → 又失败 → 永远 v1。
+      const BATCH_SIZE = 8;
+      const failedIndexes: number[] = [];
+      for (let k = 0; k < todoTexts.length; k += BATCH_SIZE) {
+        const batch = todoTexts.slice(k, k + BATCH_SIZE);
+        const batchOriginalIdxs = todoIndexes.slice(k, k + BATCH_SIZE);
+        const vecs = await this.embeddingClient.embed(batch);
+        if (!vecs) {
+          // 这一批失败：记录 failed，继续下一批，**不丢弃** reused 部分
+          failedIndexes.push(...batchOriginalIdxs);
+          const reason = this.embeddingClient.lastError || '未知';
+          console.warn(`[ChapterIndex] batch ${k}-${k + batch.length} failed: ${reason}`);
+          continue;
+        }
+        for (let j = 0; j < batch.length; j++) {
+          const idx = batchOriginalIdxs[j];
+          const text = batch[j];
+          const hash = require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32);
+          result.push({
+            chapterIndex: idx,
+            label: chapters[idx].title || `第 ${chapters[idx].chapterNumber ?? idx + 1} 章`,
+            chunkRange: ranges[idx],
+            textHash: hash,
+            vector: vecs[j],
+          });
+        }
       }
-      for (let k = 0; k < todoIndexes.length; k++) {
-        const idx = todoIndexes[k];
-        const text = todoTexts[k];
-        const hash = require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32);
-        result.push({
-          chapterIndex: idx,
-          label: chapters[idx].title || `第 ${chapters[idx].chapterNumber ?? idx + 1} 章`,
-          chunkRange: ranges[idx],
-          textHash: hash,
-          vector: vecs[k],
-        });
+      if (failedIndexes.length > 0) {
+        console.warn(
+          `[ChapterIndex] ${material.fileName}: ${failedIndexes.length}/${todoTexts.length} 章 embed 失败，` +
+          `成功 ${result.length} 章已保留（含 reused）`,
+        );
       }
     }
 
