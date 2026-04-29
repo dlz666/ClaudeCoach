@@ -395,6 +395,28 @@ export class TextbookParser {
         continue;
       }
 
+      // pdf-parse 对中文教材常把多列 / 多行压成一长行。
+      // 当行很长且含多个章节标记时，用正则二次切分提取每个章节标题。
+      // 目标 pattern：
+      //   "第N章 标题..." 直到下一个 "第" / "§" / "习题" / 行末
+      //   "§N 标题..."     同上
+      if (trimmed.length >= 200) {
+        const longLineCandidates = this._extractHeadingsFromLongLine(trimmed);
+        for (const cand of longLineCandidates) {
+          const norm = this.normalizeOutlineCandidate(cand);
+          if (
+            norm &&
+            !seen.has(norm) &&
+            this.isReasonableOutlineTitle(norm)
+          ) {
+            seen.add(norm);
+            candidates.push(norm);
+            if (candidates.length >= 500) return candidates;
+          }
+        }
+        // 长行处理完仍继续走下面的整行判断（不影响）
+      }
+
       const normalized = this.normalizeOutlineCandidate(trimmed);
       if (!normalized || seen.has(normalized) || !this.isReasonableOutlineTitle(normalized)) {
         continue;
@@ -418,6 +440,37 @@ export class TextbookParser {
     }
 
     return candidates;
+  }
+
+  /**
+   * 从被 pdf-parse 压扁的一长行里提取所有 heading-like 子串。
+   * 主要场景：苏德矿微积分 / 高等数学等中文教材，pdf-parse 把目录页的多列布局
+   * 压成一行，所有"第七章/第八章/§ 1/§ 2"挤在一起，普通行级 split 拿不到。
+   */
+  private _extractHeadingsFromLongLine(line: string): string[] {
+    const out: string[] = [];
+    // 主要模式：
+    //  "第N章/节/篇 [标题文字...]"  止于下一个 "第" / "§" / "习题" / "Chapter"
+    //  "§ N [标题]"                  止于下一个 "§" / "第" / "习题"
+    //  "Chapter N [标题]"            止于下一个 "Chapter" / "§"
+    const patterns = [
+      /第\s*[0-9一二三四五六七八九十百零两]+\s*[章节篇][^\n第§]{0,80}/g,
+      /Chapter\s+\d+[^\n章§]{0,80}/gi,
+      /§\s*\d+(?:\.\d+)?[^\n第§]{0,60}/g,
+    ];
+    for (const pat of patterns) {
+      let m: RegExpExecArray | null;
+      while ((m = pat.exec(line))) {
+        const candidate = m[0]
+          .replace(/[·•…]+/g, ' ')  // 去掉省略号 / 圆点装饰
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+        // 太短（仅"第N章"无标题）跳过，等行内更长 heading 涵盖
+        if (candidate.length < 5) continue;
+        out.push(candidate);
+      }
+    }
+    return out;
   }
 
   private normalizeOutlineCandidate(line: string): string {
