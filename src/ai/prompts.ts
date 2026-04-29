@@ -732,6 +732,30 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
   // 视觉化建议：按学科 hint 引导 mermaid / ASCII
   const visualHint = buildVisualHint(subject);
 
+  // Misconception 前置防御：找出与本节相关的常见误区，让 AI 在讲义里主动澄清
+  // 同步引入避免循环；require 是 ts-node / commonjs 友好
+  const misconceptionsForLesson = (() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require('../progress/misconceptionTemplates');
+      const lib = mod.loadMisconceptionsForSubject(subject);
+      const hits = mod.relevantMisconceptionsForTopic(`${topicTitle} ${lessonTitle}`, lib);
+      // 也加入 chapterProfile.misconceptions 已经踩过的（防同样错误重犯）
+      const chapter = ctx.chapterProfile;
+      const stuckOnIds = new Set<string>();
+      (chapter?.misconceptions ?? []).forEach((m) => {
+        const idMatch = m.match(/\[误区:([^\]]+)\]/);
+        if (idMatch) stuckOnIds.add(idMatch[1]);
+      });
+      const stuckHits = lib.filter((m: any) => stuckOnIds.has(m.id));
+      const merged = [...new Map([...hits, ...stuckHits].map((m: any) => [m.id, m])).values()].slice(0, 4);
+      if (!merged.length) return '';
+      return mod.formatMisconceptionsForPrompt(merged);
+    } catch {
+      return '';
+    }
+  })();
+
   return [
     {
       role: 'system',
@@ -750,6 +774,7 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
 【字数】目标 ${wordTarget}。
 
 【视觉化】${visualHint}
+${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节学生常踩的误区，请在讲义中**主动**澄清（用 "误区警示 / 易错点" 这样的小节标记，避免学生踩坑）：\n${misconceptionsForLesson}\n` : ''}
 
 【公式与推导】
 - 多步推导每一步独立展示，不要把太多推导挤进一个公式块

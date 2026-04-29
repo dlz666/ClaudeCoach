@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { CourseOutline, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
+import { CourseOutline, GradeResult, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
 import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver } from '../storage/pathResolver';
 
@@ -422,6 +422,39 @@ export class CourseManager {
 
   getGradePath(subject: Subject, topicId: string, sessionId: string): string {
     return this.paths.courseExerciseGradePath(subject, topicId, sessionId);
+  }
+
+  /**
+   * 列出指定 lesson 最近 N 次 grade 结果，按 gradedAt 降序。
+   * 用于流式难度：基于最近几道题表现调下一题难度。
+   */
+  async listRecentLessonGrades(
+    subject: Subject,
+    topicId: string,
+    lessonId: string,
+    limit: number = 5,
+  ): Promise<GradeResult[]> {
+    try {
+      const sessionId = await this.getDeterministicSessionId(subject, topicId, lessonId);
+      const gradeDir = path.dirname(this.getGradePath(subject, topicId, sessionId));
+      if (!(await fileExists(gradeDir))) return [];
+      const fs = await import('fs/promises');
+      const entries = await fs.readdir(gradeDir);
+      const candidates: GradeResult[] = [];
+      for (const name of entries) {
+        if (!name.endsWith('.json')) continue;
+        const full = path.join(gradeDir, name);
+        const data = await readJson<GradeResult>(full);
+        if (data && data.gradedAt) candidates.push(data);
+      }
+      // 仅取与本 lesson 关联的（exerciseId 来自该 lessonId）
+      const filtered = candidates.filter((g) => g.exerciseId && (g as any).lessonId === sessionId)
+        .concat(candidates.filter((g) => !((g as any).lessonId)));
+      filtered.sort((a, b) => (b.gradedAt || '').localeCompare(a.gradedAt || ''));
+      return filtered.slice(0, limit);
+    } catch {
+      return [];
+    }
   }
 
   getTopicSummaryPath(subject: Subject, topicId: string): string {

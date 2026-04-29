@@ -139,6 +139,9 @@ export class HybridRetriever {
     const queryVector = queryVecs[0];
 
     // 收集向量通道 chunks（每本资料 top channelTopK 条）
+    // Two-stage：若该资料有 chapter 索引（v2），先粗筛 top-3 章再精筛；否则全量
+    // 触发条件：query 长度 ≥ 8 字符（短 query 跨语言场景，用全量 cosine 更稳）
+    const useChapterPrefilter = queryText.trim().length >= 8;
     const vectorCandidates: Array<{
       materialId: string;
       fileName: string;
@@ -147,7 +150,19 @@ export class HybridRetriever {
       score: number;
     }> = [];
     for (const material of materials) {
-      const hits = await this.vectorIndex.search(material, queryVector, channelTopK);
+      let hits: { chunkIndex: number; text: string; score: number }[] = [];
+      if (useChapterPrefilter) {
+        const topChapters = await this.vectorIndex.searchChapters(material, queryVector, 3);
+        if (topChapters.length > 0) {
+          // 粗筛通过：在 top-3 章范围内精筛
+          const ranges = topChapters.map((c) => c.chunkRange);
+          hits = await this.vectorIndex.searchWithinChapters(material, queryVector, channelTopK, ranges);
+        }
+      }
+      // 没有 chapter 索引 / 粗筛降级 → 全量 chunk 搜索
+      if (hits.length === 0) {
+        hits = await this.vectorIndex.search(material, queryVector, channelTopK);
+      }
       for (const hit of hits) {
         vectorCandidates.push({
           materialId: material.id,

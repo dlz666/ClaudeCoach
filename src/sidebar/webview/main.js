@@ -2865,6 +2865,25 @@
     });
   });
 
+  // 流式难度：出 1 题（自适应）
+  document.getElementById('btn-practice-adaptive-next')?.addEventListener('click', () => {
+    const last = state.lastOpenedLesson;
+    if (!state.selectedSubject) { addLog('请先选择课程。', 'warn'); return; }
+    if (!last || last.subject !== state.selectedSubject) {
+      addLog('请先在课程树中点开任一课时，再使用自适应出题。', 'warn');
+      return;
+    }
+    vscode.postMessage({
+      type: 'practiceAdaptiveNext',
+      subject: state.selectedSubject,
+      topicId: last.topicId,
+      topicTitle: last.topicTitle || '',
+      lessonId: last.lessonId,
+      lessonTitle: last.lessonTitle,
+      baseDifficulty: 3,
+    });
+  });
+
   els.btnCloseAnswerSubmitModal?.addEventListener('click', closeAnswerSubmitModal);
   els.btnAnswerSubmitCancel?.addEventListener('click', closeAnswerSubmitModal);
   els.answerSubmitModal?.addEventListener('click', (event) => {

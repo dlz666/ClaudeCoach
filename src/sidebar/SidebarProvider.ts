@@ -1927,6 +1927,64 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'practiceAdaptiveNext': {
+          // 流式难度：基于刚做完几道的表现，再出 1 题
+          const subject = msg.subject as Subject;
+          const topicId = String(msg.topicId ?? '');
+          const lessonId = String(msg.lessonId ?? '');
+          const lessonTitle = String(msg.lessonTitle ?? lessonId);
+          const topicTitle = String((msg as any).topicTitle ?? '');
+          const baseDifficulty = Number(msg.baseDifficulty) || 3;
+          if (!subject || !topicId || !lessonId) {
+            this._post({ type: 'log', message: '缺少必要参数', level: 'warn' });
+            break;
+          }
+          this._startTask(`自适应出题 · ${lessonTitle}`, async () => {
+            const [prefs, diag, profile, recentGrades, triggerState] = await Promise.all([
+              this.prefsStore.get(),
+              this.adaptiveEngine.getLatestDiagnosis(subject),
+              this.progressStore.getProfile(),
+              this.courseManager.listRecentLessonGrades(subject, topicId, lessonId, 5),
+              this.adaptiveEngine.getTriggerState(subject),
+            ]);
+            const recentSessionScores = recentGrades.map((g) => g.score).filter((n) => Number.isFinite(n));
+            if (!recentSessionScores.length) {
+              this._post({ type: 'log', message: '本节还没批改记录，请先做完一批练习再用自适应模式', level: 'warn' });
+              return;
+            }
+
+            const groundingMaxExcerpts = await this._resolveMaxExcerpts('light');
+            const grounding = await this._buildSubjectGrounding(
+              subject,
+              [topicTitle, lessonTitle, '自适应出题'].filter(Boolean).join(' '),
+              { maxExcerpts: groundingMaxExcerpts },
+            );
+            const courseProfileContext = await this._buildCourseProfileContext(subject, topicId);
+
+            await this.contentGen.generateExercises(
+              subject, topicId, lessonId, lessonTitle, 1, baseDifficulty,
+              {
+                profile,
+                preferences: prefs,
+                diagnosis: diag,
+                ...courseProfileContext,
+                ...grounding,
+                streak: triggerState.streak,
+                streakDirection: triggerState.streakDirection,
+                recentSessionScores,
+              },
+            );
+            const avg = Math.round(recentSessionScores.reduce((s, x) => s + x, 0) / recentSessionScores.length);
+            this._post({
+              type: 'log',
+              message: `已生成 1 道自适应题（最近 ${recentSessionScores.length} 道平均 ${avg} 分 → 难度自调）`,
+              level: 'info',
+            });
+            await this._refreshCourses();
+          });
+          break;
+        }
+
         case 'practiceWrongQuestions': {
           const subject = msg.subject as Subject;
           const topicId = String(msg.topicId ?? '');

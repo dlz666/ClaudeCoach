@@ -48,6 +48,13 @@ interface GenerationContext {
    */
   streak?: number;
   streakDirection?: 'up' | 'down' | null;
+
+  /**
+   * 单 lesson session 内最近 grade 的分数序列（最多 5 条）。
+   * 流式难度核心信号：批量出题完成后，"再出一题"时最敏感的指标——
+   * 不依赖 chapter mastery，直接用刚做完几道的平均分调下一道。
+   */
+  recentSessionScores?: number[];
 }
 
 export class ContentGenerator {
@@ -296,17 +303,27 @@ export class ContentGenerator {
       streakDelta = streak >= 3 ? -2 : -1; // 连错 2 已减，3 减 2
     }
 
-    // 还没有任何反馈数据就直接返回 base（避免空跳）
+    // 流式难度信号：刚答完几道的 session 均分，最敏感
+    // 高分（>=85）→ +1；低分（<=50）→ -1；中段 → 0（避免抖动）
+    let sessionDelta = 0;
+    if (Array.isArray(ctx.recentSessionScores) && ctx.recentSessionScores.length > 0) {
+      const avg = ctx.recentSessionScores.reduce((s, x) => s + x, 0) / ctx.recentSessionScores.length;
+      if (avg >= 85) sessionDelta = +1;
+      else if (avg <= 50) sessionDelta = -1;
+    }
+
+    // 没有任何反馈数据 → 直接 base；session 信号即便单 grade 也立刻生效
     if (mastery === null || mastery === undefined || !Number.isFinite(mastery)) {
-      // 但是 streak 信号即便没 mastery 也可用（≥1 grade 就有 streak）
-      if (streakDelta !== 0) {
-        return Math.max(1, Math.min(5, clampedBase + streakDelta));
+      const total = streakDelta + sessionDelta;
+      if (total !== 0) {
+        return Math.max(1, Math.min(5, clampedBase + total));
       }
       return clampedBase;
     }
 
-    const next = clampedBase + masteryDelta + streakDelta;
-    return Math.max(1, Math.min(5, next));
+    // 三个 delta 合并，但限幅避免单次跳两档以上
+    const combinedDelta = Math.max(-2, Math.min(2, masteryDelta + streakDelta + sessionDelta));
+    return Math.max(1, Math.min(5, clampedBase + combinedDelta));
   }
 
   private injectWrongQuestionContext(

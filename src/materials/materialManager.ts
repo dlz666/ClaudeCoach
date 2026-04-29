@@ -908,14 +908,25 @@ export class MaterialManager {
       }
 
       const dimension = fresh[0]?.vector?.length ?? config.dimension;
-      await this.vectorIndex.merge(material, config.model, dimension, keep, fresh);
+
+      // === Two-stage retrieval：建章节级 embedding 索引（v2 增强）===
+      // 用 MaterialSummary.chapters 的 title + summary + keyPoints 作为章节代表文本
+      // 同时按 chunk text 反查每章在 chunks 数组里的 [start, end) 范围
+      const chapterVectors = await this._buildChapterVectorIndex(
+        material,
+        chunks,
+        config.model,
+        existing,
+      );
+
+      await this.vectorIndex.merge(material, config.model, dimension, keep, fresh, chapterVectors);
       progress?.({
         kind: 'done',
         materialId: material.id,
         fileName: material.fileName,
         doneChunks: chunks.length,
         totalChunks: chunks.length,
-        message: `向量化完成（新 ${fresh.length} / 复用 ${keep.length}）`,
+        message: `向量化完成（新 ${fresh.length} / 复用 ${keep.length}${chapterVectors.length ? ` / 章节 ${chapterVectors.length}` : ''}）`,
       });
       return { ok: true, chunks: chunks.length, embedded: fresh.length, reused: keep.length };
     } catch (err) {
@@ -930,6 +941,126 @@ export class MaterialManager {
     } finally {
       this.vectorizingMaterials.delete(material.id);
     }
+  }
+
+  /**
+   * 为该资料构建章节级 embedding 索引（two-stage retrieval 第一阶段）。
+   *
+   * 输入：chunks 数组（已切好的全部 chunk 文本，按出现顺序）
+   * 输出：每章一个 ChapterVector，含 chunkRange 标记该章覆盖的 chunk 索引区间
+   *
+   * 实现思路：
+   * 1. 加载 MaterialSummary.chapters（已存在结构化章节信息）
+   * 2. 每章构造代表文本：title + summary + 前几个 keyPoints
+   * 3. 在 chunks 数组里反向定位章节范围：用 chapter.title 等关键词扫描 chunk 文本
+   *    第一次命中视为该章起点；下一章起点之前都属于该章
+   * 4. 批量 embed 所有章节代表文本
+   * 5. 增量复用：existing.chapters 里 textHash 一致的直接搬过来
+   */
+  private async _buildChapterVectorIndex(
+    material: MaterialEntry,
+    chunks: string[],
+    model: string,
+    existing: import('./vectorIndex').VectorIndexFile | null,
+  ): Promise<import('./vectorIndex').ChapterVector[]> {
+    if (!this.embeddingClient) return [];
+    const summary = await this._loadMaterialSummary(material);
+    const chapters = summary?.chapters ?? [];
+    if (!chapters.length) return [];
+
+    // 章节代表文本
+    const chapterTexts = chapters.map((c) => {
+      const head = [c.chapterNumber, c.title].filter(Boolean).join(' ');
+      const body = c.summary || '';
+      const keys = (c.keyPoints || []).slice(0, 5).join('；');
+      return [head, body, keys].filter(Boolean).join('\n');
+    });
+
+    // 章节在 chunks 数组里的覆盖区间：扫描每个 chunk 的开头 200 字看是否有 "第 N 章 / chapter N" 等标记
+    // 简化：根据 chapter.chapterNumber 的字符串模式 + 章标题首词 找命中 chunk index
+    const chapterStartIndexes: number[] = [];
+    for (let ci = 0; ci < chapters.length; ci++) {
+      const c = chapters[ci];
+      const num = String(c.chapterNumber ?? '').trim();
+      const titleHead = (c.title || '').slice(0, 12);
+      const probe1 = num ? `第 ${num} 章` : '';
+      const probe2 = num ? `Chapter ${num}` : '';
+      const probe3 = num ? `${num}.` : '';
+      let foundAt = -1;
+      for (let i = chapterStartIndexes[ci - 1] ?? 0; i < chunks.length; i++) {
+        const head = chunks[i].slice(0, 220);
+        if (
+          (probe1 && head.includes(probe1)) ||
+          (probe2 && head.includes(probe2)) ||
+          (titleHead && head.includes(titleHead) && (head.includes(probe3) || ci === 0))
+        ) {
+          foundAt = i;
+          break;
+        }
+      }
+      // 没找到就按平均分配兜底（避免 stage1 完全失败）
+      if (foundAt < 0) {
+        foundAt = Math.floor((ci / chapters.length) * chunks.length);
+      }
+      chapterStartIndexes.push(foundAt);
+    }
+    // 计算每章 [start, end) 区间
+    const ranges: [number, number][] = chapterStartIndexes.map((start, i) => {
+      const end = i + 1 < chapterStartIndexes.length ? chapterStartIndexes[i + 1] : chunks.length;
+      return [start, Math.max(start + 1, end)];
+    });
+
+    // 增量：textHash 命中 existing.chapters 的复用
+    const existingByHash = new Map<string, import('./vectorIndex').ChapterVector>();
+    if (existing?.chapters) {
+      for (const c of existing.chapters) {
+        if (c.textHash) existingByHash.set(c.textHash, c);
+      }
+    }
+
+    const result: import('./vectorIndex').ChapterVector[] = [];
+    const todoIndexes: number[] = [];
+    const todoTexts: string[] = [];
+    chapterTexts.forEach((text, idx) => {
+      const hash = require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32);
+      const reused = existingByHash.get(hash);
+      if (reused && reused.vector?.length) {
+        result.push({
+          chapterIndex: idx,
+          label: chapters[idx].title || `第 ${chapters[idx].chapterNumber ?? idx + 1} 章`,
+          chunkRange: ranges[idx],
+          textHash: hash,
+          vector: reused.vector,
+        });
+      } else {
+        todoIndexes.push(idx);
+        todoTexts.push(text);
+      }
+    });
+
+    // 章节数通常 < 100，一次性批量 embed
+    if (todoTexts.length > 0) {
+      const vecs = await this.embeddingClient.embed(todoTexts);
+      if (!vecs) {
+        // embedding 失败：本次先不写章节索引（不影响 chunk 索引），下次再试
+        return [];
+      }
+      for (let k = 0; k < todoIndexes.length; k++) {
+        const idx = todoIndexes[k];
+        const text = todoTexts[k];
+        const hash = require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32);
+        result.push({
+          chapterIndex: idx,
+          label: chapters[idx].title || `第 ${chapters[idx].chapterNumber ?? idx + 1} 章`,
+          chunkRange: ranges[idx],
+          textHash: hash,
+          vector: vecs[k],
+        });
+      }
+    }
+
+    result.sort((a, b) => a.chapterIndex - b.chapterIndex);
+    return result;
   }
 
   /**

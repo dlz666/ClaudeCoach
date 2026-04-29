@@ -1235,6 +1235,16 @@ export type SidebarCommand =
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Adaptive Insights =====
   | { type: 'getCourseProfile'; subject: Subject }
+  // 流式难度：基于刚做完几道题的表现，再出一道单题
+  | {
+      type: 'practiceAdaptiveNext';
+      subject: Subject;
+      topicId: string;
+      lessonId: string;
+      lessonTitle: string;
+      topicTitle: string;
+      baseDifficulty: number;
+    }
   // ===== Inline 内联编辑（Phase 1） =====
   | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }

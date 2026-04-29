@@ -15,6 +15,10 @@ import { CourseManager } from './courseManager';
 import { writeJson } from '../utils/fileSystem';
 import { writeMarkdownAndPreview } from '../utils/markdown';
 import { CourseProfileStore, normalizeGradeSignals } from '../progress/courseProfileStore';
+import {
+  loadMisconceptionsForSubject,
+  matchMisconceptions,
+} from '../progress/misconceptionTemplates';
 
 interface GradeContext {
   profile?: StudentProfile | null;
@@ -53,6 +57,25 @@ export class Grader {
       exerciseId: exercise.id,
       gradedAt: new Date().toISOString(),
     });
+
+    // Misconception 命中检测：扫学生答案 + AI feedback 的组合，命中已知误区
+    // 把命中的 misconception shortName 前置到 weaknesses，让用户和 AI 后续都看得见
+    const misconceptionLib = loadMisconceptionsForSubject(subject);
+    const hits = matchMisconceptions(
+      `${studentAnswer}\n${gradeResult.feedback ?? ''}`,
+      misconceptionLib,
+    );
+    if (hits.length > 0) {
+      const misconceptionLabels = hits.map((m) => `[误区:${m.id}] ${m.shortName}`);
+      gradeResult.weaknesses = [
+        ...misconceptionLabels,
+        ...(gradeResult.weaknesses ?? []),
+      ];
+      // 命中误区天然属于 concept 类弱项；并入 weaknessTags 去重
+      const tagSet = new Set<import('../types').FeedbackWeaknessTag>(gradeResult.weaknessTags ?? []);
+      hits.forEach((h) => tagSet.add(h.tag));
+      gradeResult.weaknessTags = Array.from(tagSet);
+    }
 
     // Save grade JSON
     const gradePath = this.courseManager.getGradePath(subject, topicId, sessionId);
