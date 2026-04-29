@@ -212,97 +212,261 @@ def find_material(subject: str, material_id: str):
     raise SystemExit(f"未找到 {subject}/{material_id}")
 
 
-def build_index(subject: str, material_id: str, token: str, model: str):
+def build_chapter_index(material: dict, chunks: list, token: str, model: str):
+    """构建章节级 embedding 索引（v2 two-stage retrieval 第一阶段）。
+
+    返回 List[ChapterVector]：每章 { chapterIndex, label, chunkRange, textHash, vector }。
+    需要 summary.json 提供 chapter 结构；若不存在或失败返回 []。
+    """
+    summary_path = Path(material["summaryPath"])
+    if not summary_path.exists():
+        return []
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    chapters = summary.get("chapters", []) or []
+    if not chapters:
+        return []
+
+    # 1. 章节代表文本
+    chapter_texts = []
+    for c in chapters:
+        head = " ".join(filter(None, [str(c.get("chapterNumber", "")).strip(), c.get("title", "")]))
+        body = c.get("summary", "") or ""
+        keys = "；".join((c.get("keyPoints", []) or [])[:5])
+        text = "\n".join(filter(None, [head, body, keys]))
+        chapter_texts.append(text)
+
+    # 2. 在 chunks 数组里反向定位每章 [start, end)
+    starts = []
+    for ci, c in enumerate(chapters):
+        num = str(c.get("chapterNumber", "")).strip()
+        title_head = (c.get("title", "") or "")[:12]
+        probe1 = f"第 {num} 章" if num else ""
+        probe2 = f"Chapter {num}" if num else ""
+        probe3 = f"{num}." if num else ""
+        prev_start = starts[-1] if starts else 0
+        found_at = -1
+        for i in range(prev_start, len(chunks)):
+            head = chunks[i][:220]
+            if (
+                (probe1 and probe1 in head) or
+                (probe2 and probe2 in head) or
+                (title_head and title_head in head and (probe3 in head or ci == 0))
+            ):
+                found_at = i
+                break
+        if found_at < 0:
+            # 兜底：按章节索引在 chunks 中等比例分配
+            found_at = int(ci / max(1, len(chapters)) * len(chunks))
+        starts.append(found_at)
+
+    ranges = []
+    for i, s in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(chunks)
+        ranges.append([s, max(s + 1, end)])
+
+    # 3. 批量 embed（章节通常 < 100，一次到位）
+    print(f"  → 建章节索引 ({len(chapter_texts)} 章)...", end=" ", flush=True)
+    try:
+        vecs = embed_batch(chapter_texts, token, model)
+    except Exception as e:
+        print(f"失败：{e}")
+        return []
+
+    out = []
+    for ci, (text, vec, rng) in enumerate(zip(chapter_texts, vecs, ranges)):
+        out.append({
+            "chapterIndex": ci,
+            "label": chapters[ci].get("title", f"第 {chapters[ci].get('chapterNumber', ci + 1)} 章"),
+            "chunkRange": rng,
+            "textHash": text_hash(text),
+            "vector": vec,
+        })
+    print(f"✓")
+    return out
+
+
+def build_index(subject: str, material_id: str, token: str, model: str, force_rebuild: bool = False):
     material = find_material(subject, material_id)
+    out_path = Path(material["storageDir"]) / "vector-index.json"
+
+    # 增量复用：v1 / v2 都尝试加载
+    existing = None
+    existing_chunks_by_hash = {}
+    if out_path.exists() and not force_rebuild:
+        try:
+            existing = json.loads(out_path.read_text(encoding="utf-8"))
+            for c in existing.get("chunks", []):
+                existing_chunks_by_hash[c.get("textHash")] = c
+            ver = existing.get("version", "?")
+            existing_model = existing.get("model", "")
+            if existing_model != model:
+                print(f"  ⚠ 模型变更（{existing_model} → {model}），完全重建")
+                existing = None
+                existing_chunks_by_hash = {}
+            else:
+                print(f"  ↻ 复用 v{ver} 索引，{len(existing_chunks_by_hash)} 个 chunk hash")
+        except Exception as e:
+            print(f"  ⚠ 读旧索引失败：{e}（重建）")
+            existing = None
+
     print(f"=== 处理 {material['fileName']} ===")
     text_path = Path(material["textPath"])
+    if not text_path.exists():
+        print(f"  ⚠ extracted.txt 不存在，跳过")
+        return False
     print(f"读取 extracted.txt: {text_path.stat().st_size // 1024} KB")
     text = text_path.read_text(encoding="utf-8", errors="replace")
     chunks = chunk_text(text)
     print(f"切分 {len(chunks)} 块（heading-aware）")
-
     if not chunks:
         print("(空文本，跳过)")
-        return
+        return False
 
-    # 简单粗略预估
-    total_chars = sum(len(c) for c in chunks)
-    est_tokens = total_chars // 2  # 粗略，bge-m3 中英混合
-    print(f"总字符 {total_chars}，预估 token {est_tokens}（免费）")
+    # 准备 keep / todo
+    keep_chunks = []
+    todo_indices = []
+    todo_texts = []
+    for i, txt in enumerate(chunks):
+        h = text_hash(txt)
+        existing_chunk = existing_chunks_by_hash.get(h)
+        if existing_chunk and existing_chunk.get("vector"):
+            keep_chunks.append({
+                "chunkIndex": i,
+                "textHash": h,
+                "text": txt,
+                "vector": existing_chunk["vector"],
+            })
+        else:
+            todo_indices.append(i)
+            todo_texts.append(txt)
 
-    out_chunks = []
-    t_start = time.time()
-    for i in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[i : i + BATCH_SIZE]
-        try:
-            vecs = embed_batch(batch, token, model)
-        except Exception as e:
-            print(f"\nbatch {i // BATCH_SIZE} 失败：{e}")
-            print("中断，已完成的不会保存（避免半成品）")
-            return
-        for j, (txt, vec) in enumerate(zip(batch, vecs)):
-            out_chunks.append(
-                {
-                    "chunkIndex": i + j,
+    print(f"  增量复用 {len(keep_chunks)} 块 / 新建 {len(todo_texts)} 块")
+    fresh_chunks = []
+    if todo_texts:
+        t_start = time.time()
+        for k in range(0, len(todo_texts), BATCH_SIZE):
+            batch_texts = todo_texts[k : k + BATCH_SIZE]
+            batch_indices = todo_indices[k : k + BATCH_SIZE]
+            try:
+                vecs = embed_batch(batch_texts, token, model)
+            except Exception as e:
+                print(f"\n  ⚠ batch {k // BATCH_SIZE} 失败：{e}")
+                return False
+            for j, (txt, vec, idx) in enumerate(zip(batch_texts, vecs, batch_indices)):
+                fresh_chunks.append({
+                    "chunkIndex": idx,
                     "textHash": text_hash(txt),
                     "text": txt,
                     "vector": vec,
-                }
-            )
-        print(
-            f"  [{i + len(batch)}/{len(chunks)}] "
-            f"耗时 {time.time() - t_start:.1f}s",
-            end="\r",
-        )
+                })
+            done = len(keep_chunks) + len(fresh_chunks)
+            print(f"  [{done}/{len(chunks)}] 耗时 {time.time() - t_start:.1f}s", end="\r")
+        print()
 
-    print()
-    if not out_chunks:
+    all_chunks = sorted(keep_chunks + fresh_chunks, key=lambda c: c["chunkIndex"])
+    if not all_chunks:
         print("无 chunk 产出")
-        return
+        return False
+    dim = len(all_chunks[0]["vector"])
 
-    dim = len(out_chunks[0]["vector"])
+    # 构章节索引（v2）
+    chapter_vectors = build_chapter_index(material, chunks, token, model)
+
     out = {
-        "version": 1,
+        "version": 2 if chapter_vectors else 1,
         "materialId": material_id,
         "model": model,
         "dimension": dim,
-        "chunks": out_chunks,
+        "chunks": all_chunks,
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
     }
+    if chapter_vectors:
+        out["chapters"] = chapter_vectors
 
-    out_path = Path(material["storageDir"]) / "vector-index.json"
-    out_path.write_text(
-        json.dumps(out, ensure_ascii=False), encoding="utf-8"
-    )
+    out_path.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     size_mb = out_path.stat().st_size / 1024 / 1024
+    chapter_info = f" + {len(chapter_vectors)} 章" if chapter_vectors else ""
     print(
-        f"✅ 已写入 {out_path}\n"
-        f"   {len(out_chunks)} 块 × {dim} 维 = {size_mb:.1f} MB"
+        f"✅ 已写入 v{out['version']} 索引："
+        f"{len(all_chunks)} 块{chapter_info} × {dim} 维 = {size_mb:.1f} MB"
     )
+    return True
+
+
+def get_token() -> str:
+    """优先环境变量；否则从 profiles.json 找 siliconflow token。"""
+    token = os.environ.get("SF_TOKEN", "")
+    if token:
+        return token
+    profiles = json.loads(
+        (CC_ROOT / "app" / "ai" / "profiles.json").read_text(encoding="utf-8")
+    )
+    for p in profiles.get("profiles", []):
+        if "siliconflow.cn" in (p.get("baseUrl") or ""):
+            t = p.get("apiToken") or ""
+            if t:
+                print(f"自动从 profile 「{p['name']}」拿到 token")
+                return t
+    raise SystemExit("无 token，无法继续")
+
+
+def build_all(token: str, model: str, force_rebuild: bool = False):
+    """扫所有学科所有资料，逐个 build。"""
+    idx_path = CC_ROOT / "library" / "materials" / "index.json"
+    if not idx_path.exists():
+        print(f"❌ {idx_path} 不存在")
+        return
+    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    materials = idx.get("materials", [])
+    if not materials:
+        print("无资料")
+        return
+    print(f"\n{'='*70}")
+    print(f"全量重建：{len(materials)} 份资料 跨 {len(set(m['subject'] for m in materials))} 学科")
+    print(f"{'='*70}\n")
+
+    succ, fail = 0, 0
+    t0 = time.time()
+    for i, m in enumerate(materials, 1):
+        print(f"\n[{i}/{len(materials)}] {m['subject']}")
+        try:
+            ok = build_index(m["subject"], m["id"], token, model, force_rebuild=force_rebuild)
+            if ok:
+                succ += 1
+            else:
+                fail += 1
+        except Exception as e:
+            print(f"  ❌ 异常：{e}")
+            fail += 1
+    elapsed = time.time() - t0
+    print(f"\n{'='*70}")
+    print(f"全部完成：成功 {succ} / 失败 {fail} / 耗时 {elapsed:.1f}s")
+    print(f"{'='*70}\n")
 
 
 def main():
     args = sys.argv[1:]
+
+    # --all 一键全部模式
+    if "--all" in args:
+        force = "--force" in args
+        token = get_token()
+        build_all(token, DEFAULT_MODEL, force_rebuild=force)
+        return
+
     if len(args) < 2:
-        print("usage: build_vector_index.py <subject> <materialId> [token] [model]")
+        print("usage:")
+        print("  python build_vector_index.py <subject> <materialId> [token] [model]")
+        print("  python build_vector_index.py --all [--force]   # 一键全部学科 + 升级到 v2")
         sys.exit(1)
+
     subject = args[0]
     material_id = args[1]
-    token = args[2] if len(args) > 2 else os.environ.get("SF_TOKEN", "")
+    token = args[2] if len(args) > 2 else get_token()
     model = args[3] if len(args) > 3 else DEFAULT_MODEL
-    if not token:
-        # 从用户的 profiles.json 找 siliconflow token
-        profiles = json.loads(
-            (CC_ROOT / "app" / "ai" / "profiles.json").read_text(encoding="utf-8")
-        )
-        for p in profiles.get("profiles", []):
-            if "siliconflow.cn" in (p.get("baseUrl") or ""):
-                token = p.get("apiToken") or ""
-                if token:
-                    print(f"自动从 profile 「{p['name']}」拿到 token")
-                    break
-    if not token:
-        raise SystemExit("无 token")
     build_index(subject, material_id, token, model)
 
 

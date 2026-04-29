@@ -2162,21 +2162,51 @@ button.disabled-by-state:hover {
   color: var(--vscode-charts-green, #4ec9b0);
 }
 
-/* 资料卡片：向量索引状态徽章 */
+/* 资料卡片：向量索引状态徽章（三态） */
 .material-vector-badge {
   font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  border-radius: 10px;
   margin-right: 4px;
   font-family: var(--vscode-editor-font-family, monospace);
   white-space: nowrap;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
+  transition: filter 120ms ease, transform 120ms ease;
 }
-.material-vector-badge.indexed {
-  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 20%, transparent);
+button.material-vector-badge {
+  cursor: pointer;
+}
+button.material-vector-badge:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+/* v2 — 已建章节索引（理想状态） */
+.material-vector-badge.v2 {
+  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 22%, transparent);
   color: var(--vscode-charts-green, #4ec9b0);
-  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 40%, transparent);
+  border-color: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 50%, transparent);
 }
-.material-vector-badge.unindexed {
+/* v1 — 已向量化但缺章节索引（建议升级） */
+.material-vector-badge.v1 {
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 22%, transparent);
+  color: var(--vscode-charts-yellow, #d4a017);
+  border-color: color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 50%, transparent);
+}
+/* 未向量化 */
+.material-vector-badge.unvectorized {
+  background: color-mix(in srgb, var(--vscode-charts-red, #f48771) 14%, transparent);
+  color: var(--vscode-charts-red, #f48771);
+  border-color: color-mix(in srgb, var(--vscode-charts-red, #f48771) 35%, transparent);
+}
+/* 兼容旧 class（万一缓存了），样式同 v2 / unvectorized */
+.material-vector-badge.indexed { /* legacy */
+  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 22%, transparent);
+  color: var(--vscode-charts-green, #4ec9b0);
+}
+.material-vector-badge.unindexed { /* legacy */
   color: var(--cc-text-tertiary, var(--vscode-descriptionForeground));
   opacity: 0.5;
 }

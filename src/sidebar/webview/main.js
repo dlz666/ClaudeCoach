@@ -1217,13 +1217,24 @@
 
     const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
     const vectorStats = state.materials.vectorStats || {};
+    /**
+     * 三态徽章：
+     * - 灰色 "未向量化"  → 点击触发 reindex
+     * - 黄色 "v1 N 块"   → 已向量化但无章节索引（旧 schema）。点击 reindex 升级
+     * - 绿色 "v2 N+M 章" → 已向量化 + 章节级 prefilter 启用
+     */
     const renderVectorBadge = (item) => {
       const stats = vectorStats[item.id];
       if (!stats || !stats.exists || !stats.chunks) {
-        return '<span class="material-vector-badge unindexed" title="未建向量索引">●</span>';
+        return `<button class="material-vector-badge unvectorized" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="未向量化 · 点击建索引（免费 / 几十秒）" type="button">●&nbsp;未向量化</button>`;
       }
-      const dimText = stats.dimension ? ` ${stats.dimension}维` : '';
-      return `<span class="material-vector-badge indexed" title="已向量化 · ${stats.chunks} 块${dimText}${stats.model ? ' · ' + stats.model : ''}">▣ ${stats.chunks}</span>`;
+      const hasChapters = (stats.chapters ?? 0) > 0;
+      const dimText = stats.dimension ? `${stats.dimension}维` : '';
+      const modelText = stats.model || '';
+      if (hasChapters) {
+        return `<span class="material-vector-badge v2" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${stats.chapters} 章 · ${modelText} ${dimText}">▣ v2 · ${stats.chunks}+${stats.chapters}章</span>`;
+      }
+      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>`;
     };
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
       <div class="material-group">
@@ -1266,6 +1277,18 @@
           materialId: button.getAttribute('data-id'),
           fileName: button.getAttribute('data-name'),
         });
+      });
+    });
+
+    // 向量徽章点击：触发该资料单独 reindex（升级 v1→v2 或建首次）
+    els.materialsList.querySelectorAll('[data-vec-action="rebuild"]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const materialId = button.getAttribute('data-material-id');
+        const subject = button.getAttribute('data-subject');
+        if (!materialId || !subject) return;
+        vscode.postMessage({ type: 'reindexSingleMaterial', materialId, subject });
+        addLog(`已开始向量化资料 (${subject})`, 'info');
       });
     });
   }
@@ -3308,6 +3331,10 @@
       vscode.postMessage({ type: 'reindexAllVectors', subject, requireConfirm: true });
     });
   }
+  // 全学科一键重建（升级 v1 → v2 + 建所有未索引）
+  document.getElementById('btn-reindex-all-subjects')?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'reindexAllSubjectsAllVectors', requireConfirm: true });
+  });
 
   // 讲义阅读体验
   els.lectureReaderModeRadios?.forEach((r) => bindAutoSave(r));

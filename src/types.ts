@@ -1232,6 +1232,8 @@ export type SidebarCommand =
   // ===== Hybrid RAG（向量检索） =====
   | { type: 'testEmbedding'; config: { baseUrl: string; apiToken: string; model: string; dimension?: number } }
   | { type: 'reindexAllVectors'; subject: Subject; requireConfirm?: boolean }
+  | { type: 'reindexSingleMaterial'; subject: Subject; materialId: string }
+  | { type: 'reindexAllSubjectsAllVectors'; requireConfirm?: boolean }
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Adaptive Insights =====
   | { type: 'getCourseProfile'; subject: Subject }
@@ -1287,7 +1289,14 @@ export type SidebarResponse =
       type: 'materials';
       data: MaterialIndex;
       /** 可选：每份资料的向量索引状态，用于资料卡片显示 */
-      vectorStats?: Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }>;
+      vectorStats?: Record<string, {
+        exists: boolean;
+        chunks: number;
+        chapters?: number;
+        version?: number;
+        model?: string;
+        dimension?: number;
+      }>;
     }
   | { type: 'materialPreview'; data: MaterialPreview }
   | { type: 'resolvedAIConfig'; data: ResolvedAIConfig; workspaceOverride: AIWorkspaceOverride }

@@ -224,18 +224,49 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * 收集 index 内所有资料的向量索引状态。
    * 静态读单文件 + JSON parse，几十份资料 < 50ms，可接受。
+   * 同时返回 chapter 数量，用于 UI 区分 v1（无章节）/ v2（含章节）。
    */
   private async _collectVectorStats(index: MaterialIndex): Promise<
-    Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }>
+    Record<string, {
+      exists: boolean;
+      chunks: number;
+      chapters?: number;
+      version?: number;
+      model?: string;
+      dimension?: number;
+    }>
   > {
-    const out: Record<string, { exists: boolean; chunks: number; model?: string; dimension?: number }> = {};
+    const out: Record<string, {
+      exists: boolean;
+      chunks: number;
+      chapters?: number;
+      version?: number;
+      model?: string;
+      dimension?: number;
+    }> = {};
     await Promise.all(
       index.materials.map(async (m) => {
         try {
           const stats = await this.materialManager.getVectorIndexStats(m);
+          // 多读一次 raw 文件取 chapters 数 + version（getVectorIndexStats 没暴露这俩）
+          let chapterCount: number | undefined;
+          let version: number | undefined;
+          if (stats.exists) {
+            try {
+              const fs = await import('fs/promises');
+              const path = await import('path');
+              const vecPath = path.join(m.storageDir ?? '', 'vector-index.json');
+              const raw = await fs.readFile(vecPath, 'utf-8');
+              const parsed = JSON.parse(raw);
+              chapterCount = Array.isArray(parsed.chapters) ? parsed.chapters.length : 0;
+              version = Number(parsed.version) || undefined;
+            } catch { /* fallback to undefined */ }
+          }
           out[m.id] = {
             exists: stats.exists,
             chunks: stats.chunks,
+            chapters: chapterCount,
+            version,
             model: stats.model,
             dimension: stats.dimension,
           };
@@ -2468,6 +2499,80 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               level: result.ok ? 'info' : 'warn',
             });
             this._post({ type: 'vectorReindexComplete', data: result });
+          });
+          break;
+        }
+
+        case 'reindexSingleMaterial': {
+          // 单条资料重建/升级（用户点击徽章）
+          const subject = (msg as any).subject as Subject | undefined;
+          const materialId = String((msg as any).materialId ?? '');
+          if (!subject || !materialId) break;
+          this._startTask(`向量化 · ${materialId}`, async () => {
+            const idx = await this.materialManager.getIndex();
+            const material = idx.materials.find((m) => m.id === materialId);
+            if (!material) {
+              this._post({ type: 'log', message: `未找到资料 ${materialId}`, level: 'warn' });
+              return;
+            }
+            // 强制重建：先删旧索引（避免 v1 缓存阻碍 v2 升级）
+            await this.materialManager.removeVectorIndexFor(material);
+            const result = await this.materialManager.ensureVectorIndexFor(material, (event) => {
+              if (event.kind === 'error') {
+                this._post({ type: 'log', message: `[向量化失败] ${event.fileName}：${event.message ?? ''}`, level: 'error' });
+              }
+            });
+            this._post({
+              type: 'log',
+              message: result.ok
+                ? `资料已向量化：${material.fileName}（${result.embedded} 新 / ${result.reused} 复用）`
+                : `资料向量化失败：${material.fileName} — ${result.error ?? '未知'}`,
+              level: result.ok ? 'info' : 'warn',
+            });
+            await this._refreshMaterials();
+          });
+          break;
+        }
+
+        case 'reindexAllSubjectsAllVectors': {
+          // 全学科一键全部重建（升级所有 v1 → v2，建所有缺失索引）
+          if ((msg as any).requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              `将为所有学科的所有资料重建向量索引（升级 v1 → v2）。可能需要数分钟（视资料体量）。是否继续？`,
+              { modal: true },
+              '继续重建',
+            );
+            if (choice !== '继续重建') {
+              this._post({ type: 'log', message: '已取消全量重建', level: 'info' });
+              break;
+            }
+          }
+          this._startTask('全学科向量化', async () => {
+            const idx = await this.materialManager.getIndex();
+            let succ = 0;
+            let fail = 0;
+            for (const material of idx.materials) {
+              if (material.status !== 'indexed') continue;
+              try {
+                await this.materialManager.removeVectorIndexFor(material);
+                const result = await this.materialManager.ensureVectorIndexFor(material, () => {});
+                if (result.ok) { succ++; } else { fail++; }
+                this._post({
+                  type: 'log',
+                  message: `[${material.subject}] ${material.fileName} → ${result.ok ? `✓ ${result.embedded} 新 / ${result.reused} 复用` : `✗ ${result.error ?? ''}`}`,
+                  level: result.ok ? 'info' : 'warn',
+                });
+              } catch (err: any) {
+                fail++;
+                this._post({ type: 'log', message: `[${material.subject}] 异常：${err?.message ?? err}`, level: 'error' });
+              }
+            }
+            this._post({
+              type: 'log',
+              message: `全学科向量化完成：成功 ${succ} / 失败 ${fail}`,
+              level: fail === 0 ? 'info' : 'warn',
+            });
+            await this._refreshMaterials();
           });
           break;
         }
