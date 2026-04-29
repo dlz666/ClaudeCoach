@@ -126,6 +126,10 @@ export async function activate(context: vscode.ExtensionContext) {
       examVariantGenerator,
       examGrader,
     },
+    // 重要：复用 extension.ts 创建（已 setHybridDeps）的 materialManager 实例。
+    // 否则 SidebarProvider 会自己 new 一个 MaterialManager，没有 hybrid 依赖，
+    // 所有资料的向量化状态读出来都是 false（即便磁盘上 vector-index.json 已存在）。
+    materialManager,
   );
 
   const refreshStatusBar = async () => {

@@ -105,7 +105,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private contentGen = new ContentGenerator();
   private grader = new Grader();
   private courseManager = new CourseManager();
-  private materialManager = new MaterialManager();
+  /**
+   * MaterialManager 由 extension.ts 注入（必须 — 共享 hybrid RAG 依赖）。
+   * 之前的 bug：SidebarProvider 自己 new MaterialManager()，跟 extension.ts
+   * 的实例不是同一个，导致 setHybridDeps 配的 vectorIndex 永远拿不到，所有
+   * 资料显示"未向量化"且无法 reindex（"hybrid 未初始化"错误）。
+   */
+  private readonly materialManager: MaterialManager;
   private progressStore = new ProgressStore();
   private prefsStore = new PreferencesStore();
   private adaptiveEngine = new AdaptiveEngine();
@@ -126,7 +132,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private readonly onAIConfigChanged?: () => void,
     private readonly coachDeps?: SidebarCoachDeps,
     private readonly examDeps?: SidebarExamDeps,
+    /** Hybrid RAG 共享：必须从 extension.ts 注入已 setHybridDeps 的实例 */
+    materialManager?: MaterialManager,
   ) {
+    this.materialManager = materialManager ?? new MaterialManager();
     this.materialManager.onDidChangeIndex((index) => {
       void this._collectVectorStats(index).then((vectorStats) => {
         this._post({ type: 'materials', data: index, vectorStats });
