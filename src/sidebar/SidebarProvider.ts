@@ -2513,22 +2513,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'reparseMaterialSummary': {
-          // 重新解析 summary.json 的章节结构（适用于章节识别不全的资料）
+          // 重新解析 summary.json 的章节结构 + **自动级联重建** 向量索引应用新章节
           const materialId = String((msg as any).materialId ?? '');
           if (!materialId) break;
-          this._startTask(`重新解析章节 · ${materialId}`, async () => {
-            const result = await this.materialManager.reparseMaterialSummary(materialId);
-            if (result.ok) {
+          this._startTask(`重新解析章节 + 重建 · ${materialId}`, async () => {
+            const reparseResult = await this.materialManager.reparseMaterialSummary(materialId);
+            if (!reparseResult.ok) {
               this._post({
                 type: 'log',
-                message: `章节重新解析完成：${result.chaptersBefore} → ${result.chaptersAfter} 章。请点击徽章触发重建以应用新章节索引。`,
-                level: 'info',
-              });
-            } else {
-              this._post({
-                type: 'log',
-                message: `章节重新解析失败：${result.error ?? '未知'}`,
+                message: `章节重新解析失败：${reparseResult.error ?? '未知'}`,
                 level: 'error',
+              });
+              return;
+            }
+            this._post({
+              type: 'log',
+              message: `章节重新解析完成：${reparseResult.chaptersBefore} → ${reparseResult.chaptersAfter} 章，正在自动重建向量索引...`,
+              level: 'info',
+            });
+
+            // 自动级联重建（用户不用再去找绿徽章点）
+            const idx = await this.materialManager.getIndex();
+            const material = idx.materials.find((m) => m.id === materialId);
+            if (material) {
+              const buildResult = await this.materialManager.ensureVectorIndexFor(material, (event) => {
+                if (event.kind === 'error') {
+                  this._post({ type: 'log', message: `[向量化失败] ${event.fileName}：${event.message ?? ''}`, level: 'warn' });
+                }
+              });
+              this._post({
+                type: 'log',
+                message: buildResult.ok
+                  ? `章节索引已应用：${reparseResult.chaptersAfter} 章 + ${buildResult.chunks} 块 (${buildResult.embedded} 新 / ${buildResult.reused} 复用)`
+                  : `重建失败：${buildResult.error ?? '未知'}（请稍后再点徽章重试）`,
+                level: buildResult.ok ? 'info' : 'warn',
               });
             }
             await this._refreshMaterials();

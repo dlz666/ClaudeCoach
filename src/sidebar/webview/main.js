@@ -1218,27 +1218,28 @@
     const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
     const vectorStats = state.materials.vectorStats || {};
     /**
-     * 三态徽章：
-     * - 灰色 "未向量化"  → 点击触发 reindex
-     * - 黄色 "v1 N 块"   → 已向量化但无章节索引（旧 schema）。点击 reindex 升级
-     * - 绿色 "v2 N+M 章" → 已向量化 + 章节级 prefilter 启用
-     * 章节数过少（< 3）时额外显示"重新解析章节"提示按钮，因为可能是 textbookParser 漏抓了
+     * 三态徽章（全部可点击，触发重建/升级）：
+     * - 红色 "未向量化"  → 点击建索引
+     * - 黄色 "v1 N 块"   → 点击升级 v2
+     * - 绿色 "v2 N+M 章" → 点击触发重建（章节数变了 / 强制刷新）
+     * 章节数过少（< 3）时额外显示"重新解析"按钮，会"先 reparse 再自动 rebuild"
      */
     const renderVectorBadge = (item) => {
       const stats = vectorStats[item.id];
       if (!stats || !stats.exists || !stats.chunks) {
         return `<button class="material-vector-badge unvectorized" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="未向量化 · 点击建索引（免费 / 几十秒）" type="button">●&nbsp;未向量化</button>`;
       }
-      const hasChapters = (stats.chapters ?? 0) > 0;
       const chapterCount = stats.chapters ?? 0;
+      const hasChapters = chapterCount > 0;
       const dimText = stats.dimension ? `${stats.dimension}维` : '';
       const modelText = stats.model || '';
       if (hasChapters) {
         // 章节过少（< 3）暗示 textbookParser 没识全 → 给个修复入口
+        // 重新解析按钮：会触发 reparseMaterialSummary，后端跑完会自动触发 rebuild
         const reparseHint = chapterCount < 3 && stats.chunks > 200
-          ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析后再 rebuild" type="button">⚠ 重新解析</button>`
+          ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析+重建" type="button">⚠ 重新解析</button>`
           : '';
-        return `<span class="material-vector-badge v2" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText}">▣ v2 · ${stats.chunks}+${chapterCount}章</span>${reparseHint}`;
+        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}`;
       }
       return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>`;
     };
