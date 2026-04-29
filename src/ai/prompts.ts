@@ -711,11 +711,20 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
       role: 'system',
       content: buildSystemBase(scopedCtx) + `\n请用 Markdown 写一篇详细讲义。
 要求：
-- 开头先写“关键概念摘要”
+- 开头先写"关键概念摘要"（4-7 条 bullet，含中英术语并置）
+- 第一节是"为什么学这个"，给学生一个具体动机 / 应用场景 / 类比
 - 包含循序渐进的讲解、例题和解析
-- 结尾加“练习预告”
+- 在 2-3 个关键节点插入"想一想"小问题（1-2 行），鼓励读者暂停思考
+- 结尾用 5 句话做"本节小结"
 - 难度等级：${difficulty}/5
-- 多步推导时，每一步尽量独立展示，避免把太多推导挤在一个公式块里`,
+- 多步推导时，每一步尽量独立展示，避免把太多推导挤在一个公式块里
+- 写作风格约束（重要）：
+  · 输出是独立的教材页面，不是聊天对话
+  · 不要写"我下一条可以..."、"如果你愿意，我可以..."、"接下来我会..."这类
+    AI 对话口吻的句子
+  · 不要在末尾加"练习预告"或类似的导航段（练习是另一个独立动作）
+  · 不要写"作为 AI"、"我建议你"等暴露 AI 身份的措辞
+  · 用第二人称"你"或不指定主语，像优秀网课讲师那样直接讲内容`,
     },
     { role: 'user', content: `请为“${subjectLabel(subject)}”课程中“${topicTitle}”主题下的“${lessonTitle}”编写讲义。` },
   ];
@@ -770,6 +779,7 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
   "weaknesses": ["不足1"],
   "strengthTags": ["clarity"],
   "weaknessTags": ["concept"],
+  "preferenceTags": ["needs-steps"],
   "confidence": "medium"
 }
 要求：
@@ -777,6 +787,15 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
 - 反馈具体、可执行
 - strengthTags 只能从 accuracy reasoning clarity structure application other 中选择
 - weaknessTags 只能从 concept syntax logic edge-case complexity debugging other 中选择
+- preferenceTags（重要！用来沉淀学生的"学习风格信号"，直接影响后续讲义生成）：
+  · 只从 [too-abstract, needs-steps, needs-example, too-verbose, too-brief, notation-confusing, pace-too-fast, pace-too-slow] 中选择 0-3 个
+  · 推断信号：
+    - 学生答案过短 / 跳步骤 → 'too-brief' 或 'needs-steps'
+    - 学生用大量符号但不解释 → 'notation-confusing'
+    - 答得对但啰嗦 → 'too-verbose'
+    - 答案显示概念混淆 → 'too-abstract' 或 'needs-example'
+    - 学生留空 / "不会" → 'pace-too-fast'（可能讲义太快了）
+  · 没有明显信号就给空数组 []，不要编造
 - confidence 只能是 low medium high
 - strengths 和 weaknesses 保持简洁，便于后续沉淀到课程 profile
 - 只输出 JSON`,

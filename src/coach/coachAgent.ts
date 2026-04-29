@@ -146,13 +146,12 @@ export class CoachAgent implements vscode.Disposable {
       console.error('[CoachAgent] registerAllLoops error:', err);
     }
 
-    console.log('[CoachAgent] started, tick=5min, loops=%d', this.loops.length);
+    // 启动日志在 dev 时仍有用，但 prod 不该泄露到 user-facing console
   }
 
   /** Loop 在 Phase 3 通过这个 hook 注册自己。Phase 2A 留空可用。 */
   registerLoop(loop: CoachLoop): void {
     this.loops.push(loop);
-    console.log('[CoachAgent] registerLoop: %s', loop.name);
   }
 
   /**

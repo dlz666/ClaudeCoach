@@ -403,6 +403,15 @@
     btnCoachRefreshBrief: $('btn-coach-refresh-brief'),
     btnCoachDnd: $('btn-coach-dnd'),
 
+    // ===== Onboarding =====
+    onboardingCard: $('onboarding-card'),
+    onboardingStepAi: $('onboarding-step-ai'),
+    onboardingStepCourse: $('onboarding-step-course'),
+    onboardingStepMaterial: $('onboarding-step-material'),
+    onboardingStepLesson: $('onboarding-step-lesson'),
+    btnOnboardingDismiss: $('btn-onboarding-dismiss'),
+    btnOnboardingGoAi: $('btn-onboarding-go-ai'),
+
     // ===== 学习计划 =====
     learningPlanSection: $('learning-plan-section'),
     btnEditPlan: $('btn-edit-plan'),
@@ -1751,6 +1760,29 @@
     if (els.uiTreeDefaultExpand) els.uiTreeDefaultExpand.checked = merged.ui?.expandCourseTree !== false;
     setRadioGroup(els.uiThemeRadios, merged.ui?.theme || 'auto');
     if (els.uiShowEmoji) els.uiShowEmoji.checked = merged.ui?.showEmoji !== false;
+    applyShowEmoji(merged.ui?.showEmoji !== false);
+  }
+
+  /**
+   * P2-1: showEmoji=false 时隐藏 emoji。HTML 里硬编码了大量 emoji，做 CSS 控制
+   * 太繁琐；改用 JS 一次性 DOM 替换：把 h3 / button / label 等头部的 emoji 字符
+   * 删掉。开启时刷新页面才能恢复（用户不会频繁切换）。
+   */
+  function applyShowEmoji(show) {
+    document.body.classList.toggle('no-emoji', !show);
+    if (show) return; // 开着就什么也不做
+    const EMOJI_LEAD = /^\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]+\s*/u;
+    const EMOJI_INLINE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/gu;
+    document.querySelectorAll('h1, h2, h3, h4, summary, .panel-header h3, button').forEach((el) => {
+      // 只处理不含子元素的纯文本节点（避免破坏内联结构）
+      const child = el.firstChild;
+      if (child && child.nodeType === Node.TEXT_NODE) {
+        const stripped = (child.textContent || '').replace(EMOJI_LEAD, '').replace(EMOJI_INLINE, '').trim();
+        if (stripped !== child.textContent?.trim()) {
+          child.textContent = stripped + (child.textContent?.endsWith(' ') ? ' ' : '');
+        }
+      }
+    });
   }
 
   /**
@@ -1936,6 +1968,113 @@
   }
 
   // ===== AI Profile 列表渲染 =====
+  /**
+   * P0-5: 设置页"默认打开"哪个组的策略：
+   * - 没有 AI Profile / 没有 active profile → 打开 "AI 配置中心" (group-ai-config)
+   * - 已配置 → 打开 "学习节奏与目标" (group-pace)，作为常用入口
+   * 仅在用户没有手动展开任何组时生效（避免覆盖用户当前操作）。
+   */
+  function applyDefaultSettingsOpen() {
+    const allGroups = document.querySelectorAll('details.settings-group');
+    const anyOpen = Array.from(allGroups).some((d) => d.open);
+    if (anyOpen) return;
+    const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+    const hasActive = profiles.length > 0 && state.activeProfileId;
+    const targetId = hasActive ? 'group-pace' : 'group-ai-config';
+    const target = document.getElementById(targetId);
+    if (target && 'open' in target) {
+      target.open = true;
+    }
+  }
+
+  /**
+   * P1-2: 关键按钮根据"前置条件是否满足"显示 disabled 状态。
+   * 不只看活跃任务（updateTaskBlockedState 已处理），还看：
+   *   - 没 AI profile → 凡是要调 AI 的全 disabled
+   *   - 没选学科 → 凡是要 subject 的 disabled
+   * tooltip 提示用户为什么不能点
+   */
+  function applyDisabledStates() {
+    const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+    const hasActiveAI = profiles.length > 0 && state.activeProfileId;
+    const hasSubject = !!state.selectedSubject;
+
+    const setDisabled = (el, why) => {
+      if (!el) return;
+      if (why) {
+        el.setAttribute('disabled', 'true');
+        el.setAttribute('title', why);
+        el.classList.add('disabled-by-state');
+      } else {
+        el.removeAttribute('disabled');
+        // 不能 removeAttribute('title') 直接清掉用户原本设置的 title — 仅在 disabled-by-state 时改
+        if (el.classList.contains('disabled-by-state')) {
+          const original = el.dataset.originalTitle;
+          if (typeof original === 'string') {
+            el.setAttribute('title', original);
+          } else {
+            el.removeAttribute('title');
+          }
+        }
+        el.classList.remove('disabled-by-state');
+      }
+    };
+
+    // 需要 AI 的按钮
+    [
+      els.btnGenerateCourse,
+      els.btnDiagnosis,
+      els.btnChatRebuildOutline,
+      els.btnOutlineRebuildPreview,
+    ].forEach((btn) => setDisabled(btn, hasActiveAI ? null : '请先在设置 → AI 配置中心 配置 AI Profile'));
+
+    // 需要选学科的按钮
+    [
+      els.btnDiagnosis,
+      els.btnImportCourseMaterial,
+    ].forEach((btn) => setDisabled(btn, hasSubject ? null : '请先选择课程'));
+
+    // 重建向量索引：需要选学科 + embedding 已启用
+    if (els.btnReindexVectors) {
+      const embeddingOn = state.preferences?.retrieval?.embedding?.enabled === true;
+      if (!hasSubject) setDisabled(els.btnReindexVectors, '请先选择课程');
+      else if (!embeddingOn) setDisabled(els.btnReindexVectors, '请先启用向量检索');
+      else setDisabled(els.btnReindexVectors, null);
+    }
+  }
+
+  /**
+   * P1-1: 首次使用 onboarding 引导。规则：
+   * - 用户已主动 dismiss（localStorage 记一次性 flag） → 永不再显示
+   * - 已配置 AI + 有课程 + 有讲义 → 隐藏（说明已经上手）
+   * - 否则按当前进度高亮 next step
+   */
+  function applyOnboardingState() {
+    if (!els.onboardingCard) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('cc.onboarding.dismissed') === '1'; } catch {}
+    const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+    const hasActiveAI = profiles.length > 0 && state.activeProfileId;
+    const courses = Array.isArray(state.courses) ? state.courses : [];
+    const hasCourse = courses.length > 0;
+    const materials = (state.materials?.materials || []).length > 0;
+    const hasLesson = courses.some((c) => (c.topics || []).some(
+      (t) => (t.lessons || []).some((l) => l.status && l.status !== 'not-started'),
+    ));
+
+    // 全部完成 OR 用户 dismiss → 隐藏
+    if (dismissed || (hasActiveAI && hasCourse && hasLesson)) {
+      els.onboardingCard.classList.add('hidden');
+      return;
+    }
+    // 否则显示，标记完成步骤
+    els.onboardingCard.classList.remove('hidden');
+    if (els.onboardingStepAi) els.onboardingStepAi.classList.toggle('done', !!hasActiveAI);
+    if (els.onboardingStepCourse) els.onboardingStepCourse.classList.toggle('done', !!hasCourse);
+    if (els.onboardingStepMaterial) els.onboardingStepMaterial.classList.toggle('done', !!materials);
+    if (els.onboardingStepLesson) els.onboardingStepLesson.classList.toggle('done', !!hasLesson);
+  }
+
   function renderAIProfiles() {
     if (!els.aiProfilesList) return;
     const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
@@ -2490,6 +2629,21 @@
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
 
+  // P1-1: Onboarding 按钮
+  els.btnOnboardingDismiss?.addEventListener('click', () => {
+    try { localStorage.setItem('cc.onboarding.dismissed', '1'); } catch {}
+    if (els.onboardingCard) els.onboardingCard.classList.add('hidden');
+  });
+  els.btnOnboardingGoAi?.addEventListener('click', () => {
+    activateTab('settings');
+    // 滚到 AI 配置中心 + 展开
+    const target = document.getElementById('group-ai-config');
+    if (target) {
+      target.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+
   els.ddTrigger?.addEventListener('click', (event) => {
     event.stopPropagation();
     els.ddMenu?.classList.toggle('hidden');
@@ -2994,10 +3148,8 @@
         showToast('请先在课程页选定一个学科', 'warn');
         return;
       }
-      if (!confirm(`将为学科「${subject}」的所有资料重建向量索引。可能需要数分钟，是否继续？`)) {
-        return;
-      }
-      vscode.postMessage({ type: 'reindexAllVectors', subject });
+      // confirm() 在 VS Code webview 里不工作；交给后端用 vscode.window.showWarningMessage 弹 modal
+      vscode.postMessage({ type: 'reindexAllVectors', subject, requireConfirm: true });
     });
   }
 
@@ -3425,6 +3577,8 @@
           state.selectedSubject = state.courses[0].subject;
         }
         onCourseSelected();
+        applyOnboardingState();
+        applyDisabledStates();
         break;
       }
       case 'courseGenerated': {
@@ -3678,6 +3832,11 @@
         }
         renderAIProfiles();
         renderWorkspaceAIOverride();
+        // P0-5: 首次/没配置 profile 时，设置页默认打开 "AI 配置中心"
+        applyDefaultSettingsOpen();
+        // P1-1 & P1-2: AI 配置变化触发 onboarding 状态 + 按钮可用性更新
+        applyOnboardingState();
+        applyDisabledStates();
         break;
       }
       case 'aiProfileSaved': {

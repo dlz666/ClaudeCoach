@@ -17,18 +17,61 @@
   </nav>
 
   <div id="tab-learn" class="tab-content active">
-    <section class="panel coach-card hidden" id="coach-today-section">
+    <!-- 首次使用 onboarding 引导（动态显示，仅当 AI 未配置时）-->
+    <section class="panel onboarding-card hidden" id="onboarding-card">
+      <div class="panel-header">
+        <div>
+          <h3>👋 欢迎使用 ClaudeCoach</h3>
+          <p class="section-subtitle">几步配置即可开始你的个性化学习</p>
+        </div>
+        <button class="btn ghost small" id="btn-onboarding-dismiss" title="关闭引导" type="button">✕</button>
+      </div>
+      <ol class="onboarding-steps">
+        <li id="onboarding-step-ai">
+          <span class="step-num">1</span>
+          <div>
+            <strong>配置 AI</strong>
+            <p class="muted">设置 → AI 配置中心，填入 baseUrl、token、model</p>
+            <button class="btn small" id="btn-onboarding-go-ai">前往配置</button>
+          </div>
+        </li>
+        <li id="onboarding-step-course">
+          <span class="step-num">2</span>
+          <div>
+            <strong>创建第一门课程</strong>
+            <p class="muted">在课程下拉里选 + 新建课程</p>
+          </div>
+        </li>
+        <li id="onboarding-step-material">
+          <span class="step-num">3</span>
+          <div>
+            <strong>导入参考资料（可选）</strong>
+            <p class="muted">PDF / MD / TXT 都可，AI 生成讲义时会引用</p>
+          </div>
+        </li>
+        <li id="onboarding-step-lesson">
+          <span class="step-num">4</span>
+          <div>
+            <strong>生成讲义 → 写答案 → 自动批改</strong>
+            <p class="muted">闭环 2 分钟跑完，错题进错题本，AI 后续讲义会针对你的弱项</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- 今日 Coach（P1-4: 默认显示带 placeholder，不要默认 hidden）-->
+    <section class="panel coach-card" id="coach-today-section">
       <div class="panel-header">
         <div>
           <h3>🤖 今日 Coach</h3>
-          <p class="section-subtitle" id="coach-brief-subtitle">加载中...</p>
+          <p class="section-subtitle" id="coach-brief-subtitle">你的个性化学习线索</p>
         </div>
         <div class="coach-card-actions">
-          <button class="btn ghost small" id="btn-coach-refresh-brief" title="刷新今日建议" type="button">↻</button>
+          <button class="btn ghost small" id="btn-coach-refresh-brief" title="生成今日建议" type="button">↻</button>
           <button class="btn ghost small" id="btn-coach-dnd" title="勿扰 1 小时" type="button">🔕</button>
         </div>
       </div>
-      <div id="coach-brief-body" class="muted">点击上方 ↻ 生成今日建议。</div>
+      <div id="coach-brief-body" class="muted">点击上方 ↻ 生成今日建议。基于你昨天的学习活动和待复习错题给出 3 条具体动作。</div>
       <div id="coach-suggestions-list"></div>
     </section>
 
@@ -183,7 +226,7 @@
   <div id="tab-settings" class="tab-content">
     <input type="text" class="settings-search" id="settings-search" placeholder="搜索设置...">
 
-    <details class="settings-group" id="group-pace" open>
+    <details class="settings-group" id="group-pace">
       <summary>
         <span>学习节奏与目标</span>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="pace">恢复默认</button>

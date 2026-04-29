@@ -1625,7 +1625,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
 
           this._startTask(msg.lessonTitle + ' 练习', async () => {
-            const [prefs, diag, profile, lessonWrongs] = await Promise.all([
+            const [prefs, diag, profile, lessonWrongs, triggerState] = await Promise.all([
               this.prefsStore.get(),
               this.adaptiveEngine.getLatestDiagnosis(msg.subject),
               this.progressStore.getProfile(),
@@ -1635,6 +1635,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 onlyUnresolved: true,
                 limit: 5,
               }),
+              this.adaptiveEngine.getTriggerState(msg.subject),
             ]);
             const exerciseMaxExcerpts = await this._resolveMaxExcerpts('normal');
             const grounding = await this._buildSubjectGrounding(
@@ -1645,7 +1646,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateExercises(
               msg.subject, msg.topicId, msg.lessonId, msg.lessonTitle, msg.count, msg.difficulty,
-              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              {
+                profile,
+                preferences: prefs,
+                diagnosis: diag,
+                ...courseProfileContext,
+                ...grounding,
+                // P1-3: streak 信号让难度调节即便单 grade 也能生效
+                streak: triggerState.streak,
+                streakDirection: triggerState.streakDirection,
+              },
               lessonWrongs,
             );
             await this.progressStore.incrementSession();
@@ -1900,10 +1910,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const lessonWrongs = wrongs.filter((item) => item.lessonId === lessonId);
             const focusedWrongs = (lessonWrongs.length ? lessonWrongs : wrongs).slice(0, 3);
 
-            const [prefs, diag, profile] = await Promise.all([
+            const [prefs, diag, profile, triggerState] = await Promise.all([
               this.prefsStore.get(),
               this.adaptiveEngine.getLatestDiagnosis(subject),
               this.progressStore.getProfile(),
+              this.adaptiveEngine.getTriggerState(subject),
             ]);
             const wrongPracticeMaxExcerpts = await this._resolveMaxExcerpts('light');
             const grounding = await this._buildSubjectGrounding(
@@ -1915,7 +1926,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
             await this.contentGen.generateExercises(
               subject, topicId, lessonId, lessonTitle, count, 3,
-              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              {
+                profile,
+                preferences: prefs,
+                diagnosis: diag,
+                ...courseProfileContext,
+                ...grounding,
+                streak: triggerState.streak,
+                streakDirection: triggerState.streakDirection,
+              },
               focusedWrongs,
             );
             await this._refreshCourses();
@@ -2314,6 +2333,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (!subject) {
             this._post({ type: 'log', message: '请选择学科再重建向量索引', level: 'warn' });
             break;
+          }
+          // confirm() 在 webview 里不工作；用原生 modal warning 询问
+          if ((msg as any).requireConfirm) {
+            const choice = await vscode.window.showWarningMessage(
+              `将为学科「${subject}」的所有资料重建向量索引。此操作可能需要数分钟（视资料体量）。是否继续？`,
+              { modal: true },
+              '继续重建',
+            );
+            if (choice !== '继续重建') {
+              this._post({ type: 'log', message: '已取消向量索引重建', level: 'info' });
+              break;
+            }
           }
           this._startTask(`向量化资料（${subject}）`, async () => {
             const result = await this.materialManager.reindexAllVectors(subject, (event) => {

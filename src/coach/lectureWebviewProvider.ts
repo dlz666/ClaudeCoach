@@ -228,7 +228,7 @@ export class LectureWebviewProvider {
         await this.handleInlineApply(ctx, msg.request as InlineApplyRequest);
         return;
       case 'inlineDismiss':
-        console.log(`[LectureWebview] turn ${msg.turnId} dismissed by user`);
+        // turn 被 user 丢弃；不需要持久化，前端已自行清掉
         return;
       case 'requestReload':
         try {
@@ -244,7 +244,7 @@ export class LectureWebviewProvider {
         }
         return;
       default:
-        console.log('[LectureWebview] unknown message type:', msg.type);
+        return;
     }
   }
 

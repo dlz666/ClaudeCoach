@@ -80,6 +80,9 @@ export class Grader {
       summary: `Score ${gradeResult.score}/100. Strengths: ${(gradeResult.strengths ?? []).slice(0, 2).join(', ') || 'none'}. Weaknesses: ${(gradeResult.weaknesses ?? []).slice(0, 3).join(', ') || 'none'}.`,
       weaknessTags: gradeResult.weaknessTags ?? [],
       strengthTags: gradeResult.strengthTags ?? [],
+      // 关键：把 AI 推断的"学习风格信号"沉淀进 profile，驱动后续 preferredScaffolding /
+      // generationHints / responseHints。修复前这个字段一直是空，导致 5 个聚合字段全死
+      preferenceTags: gradeResult.preferenceTags ?? [],
       rawRefs: [gradePath, feedbackPath],
       metadata: {
         score: gradeResult.score,

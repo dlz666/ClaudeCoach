@@ -1088,9 +1088,12 @@ export class MaterialManager {
         currentSection = ''; // 进入新章重置 section
         return true;
       }
-      // 节级标题（## 或 3.2 / 3.2.1）
+      // 节级标题：覆盖三种常见编号风格
+      //   a. 数字小节："3.2 xxx" / "3.2.1 xxx"
+      //   b. 字母小节（Axler 风格）："2.A 子空间" / "2.B 张成与无关"
+      //   c. § 编号（部分欧美教材）："§3.1 xxx"
       const sectionMatch = paragraph.match(
-        /^(?:#{2,4}\s+)?(\d+\.\d+(?:\.\d+)?\s+[^\n]+|§\s*\d+(?:\.\d+)*[^\n]*)/,
+        /^(?:#{2,4}\s+)?(\d+\.\d+(?:\.\d+)?\s+[^\n]+|\d+\.[A-Z](?:\s+|\.|：)[^\n]+|§\s*\d+(?:\.\d+)*[^\n]*)/,
       );
       if (sectionMatch) {
         currentSection = this._normalizeHeading(sectionMatch[1]);
@@ -1447,6 +1450,13 @@ export class MaterialManager {
       chunks.forEach((chunk, index) => {
         const lowered = chunk.toLowerCase();
         let score = this._scoreChunkWithIDF(lowered, queryText, keywords, dfMap, totalChunks);
+
+        // 前言 / 封面 / 版权页惩罚：chunk_index < 5 通常是这些内容，
+        // 它们经常包含术语中英对照表（"线性代数 Linear Algebra" 之类），
+        // 关键词命中很高但实际无教学价值。统一打 0.4 折。
+        if (index < 5) {
+          score *= 0.4;
+        }
 
         // 第一阶段命中加成
         let matchedSectionLabel: string | undefined;

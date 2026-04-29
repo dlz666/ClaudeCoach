@@ -322,6 +322,13 @@ export interface GradeResult {
   weaknesses: string[];
   strengthTags?: FeedbackStrengthTag[];
   weaknessTags?: FeedbackWeaknessTag[];
+  /**
+   * AI 从学生作答里观察到的"风格 / 偏好"信号。
+   * 例如答得过简 → 'too-brief'；答案大量正确但缺步骤 → 'needs-steps'。
+   * 这些 tag 会聚合进 CourseProfile.overall.stablePreferences，驱动后续讲义
+   * 的 preferredScaffolding / generationHints。
+   */
+  preferenceTags?: RevisionPreferenceTag[];
   confidence?: 'low' | 'medium' | 'high';
   gradedAt: string;
 }
@@ -1206,7 +1213,7 @@ export type SidebarCommand =
   | { type: 'deleteAIProfile'; profileId: string; profileName?: string }
   // ===== Hybrid RAG（向量检索） =====
   | { type: 'testEmbedding'; config: { baseUrl: string; apiToken: string; model: string; dimension?: number } }
-  | { type: 'reindexAllVectors'; subject: Subject }
+  | { type: 'reindexAllVectors'; subject: Subject; requireConfirm?: boolean }
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Inline 内联编辑（Phase 1） =====
   | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }

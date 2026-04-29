@@ -2109,6 +2109,59 @@ input[type="radio"] + * {
   background: var(--accent-soft);
 }
 
+/* P1-2: 按钮按"前置条件未满足"被禁用 */
+button.disabled-by-state {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: auto; /* 允许 hover 显示 tooltip */
+}
+button.disabled-by-state:hover {
+  background: inherit !important;
+}
+
+/* Onboarding 引导卡片 */
+.onboarding-card {
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-blue, #4080d0) 60%, transparent);
+  background: color-mix(in srgb, var(--vscode-charts-blue, #4080d0) 6%, transparent);
+}
+.onboarding-steps {
+  list-style: none;
+  padding-left: 0;
+  margin: 8px 0 0;
+}
+.onboarding-steps > li {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+}
+.onboarding-steps > li:first-child {
+  border-top: none;
+}
+.onboarding-steps .step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--vscode-charts-blue, #4080d0);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.onboarding-steps strong { font-size: 13px; }
+.onboarding-steps .muted { font-size: 11px; margin: 2px 0 4px; }
+.onboarding-steps li.done {
+  opacity: 0.5;
+}
+.onboarding-steps li.done strong::after {
+  content: " ✓";
+  color: var(--vscode-charts-green, #4ec9b0);
+}
+
 /* 资料卡片：向量索引状态徽章 */
 .material-vector-badge {
   font-size: 10px;

@@ -162,7 +162,10 @@ export function normalizeGradeSignals(result: GradeResult): GradeResult {
   };
 }
 
-function inferTopicStatus(topic: TopicOutline): CourseProfileChapter['status'] {
+function inferTopicStatus(
+  topic: TopicOutline,
+  gradeCount: number = 0,
+): CourseProfileChapter['status'] {
   const lessons = topic.lessons ?? [];
   if (!lessons.length) {
     return 'not-started';
@@ -171,6 +174,11 @@ function inferTopicStatus(topic: TopicOutline): CourseProfileChapter['status'] {
     return 'completed';
   }
   if (lessons.some((lesson) => lesson.status === 'in-progress' || lesson.status === 'completed')) {
+    return 'in-progress';
+  }
+  // P2-2: lesson 全 not-started 但学生已经做过题 → 实际是 in-progress
+  // 让 status 反映学生反馈而不只是文件存在
+  if (gradeCount > 0) {
     return 'in-progress';
   }
   return 'not-started';
@@ -432,7 +440,8 @@ export class CourseProfileStore {
         topicId: topic.id,
         chapterNumber: topic.chapterNumber,
         title: topic.title,
-        status: inferTopicStatus(topic),
+        // P2-2: 把 gradeCount 传进去，让"做过题但 lesson 还没生成"也能显示 in-progress
+        status: inferTopicStatus(topic, gradeEvents.length),
         gradeCount: gradeEvents.length,
         masteryPercent: scores.length >= 2 && masteryAverage !== null ? Math.round(masteryAverage) : null,
         lastStudiedAt: events[0]?.createdAt ?? null,

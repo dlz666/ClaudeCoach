@@ -42,6 +42,12 @@ interface GenerationContext {
   selectedMaterialTitle?: string;
   /** 课程教学法 tag，会进入 prompt 决定讲义骨架/题型分布。 */
   courseTags?: import('../types').CourseTag[];
+  /**
+   * 连胜/连败信号：从 AdaptiveTriggerState 来，让难度调节立刻反应近期表现。
+   * 比 masteryPercent 更灵敏（≥1 grade 就有信号，无需等 ≥2）。
+   */
+  streak?: number;
+  streakDirection?: 'up' | 'down' | null;
 }
 
 export class ContentGenerator {
@@ -259,26 +265,47 @@ export class ContentGenerator {
     return { ...ctx, preferences: overriddenPrefs };
   }
 
+  /**
+   * 根据 mastery + streak 综合调整难度：
+   * - mastery 主信号（5 段映射）：< 50 → -1；50-70 → 0；70-85 → +1；> 85 → +2
+   * - streak 辅信号（≥2 即触发，加快收敛）：连对 ≥3 → +1；连错 ≥3 → -2；
+   *   连对 2 → +0.5；连错 2 → -1（用 round 后取整）
+   * - 没有 mastery 也没有 streak → 用 base
+   * - 同时存在：取主信号后再用 streak 调整 ±1（让 streak 不会反向打主信号）
+   * 最终 clamp 到 [1, 5]。
+   */
   private computeAdaptiveDifficulty(requestedDifficulty: number, ctx: GenerationContext): number {
     const base = Number.isFinite(requestedDifficulty) ? Math.round(requestedDifficulty) : 1;
     const clampedBase = Math.max(1, Math.min(5, base));
 
     const mastery = ctx.chapterProfile?.masteryPercent;
+    let masteryDelta = 0;
+    if (typeof mastery === 'number' && Number.isFinite(mastery)) {
+      if (mastery < 50) masteryDelta = -1;
+      else if (mastery <= 70) masteryDelta = 0;
+      else if (mastery <= 85) masteryDelta = +1;
+      else masteryDelta = +2;
+    }
+
+    let streakDelta = 0;
+    const streak = ctx.streak ?? 0;
+    const dir = ctx.streakDirection ?? null;
+    if (streak >= 2 && dir === 'up') {
+      streakDelta = streak >= 3 ? +1 : 0; // 连对 3 才升一档
+    } else if (streak >= 2 && dir === 'down') {
+      streakDelta = streak >= 3 ? -2 : -1; // 连错 2 已减，3 减 2
+    }
+
+    // 还没有任何反馈数据就直接返回 base（避免空跳）
     if (mastery === null || mastery === undefined || !Number.isFinite(mastery)) {
+      // 但是 streak 信号即便没 mastery 也可用（≥1 grade 就有 streak）
+      if (streakDelta !== 0) {
+        return Math.max(1, Math.min(5, clampedBase + streakDelta));
+      }
       return clampedBase;
     }
 
-    let next = clampedBase;
-    if (mastery < 50) {
-      next = clampedBase - 1;
-    } else if (mastery <= 70) {
-      next = clampedBase;
-    } else if (mastery <= 85) {
-      next = clampedBase + 1;
-    } else {
-      next = clampedBase + 2;
-    }
-
+    const next = clampedBase + masteryDelta + streakDelta;
     return Math.max(1, Math.min(5, next));
   }
 

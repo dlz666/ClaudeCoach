@@ -516,7 +516,9 @@ Five proactive behaviors. Each loop:
 
 - **Purpose**: Course outline + lesson file management.
 - **Storage**: `<courseSubjectDir>/{course-outline.json, course-summary.md}`
-- **Lesson paths**: `<courseSubjectDir>/<topicCode>-<lessonId>/{讲义.md, 练习.md}`
+- **Lesson paths**: `<courseSubjectDir>/topics/<topicCode>/lessons/<topicCode>-<NN>-lesson.md`
+  (e.g. `linear-algebra/topics/02-chapter-topic/lessons/02-01-lesson.md`)
+- **Exercise paths**: `<courseSubjectDir>/topics/<topicCode>/exercises/<sessionId>.md` (and `.json`)
 - **Key methods**: `getCourseOutline`, `setCourseOutline`,
   `getLessonPath`, `recordGrade`, `listWrongQuestions`,
   `addWrongQuestion`, `markWrongQuestionResolved`
@@ -590,10 +592,17 @@ See [Exam Prep Mode](#exam-prep-mode) for full doc.
 
 - **Purpose**: Closed-loop feedback. The "因材施教" engine.
 - **Key methods**:
-  - `recordGradeForAdaptive(subject, score, weakTags, strongTags)` —
-    feeds the loop, updates streak, emits coach events
-  - `getLatestDiagnosis(subject)` / `runDiagnosis(subject, force)`
-  - `nextDifficulty(subject, baseLevel)` — used by ContentGenerator
+  - `recordGradeForAdaptive(subject)` — counts grade, returns `{shouldRun, reason}`
+    indicating whether auto-diagnosis should run. Actual weakness/strength tags
+    are recorded by `grader.ts → courseProfileStore.recordEvent` separately.
+  - `maybeAutoRunDiagnosis(subject)` — combines the trigger check with running diagnosis
+  - `getLatestDiagnosis(subject)` / `runDiagnosis(subject)`
+  - `getTriggerState(subject)` — returns `{ streak, streakDirection, ... }`,
+    consumed by `contentGenerator.computeAdaptiveDifficulty`
+- **Difficulty adjustment**: `contentGenerator.computeAdaptiveDifficulty` uses
+  both `chapterProfile.masteryPercent` (5-band map) AND `streak`/`streakDirection`
+  (≥2 ↑ = +0/+1, ≥3 ↑ = +1, ≥3 ↓ = -2). Streak is more reactive than mastery
+  (works after 1 grade).
 - **State**: `~/ClaudeCoach/app/diagnostics/<subject>/{latest,history/}`
   + `AdaptiveTriggerState` (recent events ring + streak)
 
@@ -1018,10 +1027,14 @@ All persistent state under `~/ClaudeCoach/` (configurable). No databases
         ├── profile.json                          ← CourseProfile
         ├── wrong-questions.json                  ← WrongQuestion[]
         ├── sr-queue.json                         ← SpacedRepetitionQueue
-        └── <topicCode>-<lessonId>/
-            ├── 讲义.md                            ← lesson markdown
-            ├── 练习.md                            ← exercises (parseable)
-            └── grades/<exerciseId>.json          ← per-exercise grade history
+        └── topics/<topicCode>/
+            ├── lessons/
+            │   └── <topicCode>-<NN>-lesson.md    ← lesson markdown
+            ├── exercises/
+            │   ├── <sessionId>.md                ← human-readable practice
+            │   └── <sessionId>.json              ← parseable Exercise[]
+            └── grades/
+                └── <sessionId>.json              ← per-session grade results
 ```
 
 ### Path discipline

@@ -231,9 +231,8 @@ export class ExamWebviewProvider {
     };
     this.panels.set(key, ctx);
 
-    panel.webview.onDidReceiveMessage((msg) => {
-      // 预览面板消息很少（最多就是一个 print 后的回执），简单 log
-      console.log('[ExamWebview] variants-pdf msg:', msg && msg.type);
+    panel.webview.onDidReceiveMessage(() => {
+      // 预览面板消息很少；后续若需要可加 print 后的回执处理
     });
 
     panel.onDidDispose(() => {
@@ -310,7 +309,8 @@ export class ExamWebviewProvider {
         return;
 
       default:
-        console.log('[ExamWebview] unknown workbench msg:', msg.type);
+        // 静默忽略未知消息类型；调试需要再加 console.warn
+        return;
     }
   }
 

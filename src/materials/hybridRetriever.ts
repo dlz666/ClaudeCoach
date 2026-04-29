@@ -196,8 +196,10 @@ export class HybridRetriever {
       const vec = vecRank.get(key);
       const kwTerm = kw ? 1 / (RRF_K + kw.rank) : 0;
       const vecTerm = vec ? 1 / (RRF_K + vec.rank) : 0;
-      // hybridWeight 控制向量权重；关键词权重固定 1（用户改变 hybridWeight 时主要影响 vector）
-      const finalScore = kwTerm + hybridWeight * vecTerm;
+      // hybridWeight 含义：0=纯关键词、1=纯向量、0.5=均衡。
+      // 修正：之前用 `kwTerm + α*vecTerm`，导致 α=0.5 时 vector 永远低权（kw 权重隐式=1）。
+      // 现在两边按 (1-α) / α 对称加权，slider 真正反映用户期望。
+      const finalScore = (1 - hybridWeight) * kwTerm + hybridWeight * vecTerm;
 
       const ref = kw?.cand ?? vec!.cand;
       const retrievedBy: 'keyword' | 'vector' | 'both' =
