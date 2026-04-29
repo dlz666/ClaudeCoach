@@ -247,6 +247,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return out;
   }
 
+  /**
+   * Insights Panel 用的 courseProfile 推送（裁剪敏感字段后的精简版）。
+   * 整份 CourseProfile 含 recentEvents 200+ 条，前端只需要 chapters + overall 用于可视化。
+   */
+  private async _pushCourseProfile(subject: Subject): Promise<void> {
+    try {
+      const profile = await this.courseProfileStore.getProfile(subject);
+      if (!profile) return;
+      // 裁剪：去掉 recentEvents（webview 不需要原始事件流，那是 Evidence Trail 单独的事）
+      const slim = {
+        subject: profile.subject,
+        courseTitle: profile.courseTitle,
+        updatedAt: profile.updatedAt,
+        overall: profile.overall,
+        chapters: profile.chapters.map((c) => ({
+          topicId: c.topicId,
+          chapterNumber: c.chapterNumber,
+          title: c.title,
+          status: c.status,
+          masteryPercent: c.masteryPercent,
+          gradeCount: c.gradeCount,
+          weaknessTags: c.weaknessTags,
+          strengthTags: c.strengthTags,
+          weaknessTrend: c.weaknessTrend,
+          recentScores: c.recentScores,
+        })),
+      };
+      this._post({ type: 'courseProfile', subject, data: slim as any });
+    } catch (err) {
+      console.warn('[SidebarProvider] _pushCourseProfile failed', err);
+    }
+  }
+
   private async _refreshSelectedMaterialPreview(index?: MaterialIndex) {
     if (!this.selectedMaterialId) {
       return;
@@ -1811,6 +1844,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'log', message: '请先选择当前课程，再运行学习诊断', level: 'warn' });
             break;
           }
+          // 顺手推一份 courseProfile（Insights Panel 用的）—— 比单独走一个消息更省 round-trip
+          void this._pushCourseProfile(msg.subject);
           if (!msg.run) {
             const diag = await this.adaptiveEngine.getLatestDiagnosis(msg.subject);
             this._post({ type: 'diagnosis', data: diag });
@@ -1820,8 +1855,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const diag = await this.adaptiveEngine.runDiagnosis(msg.subject);
             this._post({ type: 'diagnosis', data: diag });
             await this._refreshCourses();
+            void this._pushCourseProfile(msg.subject);
             this._post({ type: 'log', message: '学习诊断已完成', level: 'info' });
           });
+          break;
+        }
+
+        case 'getCourseProfile': {
+          if (!msg.subject) break;
+          await this._pushCourseProfile(msg.subject);
           break;
         }
 

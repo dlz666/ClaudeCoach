@@ -132,6 +132,23 @@ export async function recordGradeForCoach(args: RecordGradeForCoachArgs): Promis
         payload: {
           streak: result.count,
           direction: result.direction,
+          // Evidence trail：让用户能看见"为什么我看到这条"
+          evidence: [
+            {
+              kind: 'streak',
+              ref: `${result.direction}×${result.count}`,
+              summary: isUp
+                ? `最近 ${result.count} 道题分数 ≥ ${SCORE_HIGH}（连对触发）`
+                : `最近 ${result.count} 道题分数 ≤ ${SCORE_LOW}（连错触发）`,
+              createdAt: new Date().toISOString(),
+            },
+            {
+              kind: 'grade',
+              ref: `${topicId}/${lessonId}`,
+              summary: `当前题 ${score}/100 — ${lessonTitle ?? lessonId}`,
+              createdAt: new Date().toISOString(),
+            },
+          ],
         },
       });
     }
@@ -167,6 +184,20 @@ export async function recordGradeForCoach(args: RecordGradeForCoachArgs): Promis
             payload: {
               weaknessTag: tag,
               topicCount: occurCount,
+              evidence: [
+                {
+                  kind: 'weakness-tag',
+                  ref: tag,
+                  summary: `"${tag}" 类弱点已在 ${occurCount} 个不同章节出现`,
+                  createdAt: new Date().toISOString(),
+                },
+                ...otherTopicTitles.slice(0, 3).map((t) => ({
+                  kind: 'grade' as const,
+                  ref: t,
+                  summary: `章节"${t}"也出现过 "${tag}" 弱点`,
+                  createdAt: new Date().toISOString(),
+                })),
+              ],
             },
           });
         }

@@ -425,6 +425,24 @@ export interface CourseProfileChapter {
   misconceptions: string[];
   preferredScaffolding: string[];
   answeringHints: string[];
+  /**
+   * 弱项趋势：对该 chapter 内的 grade 事件按时序拆两半，比较 weaknessTag 出现率。
+   * 仅当 chapter.gradeCount >= 4 时才计算（样本太少无意义）。
+   * 注入 prompt 后形如 "logic 错误率 80%→30%（改善）" — 让 AI 知道学生在好转/恶化。
+   */
+  weaknessTrend?: WeaknessTrend[];
+  /** 该 chapter 最近若干次 grade 的分数序列（最多 8 条），用于 UI 趋势线显示 */
+  recentScores?: number[];
+}
+
+export interface WeaknessTrend {
+  tag: FeedbackWeaknessTag;
+  /** 前半时间窗的出现率 0-1 */
+  prevRate: number;
+  /** 后半时间窗的出现率 0-1 */
+  currRate: number;
+  /** 'improving' = curr 比 prev 低（好转）；'worsening' = curr 比 prev 高；'stable' = 差异 < 阈值 */
+  direction: 'improving' | 'worsening' | 'stable';
 }
 
 export interface CourseProfile {
@@ -1215,6 +1233,8 @@ export type SidebarCommand =
   | { type: 'testEmbedding'; config: { baseUrl: string; apiToken: string; model: string; dimension?: number } }
   | { type: 'reindexAllVectors'; subject: Subject; requireConfirm?: boolean }
   | { type: 'getVectorIndexStats'; subject: Subject }
+  // ===== Adaptive Insights =====
+  | { type: 'getCourseProfile'; subject: Subject }
   // ===== Inline 内联编辑（Phase 1） =====
   | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }
@@ -1313,6 +1333,22 @@ export type SidebarResponse =
           dimension?: number;
           updatedAt?: string;
         }>;
+      };
+    }
+  // Insights Panel：精简版 courseProfile（去掉 recentEvents）
+  | {
+      type: 'courseProfile';
+      subject: Subject;
+      data: {
+        subject: Subject;
+        courseTitle: string;
+        updatedAt: string;
+        overall: CourseProfileOverall;
+        chapters: Array<Pick<
+          CourseProfileChapter,
+          'topicId' | 'chapterNumber' | 'title' | 'status' | 'masteryPercent' |
+          'gradeCount' | 'weaknessTags' | 'strengthTags' | 'weaknessTrend' | 'recentScores'
+        >>;
       };
     }
   | { type: 'error'; message: string }

@@ -187,6 +187,21 @@ function chapterProfileContext(chapterProfile: CourseProfileChapter | null): str
   if (chapterProfile.answeringHints.length) {
     lines.push(`- 回答提示：${chapterProfile.answeringHints.join('；')}`);
   }
+  // 趋势注入：让 AI 知道学生在好转 / 恶化（不只是当前弱项）
+  if (chapterProfile.weaknessTrend && chapterProfile.weaknessTrend.length) {
+    const summary = chapterProfile.weaknessTrend
+      .map((t) => {
+        const pct = (n: number) => Math.round(n * 100) + '%';
+        const dir = t.direction === 'improving' ? '改善中 ✓' : t.direction === 'worsening' ? '恶化中 ⚠' : '稳定';
+        return `${t.tag}：${pct(t.prevRate)}→${pct(t.currRate)}（${dir}）`;
+      })
+      .join('；');
+    lines.push(`- 弱项趋势：${summary}`);
+  }
+  if (chapterProfile.recentScores && chapterProfile.recentScores.length >= 2) {
+    const scores = chapterProfile.recentScores.slice(-5).join(' / ');
+    lines.push(`- 最近 ${chapterProfile.recentScores.length} 次得分：${scores}`);
+  }
 
   return `${lines.join('\n')}\n`;
 }
@@ -706,28 +721,88 @@ ${normalizedInstruction ? `本次额外要求：${normalizedInstruction}\n\n` : 
 
 export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: string, difficulty: number, ctx: PromptContext): ChatMessage[] {
   const scopedCtx: PromptContext = { ...ctx, scope: 'lesson-gen' };
+
+  // 字数硬约束：lessonDetail 三档真生效
+  const detail = ctx.preferences?.aiStyle?.lessonDetail || 'standard';
+  const wordTarget =
+    detail === 'concise' ? '1000-1500 字（精简，聚焦核心）'
+    : detail === 'detailed' ? '4000-6000 字（详尽，含证明、推导、多个例子）'
+    : '2000-3000 字（标准，含定义、关键例子、本节小结）';
+
+  // 视觉化建议：按学科 hint 引导 mermaid / ASCII
+  const visualHint = buildVisualHint(subject);
+
   return [
     {
       role: 'system',
-      content: buildSystemBase(scopedCtx) + `\n请用 Markdown 写一篇详细讲义。
-要求：
-- 开头先写"关键概念摘要"（4-7 条 bullet，含中英术语并置）
-- 第一节是"为什么学这个"，给学生一个具体动机 / 应用场景 / 类比
-- 包含循序渐进的讲解、例题和解析
-- 在 2-3 个关键节点插入"想一想"小问题（1-2 行），鼓励读者暂停思考
-- 结尾用 5 句话做"本节小结"
+      content: buildSystemBase(scopedCtx) + `\n请用 Markdown 写一篇讲义。
+
+【硬性结构】
+1. 顶部：\`<details open><summary>📌 1 分钟回顾</summary>...</details>\` 块
+   · 4-7 条 bullet，每条不超 30 字
+   · 含核心概念中英术语并置（如 "向量空间 vector space"）
+   · 这是用户复习时的"扫一眼版"，必须独立可读
+2. 正文："为什么学这个"开场（具体动机 / 应用场景 / 类比）→ 渐进讲解 → 例题 → 反例 / 易错
+3. 在 2-3 个关键节点插入 \`> 想一想：...\` 引用块（1-2 行问题，让读者暂停）
+4. 结尾："本节小结"用 5 句话；可选加 \`<details><summary>🔬 深入阅读（可选）</summary>...</details>\` 放高阶补充
+5. 不要末尾加"练习预告"段（练习由独立流程触发）
+
+【字数】目标 ${wordTarget}。
+
+【视觉化】${visualHint}
+
+【公式与推导】
+- 多步推导每一步独立展示，不要把太多推导挤进一个公式块
+- 块级公式用 \`$$...$$\`、内联用 \`$...$\`
 - 难度等级：${difficulty}/5
-- 多步推导时，每一步尽量独立展示，避免把太多推导挤在一个公式块里
-- 写作风格约束（重要）：
-  · 输出是独立的教材页面，不是聊天对话
-  · 不要写"我下一条可以..."、"如果你愿意，我可以..."、"接下来我会..."这类
-    AI 对话口吻的句子
-  · 不要在末尾加"练习预告"或类似的导航段（练习是另一个独立动作）
-  · 不要写"作为 AI"、"我建议你"等暴露 AI 身份的措辞
-  · 用第二人称"你"或不指定主语，像优秀网课讲师那样直接讲内容`,
+
+【inline 引用】
+- 关键论断（定义 / 定理 / 重要事实）后用 \`[来源 #N]\` 标注（N = 资料片段编号）
+- 每段最多 1-2 处，不要每句都引
+- 不要在末尾加大段"参考资料"——inline 引用就够
+
+【写作口吻】
+- 这是独立的教材页面，不是聊天对话
+- ❌ 不要写"我下一条可以..."、"如果你愿意，我可以..."、"接下来我会..."、"作为 AI"、"我建议你"
+- ✅ 用第二人称"你"或不指定主语，像优秀网课讲师那样直接讲
+- ✅ 末尾"本节小结" 5 句话即收，不寒暄、不导航`,
     },
-    { role: 'user', content: `请为“${subjectLabel(subject)}”课程中“${topicTitle}”主题下的“${lessonTitle}”编写讲义。` },
+    { role: 'user', content: `请为"${subjectLabel(subject)}"课程中"${topicTitle}"主题下的"${lessonTitle}"编写讲义。` },
   ];
+}
+
+/**
+ * 按学科建议合适的视觉化方式：
+ * - 数学/物理 → ASCII 投影 + 公式块为主，mermaid 用于概念依赖图
+ * - 算法/CS → mermaid flowchart / sequenceDiagram 优先
+ * - 离散/逻辑 → mermaid graph (LR/TB)
+ * - 其他 → 看情况
+ */
+function buildVisualHint(subject: Subject): string {
+  const s = (subject || '').toLowerCase();
+  if (/algebra|代数|矩阵|linear|calculus|微积分|topology|geometry/.test(s)) {
+    return [
+      '当涉及结构关系（如子空间包含、向量分解）→ 用 mermaid graph 画概念图',
+      '当涉及几何对象 → 用三反引号 text 块画 ASCII 投影示意',
+      '矩阵直接用 \\(\\begin{bmatrix}...\\end{bmatrix}\\) LaTeX',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  if (/data\s*struct|algo|算法|数据结构|operating|os|computer|网络/.test(s)) {
+    return [
+      '算法流程 → mermaid flowchart',
+      '类/对象交互 → mermaid sequenceDiagram',
+      '状态机 / 协议 → mermaid stateDiagram',
+      '链表 / 树 / 图 结构 → ASCII art（节点 + 箭头）',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  if (/discrete|离散|logic|逻辑|graph|图论|组合/.test(s)) {
+    return [
+      '关系 / 真值表 → markdown 表格',
+      '图论结构 → mermaid graph LR / TB',
+      '推理链 → mermaid flowchart 或编号列表',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  return '- 当核心概念有"结构关系"时，加 mermaid 图（graph / flowchart / sequenceDiagram / stateDiagram 任选）\n- 没必要硬塞图，讲义本身写清楚比放图重要';
 }
 
 export function exercisePrompt(subject: Subject, lessonTitle: string, count: number, difficulty: number, ctx: PromptContext): ChatMessage[] {

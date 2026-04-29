@@ -49,9 +49,56 @@ export interface HybridOptions {
   maxExcerpts: number;
   /** 各通道初步召回的数量（应大于等于 maxExcerpts，给融合留余量） */
   channelTopK: number;
+  /** 关闭按 query 类型动态调权（debug / 测试时用），默认 false */
+  disableQueryRouting?: boolean;
 }
 
 const RRF_K = 60;
+
+/**
+ * Query 类型分类：路由不同的 hybridWeight。基于纯规则（无 AI 调用）。
+ *
+ * - definition：定义查找 → 关键词重要（精确命中术语）
+ * - concept：概念问答 → 向量重要（语义匹配）
+ * - counter-example：反例查找 → 强偏向量
+ * - cross-lingual：英文短 query 找中文资料 → 强偏向量
+ * - general：默认，用用户偏好
+ */
+export type QueryKind = 'definition' | 'concept' | 'counter-example' | 'cross-lingual' | 'general';
+
+const DEF_PATTERN = /^(什么是|是什么|定义|解释|什么叫|名词解释|what is|define|definition of)\b|什么是|的定义|的概念$/i;
+const CONCEPT_PATTERN = /(为什么|怎么|如何|比较|区别|对比|证明|推导|why|how|prove|derive|compare)/i;
+const COUNTEREXAMPLE_PATTERN = /(反例|不成立的|失败的|counter[\s-]?example|exception)/i;
+
+export function classifyQuery(query: string): QueryKind {
+  const q = (query || '').trim();
+  if (!q) return 'general';
+  if (COUNTEREXAMPLE_PATTERN.test(q)) return 'counter-example';
+  if (CONCEPT_PATTERN.test(q)) return 'concept';
+  if (DEF_PATTERN.test(q)) return 'definition';
+  // 跨语言：query 几乎全英文且很短（多半是术语），强偏向量去找跨语言匹配
+  const englishWords = (q.match(/[a-z][a-z0-9-]+/gi) || []).length;
+  const cjkChars = (q.match(/[一-鿿]/g) || []).length;
+  if (englishWords >= 1 && englishWords <= 4 && cjkChars === 0) {
+    return 'cross-lingual';
+  }
+  return 'general';
+}
+
+/**
+ * 根据 query 类型映射到一个建议 hybridWeight：
+ * 用户的 baseWeight 作为 general 时使用；其他类别按相对偏移调整。
+ */
+export function routeHybridWeight(kind: QueryKind, baseWeight: number): number {
+  switch (kind) {
+    case 'definition':       return Math.max(0.2, Math.min(0.5, baseWeight - 0.2));
+    case 'concept':          return Math.max(0.5, Math.min(0.8, baseWeight + 0.2));
+    case 'counter-example':  return Math.max(0.7, Math.min(0.9, baseWeight + 0.3));
+    case 'cross-lingual':    return Math.max(0.7, Math.min(0.85, baseWeight + 0.25));
+    case 'general':
+    default:                 return baseWeight;
+  }
+}
 
 export class HybridRetriever {
   constructor(
@@ -65,6 +112,7 @@ export class HybridRetriever {
    * - 如果 embedding 不可用（profile 缺、enable=false、网络错） → 直接返回 keyword 候选
    * - 如果某资料还没建向量索引 → 该资料只参与 keyword 通道
    * - 如果用户 hybridWeight=0 → 跳过向量整段计算（省一次 embed 调用）
+   * - 自动按 query 类型路由 hybridWeight（除非 options.disableQueryRouting=true）
    */
   async fuse(
     materials: MaterialEntry[],
@@ -72,7 +120,11 @@ export class HybridRetriever {
     keywordCandidates: KeywordCandidate[],
     options: HybridOptions,
   ): Promise<HybridResult[]> {
-    const { hybridWeight, maxExcerpts, channelTopK } = options;
+    // Query 路由：按类型动态调权
+    const baseWeight = options.hybridWeight;
+    const kind = options.disableQueryRouting ? 'general' : classifyQuery(queryText);
+    const hybridWeight = routeHybridWeight(kind, baseWeight);
+    const { maxExcerpts, channelTopK } = options;
 
     // 用户彻底关闭向量 → 走纯关键词
     if (hybridWeight <= 0 || !queryText.trim()) {

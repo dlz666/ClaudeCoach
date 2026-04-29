@@ -435,6 +435,47 @@ export class CourseProfileStore {
       );
       const masteryAverage = average(scores);
 
+      // 计算 weaknessTrend：要求 ≥ 4 条 grade 事件才有统计意义
+      let weaknessTrend: import('../types').WeaknessTrend[] | undefined;
+      if (gradeEvents.length >= 4) {
+        // 按时间顺序排（recordEvent 写入是降序，这里反转）
+        const sorted = [...gradeEvents].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        const half = Math.floor(sorted.length / 2);
+        const prevHalf = sorted.slice(0, half);
+        const currHalf = sorted.slice(half);
+        const tagCounts = (events: typeof prevHalf): Map<string, number> => {
+          const m = new Map<string, number>();
+          for (const e of events) {
+            for (const t of e.weaknessTags ?? []) {
+              m.set(t, (m.get(t) || 0) + 1);
+            }
+          }
+          return m;
+        };
+        const prevC = tagCounts(prevHalf);
+        const currC = tagCounts(currHalf);
+        const allTags = new Set([...prevC.keys(), ...currC.keys()]);
+        const trends: import('../types').WeaknessTrend[] = [];
+        for (const tag of allTags) {
+          const prevRate = (prevC.get(tag) || 0) / Math.max(1, prevHalf.length);
+          const currRate = (currC.get(tag) || 0) / Math.max(1, currHalf.length);
+          const diff = currRate - prevRate;
+          let direction: 'improving' | 'worsening' | 'stable' = 'stable';
+          if (Math.abs(diff) >= 0.25) {
+            direction = diff > 0 ? 'worsening' : 'improving';
+          }
+          trends.push({ tag: tag as any, prevRate, currRate, direction });
+        }
+        // 只保留 direction != 'stable' 的，最多 3 条
+        weaknessTrend = trends
+          .filter((t) => t.direction !== 'stable')
+          .sort((a, b) => Math.abs(b.currRate - b.prevRate) - Math.abs(a.currRate - a.prevRate))
+          .slice(0, 3);
+      }
+
+      // 最近 8 次分数（用于 UI 趋势线）
+      const recentScores = scores.slice(-8);
+
       return {
         ...existing,
         topicId: topic.id,
@@ -443,6 +484,8 @@ export class CourseProfileStore {
         // P2-2: 把 gradeCount 传进去，让"做过题但 lesson 还没生成"也能显示 in-progress
         status: inferTopicStatus(topic, gradeEvents.length),
         gradeCount: gradeEvents.length,
+        weaknessTrend,
+        recentScores,
         masteryPercent: scores.length >= 2 && masteryAverage !== null ? Math.round(masteryAverage) : null,
         lastStudiedAt: events[0]?.createdAt ?? null,
         weaknessTags,

@@ -151,6 +151,29 @@
       <div id="wrong-questions-list" class="muted">暂无错题</div>
     </section>
 
+    <!-- Adaptive Insights Panel：可视化已收集的学生画像 -->
+    <section class="panel insights-panel hidden" id="insights-section">
+      <div class="panel-header">
+        <div>
+          <h3>📊 学习画像</h3>
+          <p class="section-subtitle">基于你的练习记录，每章 mastery / 弱项一目了然</p>
+        </div>
+        <button class="btn ghost small" id="btn-insights-refresh" type="button" title="刷新">↻</button>
+      </div>
+      <div id="insights-overall" class="insights-overall muted">暂无数据 — 完成几道练习后，AI 会在这里画出你的画像</div>
+      <div id="insights-heatmap" class="insights-heatmap hidden"></div>
+      <div id="insights-tags" class="insights-tags hidden">
+        <div class="insights-tag-group">
+          <span class="insights-tag-label">主要弱项：</span>
+          <span id="insights-weakness-tags"></span>
+        </div>
+        <div class="insights-tag-group">
+          <span class="insights-tag-label">主要优势：</span>
+          <span id="insights-strength-tags"></span>
+        </div>
+      </div>
+    </section>
+
     <section class="panel learning-plan-panel hidden" id="learning-plan-section">
       <div class="panel-header">
         <div>

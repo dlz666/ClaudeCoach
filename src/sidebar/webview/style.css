@@ -2222,3 +2222,114 @@ pre.hljs code,
   color: #d4d4d4;
 }
 
+
+/* ===== Adaptive Insights Panel ===== */
+.insights-panel {
+  background: color-mix(in srgb, var(--vscode-charts-purple, #7c5fc4) 4%, transparent);
+  border-color: color-mix(in srgb, var(--vscode-charts-purple, #7c5fc4) 30%, transparent);
+}
+.insights-overall {
+  font-size: 12px;
+  margin: 8px 0;
+}
+.insights-overall .insights-level-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  margin-left: 6px;
+  background: var(--vscode-charts-purple, #7c5fc4);
+  color: white;
+}
+.insights-heatmap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 4px;
+  margin: 10px 0;
+}
+.insights-chapter-cell {
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-align: center;
+  cursor: help;
+  border: 1px solid var(--border);
+  position: relative;
+}
+.insights-chapter-cell .chapter-number {
+  font-weight: 600;
+  font-size: 11px;
+}
+.insights-chapter-cell .chapter-mastery {
+  font-size: 9px;
+  margin-top: 2px;
+  opacity: 0.8;
+}
+.insights-chapter-cell.mastery-high   { background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 30%, transparent); }
+.insights-chapter-cell.mastery-mid    { background: color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 25%, transparent); }
+.insights-chapter-cell.mastery-low    { background: color-mix(in srgb, var(--vscode-charts-red, #f48771) 25%, transparent); }
+.insights-chapter-cell.mastery-none   { background: var(--surface-3, rgba(255,255,255,0.04)); opacity: 0.5; }
+.insights-chapter-cell.in-progress::after { content: '●'; position: absolute; top: 1px; right: 4px; font-size: 8px; color: var(--vscode-charts-blue, #4080d0); }
+.insights-chapter-cell.trend-up::before { content: '↑'; color: var(--vscode-charts-green, #4ec9b0); position: absolute; top: 1px; left: 4px; font-size: 9px; }
+.insights-chapter-cell.trend-down::before { content: '↓'; color: var(--vscode-charts-red, #f48771); position: absolute; top: 1px; left: 4px; font-size: 9px; }
+.insights-tags {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.insights-tag-group {
+  font-size: 11px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.insights-tag-label {
+  color: var(--cc-text-secondary, var(--vscode-descriptionForeground));
+}
+.insights-tag-pill {
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  background: color-mix(in srgb, var(--vscode-charts-blue, #4080d0) 18%, transparent);
+  color: var(--vscode-foreground);
+  white-space: nowrap;
+}
+.insights-tag-pill.weakness { background: color-mix(in srgb, var(--vscode-charts-red, #f48771) 18%, transparent); }
+.insights-tag-pill.strength { background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 18%, transparent); }
+
+/* ===== Coach Suggestion Evidence Trail ===== */
+.suggestion-evidence {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--vscode-charts-purple, #7c5fc4);
+  background: color-mix(in srgb, var(--vscode-charts-purple, #7c5fc4) 6%, transparent);
+  font-size: 11px;
+  border-radius: 0 4px 4px 0;
+}
+.suggestion-evidence .evidence-title {
+  font-weight: 600;
+  font-size: 10px;
+  margin-bottom: 4px;
+  color: var(--vscode-charts-purple, #7c5fc4);
+}
+.suggestion-evidence ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.suggestion-evidence li {
+  margin: 2px 0;
+}
+.suggestion-evidence-toggle {
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+  color: var(--cc-text-secondary, var(--vscode-descriptionForeground));
+}
+.suggestion-evidence-toggle:hover {
+  background: var(--accent-soft);
+}

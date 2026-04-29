@@ -490,10 +490,14 @@ export class LectureWebviewProvider {
     const hljsStyleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@highlightjs', 'cdn-assets', 'styles', 'github-dark.min.css'),
     );
+    const mermaidScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'),
+    );
 
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} data:`,
+      // Mermaid 在渲染时会动态注入 <style>，需要 unsafe-inline；img-src 也要支持 SVG data URI
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource} data:`,
       `script-src ${webview.cspSource} 'nonce-${nonce}'`,
@@ -529,7 +533,8 @@ export class LectureWebviewProvider {
       .replace(/{{katexScriptUri}}/g, katexScriptUri.toString())
       .replace(/{{katexAutoRenderUri}}/g, katexAutoRenderUri.toString())
       .replace(/{{hljsScriptUri}}/g, hljsScriptUri.toString())
-      .replace(/{{hljsStyleUri}}/g, hljsStyleUri.toString());
+      .replace(/{{hljsStyleUri}}/g, hljsStyleUri.toString())
+      .replace(/{{mermaidScriptUri}}/g, mermaidScriptUri.toString());
   }
 }
 

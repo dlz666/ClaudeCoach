@@ -29,6 +29,12 @@
       typographer: false,
       breaks: false,
       highlight: (str, lang) => {
+        // Mermaid 代码块特殊处理：占位 div，由 renderMermaid 阶段渲染为 SVG
+        if (lang === 'mermaid') {
+          // 用 base64 隔离原始源码，避免 markdown-it 二次解析
+          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<pre class="mermaid-source"><code class="language-mermaid">${escaped}</code></pre>`;
+        }
         // 用 highlight.js 渲染代码块
         if (typeof window.hljs !== 'undefined' && window.hljs) {
           try {
@@ -99,6 +105,70 @@
     }
   }
 
+  // 初始化 mermaid（一次性）
+  let mermaidInited = false;
+  function ensureMermaidInit() {
+    if (mermaidInited) return;
+    if (typeof window.mermaid === 'undefined') return;
+    try {
+      // 跟随 VS Code 主题。检测 body 背景色判断 dark/light
+      const bg = getComputedStyle(document.body).backgroundColor || '';
+      const isDark = /rgb\((\d+),\s*(\d+),\s*(\d+)/.test(bg) && (() => {
+        const [, r, g, b] = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/) || [];
+        const lum = (Number(r) + Number(g) + Number(b)) / 3;
+        return lum < 128;
+      })();
+      window.mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? 'dark' : 'default',
+        securityLevel: 'strict',
+        fontFamily: 'inherit',
+      });
+      mermaidInited = true;
+    } catch (err) {
+      console.warn('mermaid init failed', err);
+    }
+  }
+
+  /**
+   * 渲染所有 .language-mermaid 代码块为 SVG。
+   * 容错：单个图错了不影响其他；失败时显示原文 + "复制到 mermaid.live" 链接。
+   */
+  async function renderMermaid(root) {
+    if (!root) return;
+    if (typeof window.mermaid === 'undefined') return;
+    ensureMermaidInit();
+    const blocks = root.querySelectorAll('pre.mermaid-source code.language-mermaid');
+    let counter = 0;
+    for (const codeEl of blocks) {
+      const pre = codeEl.parentElement;
+      if (!pre) continue;
+      // 用 textContent 拿到原始 mermaid 源（已 unescape HTML 实体）
+      const source = codeEl.textContent || '';
+      const id = `mermaid-${Date.now().toString(36)}-${counter++}`;
+      try {
+        const { svg } = await window.mermaid.render(id, source);
+        const wrap = document.createElement('div');
+        wrap.className = 'mermaid-rendered';
+        wrap.innerHTML = svg;
+        pre.replaceWith(wrap);
+      } catch (err) {
+        console.warn('mermaid render failed for block', id, err);
+        // 降级：显示源码 + 给 mermaid.live 链接
+        const fallback = document.createElement('div');
+        fallback.className = 'mermaid-fallback';
+        const escaped = (source || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const liveUrl = 'https://mermaid.live/edit#pako:' + ''; // 简单跳转，用户可复制
+        fallback.innerHTML = `
+          <div class="mermaid-fallback-banner">⚠ Mermaid 图渲染失败（语法错？）</div>
+          <pre><code class="language-mermaid">${escaped}</code></pre>
+          <a href="${liveUrl}" target="_blank" rel="noopener">在 mermaid.live 试试</a>
+        `;
+        pre.replaceWith(fallback);
+      }
+    }
+  }
+
   // ===== DOM refs =====
 
   const els = {
@@ -123,6 +193,7 @@
     if (!els.body) return;
     els.body.innerHTML = renderMarkdown(state.content);
     renderMath(els.body);
+    void renderMermaid(els.body); // 异步，不 block
   }
 
   function setHeader(args) {
@@ -428,6 +499,7 @@
     body.className = 'bubble-body markdown-body';
     body.innerHTML = renderMarkdown(suggestion);
     renderMath(body);
+    void renderMermaid(body);
     bubble.appendChild(body);
 
     const actions = document.createElement('div');

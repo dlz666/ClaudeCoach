@@ -1311,6 +1311,98 @@
     vscode.postMessage({ type: 'getDiagnosis', subject: state.selectedSubject, run });
   }
 
+  /**
+   * Adaptive Insights Panel：把 courseProfile（已经在收集的画像数据）可视化。
+   * 用 state.courseProfile 渲染——若没有就不显示。
+   * 数据从后端推 'courseProfile' 消息得到，per subject 缓存在 state.courseProfilesBySubject。
+   */
+  function renderInsights() {
+    const section = document.getElementById('insights-section');
+    if (!section) return;
+    if (!state.selectedSubject) {
+      section.classList.add('hidden');
+      return;
+    }
+    const profile = (state.courseProfilesBySubject || {})[state.selectedSubject];
+    section.classList.remove('hidden');
+
+    const overallEl = document.getElementById('insights-overall');
+    const heatmapEl = document.getElementById('insights-heatmap');
+    const tagsEl = document.getElementById('insights-tags');
+    const weakTagsEl = document.getElementById('insights-weakness-tags');
+    const strongTagsEl = document.getElementById('insights-strength-tags');
+
+    if (!profile || !profile.chapters || !profile.chapters.length) {
+      if (overallEl) overallEl.textContent = '暂无数据 — 完成几道练习后，AI 会在这里画出你的画像';
+      if (heatmapEl) heatmapEl.classList.add('hidden');
+      if (tagsEl) tagsEl.classList.add('hidden');
+      return;
+    }
+
+    // 总览
+    const masteryNumeric = (profile.chapters || []).map((c) => c.masteryPercent).filter((x) => Number.isFinite(x));
+    const overallMastery = masteryNumeric.length
+      ? Math.round(masteryNumeric.reduce((a, b) => a + b, 0) / masteryNumeric.length)
+      : null;
+    const levelLabel = profile.overall?.learnerLevelEstimate || 'undetermined';
+    const levelTranslate = { undetermined: '观察中', beginner: '入门', developing: '发展中', intermediate: '进阶' };
+    if (overallEl) {
+      overallEl.innerHTML = `
+        <strong>${escapeHtml(profile.courseTitle || state.selectedSubject)}</strong>
+        ${overallMastery !== null ? `· 总体掌握 ${overallMastery}%` : '· 总体掌握 待观察'}
+        <span class="insights-level-badge">${levelTranslate[levelLabel] || levelLabel}</span>
+      `;
+    }
+
+    // 章节热力图
+    if (heatmapEl) {
+      heatmapEl.classList.remove('hidden');
+      heatmapEl.innerHTML = (profile.chapters || []).map((c) => {
+        const m = c.masteryPercent;
+        const masteryClass = m === null || m === undefined
+          ? 'mastery-none'
+          : m >= 80 ? 'mastery-high' : m >= 60 ? 'mastery-mid' : 'mastery-low';
+        const inProgressClass = c.status === 'in-progress' ? 'in-progress' : '';
+        const trendClass = (() => {
+          const t = (c.weaknessTrend || [])[0];
+          if (!t) return '';
+          if (t.direction === 'improving') return 'trend-up';
+          if (t.direction === 'worsening') return 'trend-down';
+          return '';
+        })();
+        const tooltip = [
+          c.title,
+          m !== null && m !== undefined ? `掌握 ${m}%` : '尚未做题',
+          c.gradeCount ? `已答 ${c.gradeCount} 题` : null,
+          c.weaknessTags?.length ? `弱：${c.weaknessTags.join('、')}` : null,
+          c.strengthTags?.length ? `强：${c.strengthTags.join('、')}` : null,
+          (c.weaknessTrend || []).map((t) =>
+            `${t.tag} ${Math.round(t.prevRate * 100)}%→${Math.round(t.currRate * 100)}%`,
+          ).join(' · ') || null,
+        ].filter(Boolean).join('\n');
+        return `
+          <div class="insights-chapter-cell ${masteryClass} ${inProgressClass} ${trendClass}" title="${escapeHtml(tooltip)}">
+            <div class="chapter-number">${c.chapterNumber || '?'}</div>
+            <div class="chapter-mastery">${m === null || m === undefined ? '—' : m + '%'}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // tag 列表
+    if (tagsEl && weakTagsEl && strongTagsEl) {
+      const weak = (profile.overall?.commonWeaknessTags || []);
+      const strong = (profile.overall?.commonStrengthTags || []);
+      if (weak.length || strong.length) {
+        tagsEl.classList.remove('hidden');
+        weakTagsEl.innerHTML = weak.map((t) => `<span class="insights-tag-pill weakness">${escapeHtml(t)}</span>`).join(' ') || '—';
+        strongTagsEl.innerHTML = strong.map((t) => `<span class="insights-tag-pill strength">${escapeHtml(t)}</span>`).join(' ') || '—';
+      } else {
+        tagsEl.classList.add('hidden');
+      }
+    }
+  }
+
   function renderWrongQuestions() {
     if (!els.wrongQuestionsSection || !els.wrongQuestionsList) return;
 
@@ -2238,15 +2330,39 @@
       els.coachSuggestionsList.innerHTML = '';
       return;
     }
-    els.coachSuggestionsList.innerHTML = items.map((s) => `
-      <div class="coach-chip urgency-${escapeHtml(s.urgency || 'low')}" data-suggestion-id="${escapeHtml(s.id)}">
-        <span class="coach-chip-title">${escapeHtml(s.title || s.body || '')}</span>
-        <span class="coach-chip-actions">
-          <button class="coach-chip-act" type="button" data-suggestion-action="open" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
-          <button class="coach-chip-dismiss" type="button" data-suggestion-action="dismiss" data-suggestion-id="${escapeHtml(s.id)}" title="忽略">✕</button>
-        </span>
-      </div>
-    `).join('');
+    els.coachSuggestionsList.innerHTML = items.map((s) => {
+      // Evidence trail: payload.evidence 是 { kind, ref, summary, createdAt }[]，可选
+      const evidence = (s.payload && Array.isArray(s.payload.evidence)) ? s.payload.evidence : [];
+      const evidenceId = `ev-${escapeHtml(s.id)}`;
+      const evidenceHtml = evidence.length ? `
+        <div class="suggestion-evidence" id="${evidenceId}" hidden>
+          <div class="evidence-title">为什么我看到这条建议？</div>
+          <ul>
+            ${evidence.slice(0, 5).map((e) => `
+              <li>
+                <strong>[${escapeHtml(e.kind || 'event')}]</strong>
+                ${escapeHtml(e.summary || e.ref || '')}
+                ${e.createdAt ? `<span class="muted">（${escapeHtml(e.createdAt.slice(0, 10))}）</span>` : ''}
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      ` : '';
+      const evidenceToggle = evidence.length
+        ? `<button class="suggestion-evidence-toggle" type="button" data-toggle-evidence="${evidenceId}" title="展开 / 折叠驱动事件">为什么？</button>`
+        : '';
+      return `
+        <div class="coach-chip urgency-${escapeHtml(s.urgency || 'low')}" data-suggestion-id="${escapeHtml(s.id)}">
+          <span class="coach-chip-title">${escapeHtml(s.title || s.body || '')}</span>
+          <span class="coach-chip-actions">
+            ${evidenceToggle}
+            <button class="coach-chip-act" type="button" data-suggestion-action="open" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
+            <button class="coach-chip-dismiss" type="button" data-suggestion-action="dismiss" data-suggestion-id="${escapeHtml(s.id)}" title="忽略">✕</button>
+          </span>
+          ${evidenceHtml}
+        </div>
+      `;
+    }).join('');
 
     els.coachSuggestionsList.querySelectorAll('[data-suggestion-action]').forEach((btn) => {
       btn.addEventListener('click', (event) => {
@@ -2257,6 +2373,17 @@
           vscode.postMessage({ type: 'coachDismissSuggestion', suggestionId });
         } else {
           vscode.postMessage({ type: 'coachAction', suggestionId });
+        }
+      });
+    });
+    els.coachSuggestionsList.querySelectorAll('[data-toggle-evidence]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const targetId = btn.getAttribute('data-toggle-evidence');
+        if (!targetId) return;
+        const target = document.getElementById(targetId);
+        if (target) {
+          target.hidden = !target.hidden;
         }
       });
     });
@@ -2607,6 +2734,7 @@
     renderOutlineRebuildModal();
     renderWrongQuestions();
     renderLearningPlan();
+    renderInsights();
     if (state.preferences) {
       renderPerSubjectDifficulty(state.preferences);
     }
@@ -2627,6 +2755,15 @@
 
   els.tabs.forEach((tab) => {
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
+  });
+
+  // Insights Panel 刷新
+  document.getElementById('btn-insights-refresh')?.addEventListener('click', () => {
+    if (!state.selectedSubject) {
+      showToast('请先选择课程', 'warn');
+      return;
+    }
+    vscode.postMessage({ type: 'getCourseProfile', subject: state.selectedSubject });
   });
 
   // P1-1: Onboarding 按钮
@@ -3667,6 +3804,15 @@
       }
       case 'diagnosis': {
         renderDiagnosis(msg.data || null);
+        break;
+      }
+      case 'courseProfile': {
+        // Insights Panel 数据：缓存 per subject，渲染当前选中
+        if (!state.courseProfilesBySubject) state.courseProfilesBySubject = {};
+        if (msg.subject && msg.data) {
+          state.courseProfilesBySubject[msg.subject] = msg.data;
+          if (msg.subject === state.selectedSubject) renderInsights();
+        }
         break;
       }
       case 'chatResponse': {

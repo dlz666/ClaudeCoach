@@ -659,12 +659,24 @@ export class MaterialManager {
     return fallback;
   }
 
+  /**
+   * 把检索到的片段格式化为可注入 prompt 的文本。
+   *
+   * 关键设计：每个片段的 header 包含 `[来源 #N]` 和精确的 file/section 标签，
+   * 这样讲义生成时模型可以直接 inline 引用 `[来源 #N]` 而不需要重复整段。
+   */
   private _formatExcerpts(excerpts: RetrievedExcerpt[]): string {
     if (!excerpts.length) { return ''; }
 
     let formatted = '';
     for (const [index, excerpt] of excerpts.entries()) {
-      const block = `[资料片段 ${index + 1}] ${excerpt.sourceLabel}\n${excerpt.excerpt}`;
+      // 优先使用 sectionLabel (如 "第3章 / 3.2 动态规划")，否则用 fileName + 片段编号
+      const headerLabel = excerpt.sectionLabel
+        ? `${excerpt.fileName} / ${excerpt.sectionLabel}`
+        : excerpt.sourceLabel;
+      // 通道徽标，让模型知道这条是 keyword/vector/both 命中（影响置信判断）
+      const channelTag = excerpt.retrievedBy ? ` ${excerpt.retrievedBy === 'both' ? '★' : excerpt.retrievedBy === 'vector' ? '🔍' : '📝'}` : '';
+      const block = `[来源 #${index + 1}]${channelTag} ${headerLabel}\n${excerpt.excerpt}`;
       const next = formatted ? `${formatted}\n\n${block}` : block;
       if (next.length > 5000) {
         if (!formatted) {
