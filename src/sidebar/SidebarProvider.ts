@@ -2512,8 +2512,37 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'reparseMaterialSummary': {
+          // 重新解析 summary.json 的章节结构（适用于章节识别不全的资料）
+          const materialId = String((msg as any).materialId ?? '');
+          if (!materialId) break;
+          this._startTask(`重新解析章节 · ${materialId}`, async () => {
+            const result = await this.materialManager.reparseMaterialSummary(materialId);
+            if (result.ok) {
+              this._post({
+                type: 'log',
+                message: `章节重新解析完成：${result.chaptersBefore} → ${result.chaptersAfter} 章。请点击徽章触发重建以应用新章节索引。`,
+                level: 'info',
+              });
+            } else {
+              this._post({
+                type: 'log',
+                message: `章节重新解析失败：${result.error ?? '未知'}`,
+                level: 'error',
+              });
+            }
+            await this._refreshMaterials();
+          });
+          break;
+        }
+
         case 'reindexSingleMaterial': {
-          // 单条资料重建/升级（用户点击徽章）
+          // 单条资料重建 / 升级（用户点击徽章）。
+          // 关键修复：**不再先 remove**，让 ensureVectorIndexFor 内部走增量逻辑：
+          //   - chunks 走 textHash diff，未变的复用
+          //   - 模型变更会被 vectorIndex.diff 自动检测并整体重建
+          //   - chapters 单独构建（chunks 已 ready 后调 _buildChapterVectorIndex）
+          // 这样万一中途失败（如 embedding API 限流），原索引文件不会被破坏。
           const subject = (msg as any).subject as Subject | undefined;
           const materialId = String((msg as any).materialId ?? '');
           if (!subject || !materialId) break;
@@ -2524,8 +2553,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               this._post({ type: 'log', message: `未找到资料 ${materialId}`, level: 'warn' });
               return;
             }
-            // 强制重建：先删旧索引（避免 v1 缓存阻碍 v2 升级）
-            await this.materialManager.removeVectorIndexFor(material);
             const result = await this.materialManager.ensureVectorIndexFor(material, (event) => {
               if (event.kind === 'error') {
                 this._post({ type: 'log', message: `[向量化失败] ${event.fileName}：${event.message ?? ''}`, level: 'error' });
@@ -2535,7 +2562,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               type: 'log',
               message: result.ok
                 ? `资料已向量化：${material.fileName}（${result.embedded} 新 / ${result.reused} 复用）`
-                : `资料向量化失败：${material.fileName} — ${result.error ?? '未知'}`,
+                : `资料向量化失败：${material.fileName} — ${result.error ?? '未知'}（旧索引保留）`,
               level: result.ok ? 'info' : 'warn',
             });
             await this._refreshMaterials();
@@ -2563,7 +2590,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             for (const material of idx.materials) {
               if (material.status !== 'indexed') continue;
               try {
-                await this.materialManager.removeVectorIndexFor(material);
+                // 不先 remove，走增量复用：模型/dim 变了 vectorIndex.diff 会自动 force 重建
                 const result = await this.materialManager.ensureVectorIndexFor(material, () => {});
                 if (result.ok) { succ++; } else { fail++; }
                 this._post({

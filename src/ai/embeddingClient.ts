@@ -120,6 +120,9 @@ export class EmbeddingClient {
   // private
   // =====================================================================
 
+  /** 上次一批 embed 调用失败的具体原因（HTTP 错误 / 网络 / 解析等），供调用方读取。 */
+  lastError: string | null = null;
+
   private async _embedBatchWithRetry(
     profile: EmbeddingProfile,
     batch: string[],
@@ -129,16 +132,20 @@ export class EmbeddingClient {
     let lastErr: unknown = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return await this._embedBatchOnce(profile, batch, timeoutMs);
+        const result = await this._embedBatchOnce(profile, batch, timeoutMs);
+        this.lastError = null;
+        return result;
       } catch (err) {
         lastErr = err;
         if (attempt < retries) {
-          // 指数退避：500ms, 1s, 2s ...
+          // 指数退避：500ms, 1s, 2s, 4s ...
           await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
         }
       }
     }
-    console.warn('[EmbeddingClient] batch failed after retries:', lastErr);
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    this.lastError = msg;
+    console.warn('[EmbeddingClient] batch failed after retries:', msg);
     return null;
   }
 

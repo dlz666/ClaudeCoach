@@ -939,13 +939,27 @@ export function diagnosisPrompt(
 }
 
 export function materialIndexPrompt(text: string, subject: Subject): ChatMessage[] {
+  // 扩大扫描范围 + 抽样三段式（开头 / 中段 / 末段），避免目录不在前 15K 字时漏识别章节
+  const head = text.slice(0, 18000);
+  const totalLen = text.length;
+  const middle = totalLen > 30000 ? '\n\n[ ...中段抽样... ]\n\n' + text.slice(Math.floor(totalLen / 2) - 3000, Math.floor(totalLen / 2) + 3000) : '';
+  const tail = totalLen > 24000 ? '\n\n[ ...末段抽样... ]\n\n' + text.slice(-6000) : '';
+  const sampledText = head + middle + tail;
+
   return [
     {
       role: 'system',
-      content: `你是一位教学资料分析专家。请分析以下课程资料文本，提取结构化信息。输出纯 JSON：
+      content: `你是一位教学资料分析专家。请分析以下课程资料文本，提取**所有**章节结构化信息。
+
+【重点】不要只看开头！教材可能没有显式目录页，章节标题分散在正文里——
+需要扫描整段文本，识别所有形如"第 N 章"、"Chapter N"、"§N"、
+markdown "## " 标题、章节编号 "N.M" 等模式的章节起始。
+
+输出纯 JSON：
 {
   "chapters": [
     {
+      "chapterNumber": "1" 或 "第一章" 等原文形式（**必填**，便于后续匹配）,
       "title": "章节标题",
       "summary": "200-300 字摘要",
       "keyPoints": ["知识点1", "知识点2"],
@@ -953,9 +967,15 @@ export function materialIndexPrompt(text: string, subject: Subject): ChatMessage
     }
   ]
 }
-只输出 JSON。`,
+
+【硬要求】
+- chapters 数组应至少 5 条（除非教材确实只有 1-3 章；那种情况罕见）。
+  如果你只识别出 1-2 章，**重新扫描文本**，特别注意正文中间的章节标题（不只是开头目录）
+- 章节按出现顺序排列
+- chapterNumber 保留教材原文形式（"第八章" / "8" / "Chapter 8" 都可），便于后续匹配
+- 只输出 JSON`,
     },
-    { role: 'user', content: `学科：${subjectLabel(subject)}\n\n资料内容：\n${text.slice(0, 15000)}` },
+    { role: 'user', content: `学科：${subjectLabel(subject)}\n\n资料内容（含开头 / 中段 / 末段抽样）：\n${sampledText}` },
   ];
 }
 

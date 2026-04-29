@@ -2201,6 +2201,21 @@ button.material-vector-badge:hover {
   color: var(--vscode-charts-red, #f48771);
   border-color: color-mix(in srgb, var(--vscode-charts-red, #f48771) 35%, transparent);
 }
+/* 重新解析章节按钮（章节识别不全时出现） */
+.material-reparse-btn {
+  font-size: 9px;
+  padding: 2px 5px;
+  margin-left: 3px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 25%, transparent);
+  color: var(--vscode-charts-yellow, #d4a017);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 50%, transparent);
+  cursor: pointer;
+}
+.material-reparse-btn:hover {
+  filter: brightness(1.15);
+}
+
 /* 兼容旧 class（万一缓存了），样式同 v2 / unvectorized */
 .material-vector-badge.indexed { /* legacy */
   background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 22%, transparent);

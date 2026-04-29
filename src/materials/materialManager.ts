@@ -876,18 +876,21 @@ export class MaterialManager {
         const slice = todo.slice(i, i + BATCH);
         const vecs = await this.embeddingClient.embed(slice.map((s) => s.text));
         if (!vecs) {
+          // 暴露真实错误原因（HTTP 状态 / 网络 / 解析），不再吞成 "embedding 调用失败"
+          const detail = this.embeddingClient.lastError || '未知';
+          const fullMsg = `embedding 调用失败：${detail}（旧索引保留，可重试）`;
           progress?.({
             kind: 'error',
             materialId: material.id,
             fileName: material.fileName,
-            message: 'embedding 调用失败，已停止本资料的向量化',
+            message: fullMsg,
           });
           return {
             ok: false,
             chunks: chunks.length,
             embedded: fresh.length,
             reused: keep.length,
-            error: 'embedding 调用失败',
+            error: fullMsg,
           };
         }
         for (let j = 0; j < slice.length; j++) {
@@ -1091,6 +1094,47 @@ export class MaterialManager {
       }
     }
     return { ok: failed === 0, processed, failed };
+  }
+
+  /**
+   * 重新解析资料的章节结构（textbookParser）。
+   * 适用场景：summary.json 章节识别不全（pdf-parse 抠不到目录 / 排版特殊）。
+   * 重跑后需要重建向量索引才能生效（章节级 prefilter 用 summary.chapters）。
+   */
+  async reparseMaterialSummary(materialId: string): Promise<{
+    ok: boolean;
+    chaptersBefore: number;
+    chaptersAfter: number;
+    error?: string;
+  }> {
+    try {
+      const material = await this.getMaterialById(materialId);
+      if (!material) return { ok: false, chaptersBefore: 0, chaptersAfter: 0, error: '资料不存在' };
+      // 旧 chapters 数（用于对比）
+      let chaptersBefore = 0;
+      try {
+        const old = await readJson<MaterialSummary>(material.summaryPath);
+        chaptersBefore = old?.chapters?.length ?? 0;
+      } catch { /* ignore */ }
+      const text = await this._readMaterialText(material);
+      if (!text) return { ok: false, chaptersBefore, chaptersAfter: 0, error: '资料文本为空' };
+      // 重新调 AI parse（强制走 parseWithAI 路径）
+      const summary = await this.parser.parse(text, material.subject);
+      summary.materialId = material.id;
+      await writeJson(material.summaryPath, summary);
+      return {
+        ok: true,
+        chaptersBefore,
+        chaptersAfter: summary.chapters?.length ?? 0,
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        chaptersBefore: 0,
+        chaptersAfter: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   /** 删除资料时连带清理向量索引。 */

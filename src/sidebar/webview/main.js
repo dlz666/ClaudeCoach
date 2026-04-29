@@ -1222,6 +1222,7 @@
      * - 灰色 "未向量化"  → 点击触发 reindex
      * - 黄色 "v1 N 块"   → 已向量化但无章节索引（旧 schema）。点击 reindex 升级
      * - 绿色 "v2 N+M 章" → 已向量化 + 章节级 prefilter 启用
+     * 章节数过少（< 3）时额外显示"重新解析章节"提示按钮，因为可能是 textbookParser 漏抓了
      */
     const renderVectorBadge = (item) => {
       const stats = vectorStats[item.id];
@@ -1229,10 +1230,15 @@
         return `<button class="material-vector-badge unvectorized" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="未向量化 · 点击建索引（免费 / 几十秒）" type="button">●&nbsp;未向量化</button>`;
       }
       const hasChapters = (stats.chapters ?? 0) > 0;
+      const chapterCount = stats.chapters ?? 0;
       const dimText = stats.dimension ? `${stats.dimension}维` : '';
       const modelText = stats.model || '';
       if (hasChapters) {
-        return `<span class="material-vector-badge v2" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${stats.chapters} 章 · ${modelText} ${dimText}">▣ v2 · ${stats.chunks}+${stats.chapters}章</span>`;
+        // 章节过少（< 3）暗示 textbookParser 没识全 → 给个修复入口
+        const reparseHint = chapterCount < 3 && stats.chunks > 200
+          ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析后再 rebuild" type="button">⚠ 重新解析</button>`
+          : '';
+        return `<span class="material-vector-badge v2" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText}">▣ v2 · ${stats.chunks}+${chapterCount}章</span>${reparseHint}`;
       }
       return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>`;
     };
@@ -1289,6 +1295,17 @@
         if (!materialId || !subject) return;
         vscode.postMessage({ type: 'reindexSingleMaterial', materialId, subject });
         addLog(`已开始向量化资料 (${subject})`, 'info');
+      });
+    });
+    // 重新解析章节 — 适用于 chapter 识别不全的资料（如苏德矿微积分）
+    els.materialsList.querySelectorAll('[data-vec-action="reparse"]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const materialId = button.getAttribute('data-material-id');
+        const subject = button.getAttribute('data-subject');
+        if (!materialId || !subject) return;
+        vscode.postMessage({ type: 'reparseMaterialSummary', materialId, subject });
+        addLog(`已开始重新解析章节 (${subject})`, 'info');
       });
     });
   }
