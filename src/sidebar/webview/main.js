@@ -1241,10 +1241,8 @@
       const hasChapters = chapterCount > 0;
       const dimText = stats.dimension ? `${stats.dimension}维` : '';
       const modelText = stats.model || '';
-      // marker 提取按钮（本地 GPU/CPU，离线可用，慢）
-      const markerBtn = `<button class="material-marker-btn" data-vec-action="marker" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="本地 marker 提取（公式 LaTeX + 离线，~30 分钟/本）" type="button">🔬</button>`;
-      // Vision API 按钮（云端，质量 + 速度都更好）— 推荐使用
-      const visionBtn = `<button class="material-vision-btn" data-vec-action="vision" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="Vision API 深度提取（云端 LLM，公式 LaTeX 完美 + 5 并发 ≈ 6s/页 · 推荐）" type="button">✨</button>`;
+      // Vision API 按钮（云端 LLM 把 PDF 转 markdown，含 LaTeX 公式 + 章节标题）
+      const visionBtn = `<button class="material-vision-btn" data-vec-action="vision" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="Vision API 深度提取（云端 LLM，公式 LaTeX 完美 + 5 并发 ≈ 6s/页）" type="button">✨</button>`;
 
       if (hasChapters) {
         // 章节过少（< 3）暗示 textbookParser 没识全 → 给个修复入口
@@ -1252,9 +1250,9 @@
         const reparseHint = chapterCount < 3 && stats.chunks > 200
           ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析+重建" type="button">⚠ 重新解析</button>`
           : '';
-        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}${visionBtn}${markerBtn}`;
+        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}${visionBtn}`;
       }
-      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>${visionBtn}${markerBtn}`;
+      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>${visionBtn}`;
     };
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
       <div class="material-group">
@@ -1322,18 +1320,7 @@
         addLog(`已开始重新解析章节 (${subject})`, 'info');
       });
     });
-    // Marker 深度提取（本地 GPU/CPU）— 慢但离线可用
-    els.materialsList.querySelectorAll('[data-vec-action="marker"]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const materialId = button.getAttribute('data-material-id');
-        const subject = button.getAttribute('data-subject');
-        if (!materialId || !subject) return;
-        vscode.postMessage({ type: 'reextractMaterialMarker', materialId, subject });
-        addLog(`已开始 Marker 深度提取 (${subject})—— 单本 5-30 分钟，请保持后台`, 'info');
-      });
-    });
-    // Vision API 提取（云端，推荐）
+    // Vision API 提取（云端 LLM）
     els.materialsList.querySelectorAll('[data-vec-action="vision"]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.stopPropagation();

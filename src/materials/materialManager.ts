@@ -803,7 +803,7 @@ export class MaterialManager {
       throw new Error('未能从资料中提取到可用文本');
     }
 
-    // 按 format 写入对应文件 — markdown 流水线的核心：marker 输出走 .md
+    // 按 format 写入对应文件 — markdown 流水线的核心：vision 输出走 .md
     if (result.format === 'markdown') {
       await writeText(mdPath, result.text);
     } else {
@@ -812,10 +812,6 @@ export class MaterialManager {
     return result.text;
   }
 
-  /**
-   * 强制重新用 marker 提取（用户手动触发）。删旧 extracted.txt + summary.json，
-   * 然后重跑 ensureMaterialIndexed 走完整流水线（提取 → 解析 summary → 自动向量化）。
-   */
   /**
    * 用 Vision API 重新提取（强制重建 .md + summary）。
    * 用户场景：在资料卡片上点击 ✨ 紫色按钮（vision 深度提取）
@@ -858,48 +854,6 @@ export class MaterialManager {
         lastError: undefined,
         // @ts-expect-error 字段已在 types.ts 加入
         extractMethod: 'vision',
-      });
-
-      return { ok: true, chars: result.text.length };
-    } catch (err) {
-      return {
-        ok: false,
-        chars: 0,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
-
-  async reextractMaterialWithMarker(materialId: string, onProgress?: ExtractProgressCallback): Promise<{
-    ok: boolean;
-    chars: number;
-    error?: string;
-  }> {
-    try {
-      const material = await this.getMaterialById(materialId);
-      if (!material) return { ok: false, chars: 0, error: '资料不存在' };
-
-      const mdPath = this.paths.materialMarkdownPath(material.subject, material.id);
-      // 删 .txt + .md + summary，强制全部重生
-      try { await fs.unlink(material.textPath); } catch { /* noop */ }
-      try { await fs.unlink(mdPath); } catch { /* noop */ }
-      try { await fs.unlink(material.summaryPath); } catch { /* noop */ }
-
-      const result = await extractFileWithMeta(material.filePath, { strategy: 'marker-only', onProgress });
-      if (!result.text.replace(/\s/g, '').length) {
-        return { ok: false, chars: 0, error: 'marker 提取失败' };
-      }
-      // marker 输出永远是 markdown → 写 .md
-      await writeText(mdPath, result.text);
-
-      // 重新跑 textbookParser（会自动检测 markdown 格式）
-      const summary = await this.parser.parse(result.text, material.subject);
-      summary.materialId = material.id;
-      await writeJson(material.summaryPath, summary);
-
-      await this._setEntryState(material, 'indexed', {
-        indexedAt: new Date().toISOString(),
-        lastError: undefined,
       });
 
       return { ok: true, chars: result.text.length };
@@ -1342,12 +1296,12 @@ export class MaterialManager {
 
   /**
    * 读取资料的提取文本。优先级：
-   * 1. extracted.md (marker 输出，含 LaTeX / 章节 ## / 表格) ← 最佳
+   * 1. extracted.md (Vision API 输出，含 LaTeX / 章节 ## / 表格) ← 最佳
    * 2. extracted.txt (pdf-parse / OCR 纯文本)
    * 3. 原始 .md / .txt 文件（直接上传文本资料的情况）
    */
   private async _readMaterialText(entry: MaterialEntry): Promise<string> {
-    // 优先 .md（marker 输出）
+    // 优先 .md（Vision API 输出）
     const mdPath = this.paths.materialMarkdownPath(entry.subject, entry.id);
     if (await fileExists(mdPath)) {
       const md = await fs.readFile(mdPath, 'utf-8');

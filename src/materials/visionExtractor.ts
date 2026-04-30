@@ -6,17 +6,16 @@
  *
  * 默认模型：Qwen/Qwen3-VL-8B-Instruct（硅基流动）
  *   实测 苏德矿微积分单页 31s，完美还原 LaTeX 公式 + 章节 ## 标题。
- *   5 并发 → 等效 ~6s/页 → 280 页约 30 分钟（vs marker GPU 也是 30 分钟，但 vision 质量更高）。
+ *   5 并发 → 等效 ~6s/页 → 280 页约 30 分钟。
  *
- * 与 marker 对比：
- *   - 质量：vision 完胜（公式 LaTeX 标准、表格、多列布局都对）
- *   - 速度：vision 5 并发 ≈ marker GPU 单进程
- *   - 资源：vision 不占本地 GPU/RAM；marker 吃 8GB VRAM + 10GB RAM
- *   - 离线：marker 可离线；vision 需联网（但用免费/廉价 API）
+ * 为什么用 VL 模型而不是 reasoning 模型（如 Kimi K2 / Qwen3.6）：
+ *   - VL 专为视觉感知任务训练，markdown / LaTeX 是核心训练 target
+ *   - reasoning 模型会浪费 4000+ tokens 思考 "怎么转 markdown"，但这种纯感知
+ *     任务不需要思考；同档质量但慢 2-4 倍 + 算力浪费
  *
  * 失败容错：
  *   - 单页失败不阻塞，最后报告失败页号；可选重试
- *   - 网络断 / API 限流 / token 不够 → 降级到 marker / pdf-parse
+ *   - 网络断 / API 限流 / token 不够 → 降级到 pdf-parse
  */
 import * as fs from 'fs/promises';
 import * as os from 'os';

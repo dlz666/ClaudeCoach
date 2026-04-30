@@ -850,10 +850,10 @@ export interface MaterialEntry {
   materialType?: MaterialType;
   /**
    * 实际用的提取方式（影响下游 textbookParser / _chunkText 选 markdown 还是 plain 路径）。
-   * 'vision' / 'marker' → markdown
+   * 'vision' → markdown（含 LaTeX 公式）
    * 'pdf-parse' / 'windows-ocr' → plain text
    */
-  extractMethod?: 'vision' | 'marker' | 'pdf-parse' | 'windows-ocr';
+  extractMethod?: 'vision' | 'pdf-parse' | 'windows-ocr';
   /** 可选用户反馈得分（建议 7：检索质量 👍 / 👎），用于推荐升级提取方式 */
   qualityScore?: number;
 }
@@ -1260,7 +1260,6 @@ export type SidebarCommand =
   | { type: 'reindexSingleMaterial'; subject: Subject; materialId: string }
   | { type: 'reindexAllSubjectsAllVectors'; requireConfirm?: boolean }
   | { type: 'reparseMaterialSummary'; subject: Subject; materialId: string }
-  | { type: 'reextractMaterialMarker'; subject: Subject; materialId: string }
   | { type: 'reextractMaterialVision'; subject: Subject; materialId: string }
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Adaptive Insights =====
