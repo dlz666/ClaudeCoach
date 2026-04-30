@@ -2512,6 +2512,63 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'reextractMaterialVision': {
+          // 用 Vision API 重新提取（云端，质量极高，5 并发快）+ 自动级联重建
+          const materialId = String((msg as any).materialId ?? '');
+          if (!materialId) break;
+          this._startTask(`Vision 重提取 + 重建 · ${materialId}`, async () => {
+            const idx = await this.materialManager.getIndex();
+            const material = idx.materials.find((m) => m.id === materialId);
+            if (!material) {
+              this._post({ type: 'log', message: `未找到资料 ${materialId}`, level: 'warn' });
+              return;
+            }
+            this._post({
+              type: 'log',
+              message: `Vision API 启动（${material.fileName}）—— 拆页 + 并发调用，约 5-15 分钟`,
+              level: 'info',
+            });
+            const reextract = await this.materialManager.reextractMaterialWithVision(materialId, (event) => {
+              const headline = event.pages && event.totalPages
+                ? `Vision [${event.pages}/${event.totalPages}]`
+                : `Vision [${event.stage}]`;
+              this._post({
+                type: 'log',
+                message: `[${material.subject}] ${headline} ${event.message ?? ''}`,
+                level: event.stage === 'error' ? 'warn' : 'info',
+              });
+            });
+            if (!reextract.ok) {
+              this._post({
+                type: 'log',
+                message: `Vision 提取失败：${reextract.error ?? '未知'}（请确认设置→资料检索→Vision API 已启用）`,
+                level: 'error',
+              });
+              return;
+            }
+            this._post({
+              type: 'log',
+              message: `Vision 提取成功（${reextract.chars} 字符，含公式 LaTeX），开始重建向量索引...`,
+              level: 'info',
+            });
+            await this.materialManager.removeVectorIndexFor(material);
+            const buildResult = await this.materialManager.ensureVectorIndexFor(material, (event) => {
+              if (event.kind === 'error') {
+                this._post({ type: 'log', message: `[向量化] ${event.fileName}：${event.message ?? ''}`, level: 'warn' });
+              }
+            });
+            this._post({
+              type: 'log',
+              message: buildResult.ok
+                ? `🎉 Vision 流水线完成：文本 ${reextract.chars} 字符 + ${buildResult.chunks} 块 + 章节索引`
+                : `Vision 流水线最后一步失败：${buildResult.error ?? '未知'}`,
+              level: buildResult.ok ? 'info' : 'warn',
+            });
+            await this._refreshMaterials();
+          });
+          break;
+        }
+
         case 'reextractMaterialMarker': {
           // 用 marker 重新提取（GPU/CPU 自动）+ 重新解析章节 + 重建向量索引一条龙
           const materialId = String((msg as any).materialId ?? '');

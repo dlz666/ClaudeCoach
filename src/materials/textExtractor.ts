@@ -18,6 +18,16 @@ export type ExtractProgressCallback = (event: {
   totalPages?: number;
 }) => void;
 
+/**
+ * 提取结果：text + 提取方式（决定后续按 markdown 还是纯文本处理）。
+ */
+export interface ExtractResult {
+  text: string;
+  /** 'marker' / 'vision' = markdown 含 LaTeX；'pdf-parse' / 'windows-ocr' = 纯文本；'empty' = 提取失败 */
+  format: 'markdown' | 'plain';
+  method: 'vision' | 'marker' | 'pdf-parse' | 'windows-ocr' | 'empty';
+}
+
 function normalizeExtractedText(text: string): string {
   return text
     .replace(/\u0000/g, '')
@@ -166,10 +176,36 @@ export async function detectMarkerCommand(): Promise<string | null> {
 }
 
 /**
+ * 写一个临时 marker config_json，把 batch size + 行清理 + 重做内联公式 等性能/质量参数固化。
+ * 详细参数权衡见 docs/ 评测报告 / chat 历史。
+ */
+async function writeMarkerConfig(): Promise<string> {
+  const tmpPath = path.join(os.tmpdir(), `claudecoach-marker-config-${Date.now()}.json`);
+  const config = {
+    // 质量
+    format_lines: true,           // 清理 OCR 断行（句子合并）
+    redo_inline_math: true,       // 重做内联数学公式检测（数学教材 +5-10% 质量）
+    // 性能（依据 RTX 5060 8GB VRAM 调，安全余量 ~500MB）
+    DETECTOR_BATCH_SIZE: 32,
+    RECOGNITION_BATCH_SIZE: 16,
+    TABLE_REC_BATCH_SIZE: 16,
+  };
+  await fs.writeFile(tmpPath, JSON.stringify(config), 'utf-8');
+  return tmpPath;
+}
+
+/**
  * 用 marker_single 跑一份 PDF，返回 markdown 文本。
  *
- * 进程：spawn 'marker_single <pdf> <out_dir> --output_format markdown'
+ * 进程：spawn 'marker_single <pdf> <out_dir> --output_format markdown
+ *               --disable_image_extraction --languages "zh,en" --config_json <tmp>'
  *   marker 默认会用 GPU（如果 PyTorch CUDA 可用），否则 CPU
+ *
+ * 极致配置（已默认开启）：
+ *   - --disable_image_extraction: 不写图片到磁盘，节省 IO 10-20%（我们不渲染原图）
+ *   - --languages "zh,en": 中英混合教材识别精度更高（其他语言会差）
+ *   - format_lines + redo_inline_math: 数学教材质量 +5-10%
+ *   - batch size 调大: GPU 利用率 +30-50%
  *
  * 输出布局：<out_dir>/<basename>/<basename>.md  + 同目录附图
  *   读完即清理整个 out_dir。
@@ -181,12 +217,15 @@ export async function detectMarkerCommand(): Promise<string | null> {
 export async function extractTextWithMarker(
   pdfPath: string,
   onProgress?: ExtractProgressCallback,
+  options?: { languages?: string },
 ): Promise<string> {
   const cmd = await detectMarkerCommand();
   if (!cmd) return '';
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claudecoach-marker-'));
   const baseName = path.basename(pdfPath, path.extname(pdfPath));
+  const configPath = await writeMarkerConfig();
+  const languages = options?.languages || 'zh,en';
 
   try {
     onProgress?.({ stage: 'starting', message: `marker_single 启动中（首次会下载模型 ~3GB，请耐心等）` });
@@ -198,11 +237,12 @@ export async function extractTextWithMarker(
           pdfPath,
           '--output_dir', tempDir,
           '--output_format', 'markdown',
-          // Force_OCR 关闭以加速；marker 自动判断
+          '--disable_image_extraction',  // 节省 IO，不需要图
+          '--languages', languages,       // 明示语言提升 OCR 精度
+          '--config_json', configPath,    // 性能 + 质量参数
         ],
         {
           windowsHide: true,
-          // marker 内部需要 ENV，但用默认 PATH
           env: { ...process.env },
         },
       );
@@ -302,6 +342,8 @@ export async function extractTextWithMarker(
     return '';
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    // 清理临时 config（每次新建是为了未来支持每资料独立配置；现在共用也可以但这样更安全）
+    await fs.unlink(configPath).catch(() => undefined);
   }
 }
 
@@ -310,30 +352,67 @@ export async function extractTextWithMarker(
 export interface ExtractOptions {
   /**
    * 提取策略：
-   *  - 'auto' (默认)：marker 可用就优先用，失败 fallback；否则走 pdf-parse + Windows OCR
-   *  - 'marker-only'：必须用 marker，否则报错
-   *  - 'fast'：只用 pdf-parse + Windows OCR，跳过 marker（已索引材料增量更新时用）
+   *  - 'auto' (默认)：vision → marker → pdf-parse → Windows OCR 多级降级
+   *  - 'vision-only'：必须用 vision API，否则报错（用于深度提取按钮）
+   *  - 'marker-only'：必须用本地 marker，否则报错
+   *  - 'fast'：只用 pdf-parse + Windows OCR（导入时 placeholder，质量低但秒级）
    */
-  strategy?: 'auto' | 'marker-only' | 'fast';
+  strategy?: 'auto' | 'vision-only' | 'marker-only' | 'fast';
   onProgress?: ExtractProgressCallback;
+  /** vision 配置：从 prefs.retrieval.vision 读，注入这里 */
+  visionConfig?: import('./visionExtractor').VisionConfig;
 }
 
+/**
+ * 提取 PDF 文本，返回带元信息的 ExtractResult。
+ * 老的 string 返回签名通过 .text 字段访问。
+ */
 export async function extractTextFromPdf(
   filePath: string,
   options?: ExtractOptions,
-): Promise<string> {
+): Promise<ExtractResult> {
   const strategy = options?.strategy ?? 'auto';
   const onProgress = options?.onProgress;
+  const visionConfig = options?.visionConfig;
 
-  // 1. marker 优先
+  // 1. Vision API 优先（输出 markdown 含 LaTeX，质量最高）
+  if (strategy === 'auto' || strategy === 'vision-only') {
+    if (visionConfig?.enabled) {
+      onProgress?.({ stage: 'starting', message: `Vision API 启动（${visionConfig.model}）` });
+      try {
+        const { extractWithVision } = await import('./visionExtractor');
+        const visionText = await extractWithVision(filePath, visionConfig, (e) => {
+          onProgress?.({
+            stage: e.stage === 'split' ? 'starting' :
+                   e.stage === 'page' ? 'processing' :
+                   e.stage === 'done' ? 'done' : 'error',
+            message: e.message,
+            pages: e.page,
+            totalPages: e.totalPages,
+          });
+        });
+        if (visionText && visionText.replace(/\s/g, '').length >= 200) {
+          return { text: visionText, format: 'markdown', method: 'vision' };
+        }
+        onProgress?.({ stage: 'fallback', message: 'Vision 输出过短，fallback' });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        onProgress?.({ stage: 'error', message: `Vision 失败：${reason}` });
+        if (strategy === 'vision-only') throw err;
+      }
+    } else if (strategy === 'vision-only') {
+      throw new Error('Vision 提取未配置（请在设置→资料检索→Vision API 启用）');
+    }
+  }
+
+  // 2. Marker 本地（GPU/CPU 都行，离线友好）
   if (strategy === 'auto' || strategy === 'marker-only') {
     onProgress?.({ stage: 'detect', message: '探测 marker_single...' });
     const markerAvailable = await detectMarkerCommand();
     if (markerAvailable) {
       const markerText = await extractTextWithMarker(filePath, onProgress);
-      const markerNormalized = normalizeExtractedText(markerText);
-      if (looksLikeUsableText(markerNormalized)) {
-        return markerNormalized;
+      if (markerText && markerText.replace(/\s/g, '').length >= 200) {
+        return { text: markerText, format: 'markdown', method: 'marker' };
       }
       onProgress?.({ stage: 'fallback', message: 'marker 输出过短，fallback 到 pdf-parse' });
     } else if (strategy === 'marker-only') {
@@ -343,36 +422,55 @@ export async function extractTextFromPdf(
     }
   }
 
-  // 2. pdf-parse
+  // 3. pdf-parse（输出 plain text，秒级）
   const pdfParse = require('pdf-parse');
   const buffer = await fs.readFile(filePath);
   const data = await pdfParse(buffer);
   const parsedText = normalizeExtractedText(String(data.text || ''));
   if (looksLikeUsableText(parsedText)) {
-    return parsedText;
+    return { text: parsedText, format: 'plain', method: 'pdf-parse' };
   }
 
-  // 3. Windows OCR fallback
+  // 3. Windows OCR fallback（输出 plain text）
   const ocrText = await extractTextWithWindowsOcr(filePath);
   if (looksLikeUsableText(ocrText)) {
-    return ocrText;
+    return { text: ocrText, format: 'plain', method: 'windows-ocr' };
   }
 
-  return parsedText;
+  return { text: parsedText, format: 'plain', method: parsedText ? 'pdf-parse' : 'empty' };
 }
 
+/**
+ * 兼容 wrapper：旧调用方仍可拿 string。新代码用 extractFileWithMeta 拿完整元信息。
+ */
 export async function extractTextFromFile(
   filePath: string,
   options?: ExtractOptions,
 ): Promise<string> {
+  const result = await extractFileWithMeta(filePath, options);
+  return result.text;
+}
+
+/**
+ * 完整版 — 返回 text + format + method，让 materialManager 决定写 .md 还是 .txt。
+ */
+export async function extractFileWithMeta(
+  filePath: string,
+  options?: ExtractOptions,
+): Promise<ExtractResult> {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
     case '.pdf':
       return extractTextFromPdf(filePath, options);
-    case '.txt':
     case '.md':
-    case '.markdown':
-      return fs.readFile(filePath, 'utf-8');
+    case '.markdown': {
+      const text = await fs.readFile(filePath, 'utf-8');
+      return { text, format: 'markdown', method: 'marker' };
+    }
+    case '.txt': {
+      const text = await fs.readFile(filePath, 'utf-8');
+      return { text, format: 'plain', method: 'pdf-parse' };
+    }
     default:
       throw new Error(`不支持的文件格式: ${ext}。支持 PDF、TXT、Markdown。`);
   }

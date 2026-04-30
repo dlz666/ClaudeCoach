@@ -84,6 +84,23 @@ export async function activate(context: vscode.ExtensionContext) {
         dimension: cfg.dimension || 1024,
       };
     },
+    // Vision 配置：每次读最新（用户改设置不需重启）
+    getVisionConfig: async () => {
+      const prefs = await preferencesStore.get();
+      const cfg = prefs.retrieval?.vision;
+      if (!cfg || !cfg.enabled || !cfg.baseUrl || !cfg.apiToken || !cfg.model) {
+        return null;
+      }
+      return {
+        enabled: true,
+        baseUrl: cfg.baseUrl,
+        apiToken: cfg.apiToken,
+        model: cfg.model,
+        concurrency: cfg.concurrency,
+        dpi: cfg.dpi,
+        maxTokens: cfg.maxTokens,
+      };
+    },
   });
 
   // ===== Coach 框架 =====

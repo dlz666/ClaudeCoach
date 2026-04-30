@@ -46,6 +46,17 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
       dimension: 1024,
       hybridWeight: 0.5,
     },
+    // Vision API：用云端多模态 LLM 把 PDF 直接转 markdown（含 LaTeX 公式）
+    // 实测 Qwen3-VL-8B 31s/页 + 5 并发 ≈ 6s/页等效，质量胜 marker
+    vision: {
+      enabled: false,
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiToken: '',
+      model: 'Qwen/Qwen3-VL-8B-Instruct',
+      concurrency: 5,
+      dpi: 200,
+      maxTokens: 6000,
+    },
   },
   ui: {
     fontSize: 14,
@@ -122,6 +133,10 @@ function mergePreferences(stored: Partial<LearningPreferences> | null | undefine
       embedding: {
         ...DEFAULT_PREFERENCES.retrieval!.embedding!,
         ...(stored.retrieval?.embedding ?? {}),
+      },
+      vision: {
+        ...DEFAULT_PREFERENCES.retrieval!.vision!,
+        ...(stored.retrieval?.vision ?? {}),
       },
     },
     ui: {

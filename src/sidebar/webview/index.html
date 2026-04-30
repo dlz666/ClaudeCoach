@@ -588,6 +588,46 @@
           <button class="btn small" type="button" id="btn-reindex-all-subjects" title="一次性升级 / 重建所有学科所有资料">🌐 全学科一键重建</button>
           <span class="hint" id="embedding-test-status"></span>
         </div>
+
+        <!-- ===== Vision API（PDF → markdown 深度提取）===== -->
+        <div class="settings-divider">
+          <span class="settings-divider-label">Vision API · PDF 深度提取（含公式 LaTeX）</span>
+        </div>
+        <div class="setting-row">
+          <label class="inline-check">
+            <input type="checkbox" id="vision-enabled">
+            启用 Vision API（点资料 ✨ 按钮时用云端多模态 LLM 把 PDF 转 markdown）
+          </label>
+        </div>
+        <div class="setting-row">
+          <label for="vision-baseUrl">Vision baseUrl</label>
+          <input type="text" id="vision-baseUrl" class="text-input" placeholder="https://api.siliconflow.cn/v1">
+        </div>
+        <div class="setting-row">
+          <label for="vision-token">API Token</label>
+          <input type="password" id="vision-token" class="text-input" placeholder="可与 embedding 共用 token（硅基流动）">
+        </div>
+        <div class="setting-row">
+          <label for="vision-model">视觉模型</label>
+          <select id="vision-model" class="text-input">
+            <option value="Qwen/Qwen3-VL-8B-Instruct">Qwen3-VL-8B（推荐 · 31s/页）</option>
+            <option value="Qwen/Qwen3-VL-32B-Instruct">Qwen3-VL-32B（最高质量 · 55s/页）</option>
+            <option value="Qwen/Qwen3.6-35B-A3B">Qwen3.6-35B-A3B（MoE · 44s/页）</option>
+            <option value="Qwen/Qwen3.6-27B">Qwen3.6-27B（89s/页）</option>
+            <option value="Pro/moonshotai/Kimi-K2.6">Kimi K2.6（含视觉 · 79s/页 含推理）</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label for="vision-concurrency">并发请求数</label>
+          <div class="slider-row">
+            <input type="range" id="vision-concurrency" min="1" max="20" value="5">
+            <span id="vision-concurrency-value" class="hint">5</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label for="vision-dpi">PDF→PNG dpi（影响 OCR 精度 vs token 量）</label>
+          <input type="number" id="vision-dpi" min="100" max="400" step="50" value="200" class="num-input">
+        </div>
       </div>
     </details>
 

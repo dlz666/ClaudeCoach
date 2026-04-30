@@ -2201,6 +2201,24 @@ button.material-vector-badge:hover {
   color: var(--vscode-charts-red, #f48771);
   border-color: color-mix(in srgb, var(--vscode-charts-red, #f48771) 35%, transparent);
 }
+/* Vision API 深度提取按钮（云端，推荐） */
+.material-vision-btn {
+  font-size: 12px;
+  padding: 2px 5px;
+  margin-left: 3px;
+  border-radius: 8px;
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--vscode-charts-purple, #c44ec4) 30%, transparent),
+    color-mix(in srgb, var(--vscode-charts-blue, #4080d0) 25%, transparent));
+  color: var(--vscode-charts-purple, #c44ec4);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #c44ec4) 50%, transparent);
+  cursor: pointer;
+}
+.material-vision-btn:hover {
+  filter: brightness(1.2);
+  transform: translateY(-1px);
+}
+
 /* Marker 深度提取按钮（公式 LaTeX + 多列正确） */
 .material-marker-btn {
   font-size: 11px;

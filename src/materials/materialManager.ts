@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { GroundingSource, MaterialEntry, MaterialExerciseMapping, MaterialIndex, MaterialSectionMapping, MaterialSummary, Subject } from '../types';
 import { readJson, writeJson, ensureDir, writeText, fileExists } from '../utils/fileSystem';
-import { extractTextFromFile, ExtractProgressCallback } from './textExtractor';
+import { extractTextFromFile, extractFileWithMeta, ExtractProgressCallback, ExtractResult } from './textExtractor';
 import { StoragePathResolver, getStoragePathResolver } from '../storage/pathResolver';
 import { TextbookParser } from './textbookParser';
 import { EmbeddingClient } from '../ai/embeddingClient';
@@ -78,6 +78,8 @@ export class MaterialManager {
     model: string;
     dimension: number;
   } | null>) | null = null;
+  /** Vision API 配置读取（PDF → markdown 深度提取），由 setHybridDeps 注入 */
+  private getVisionConfig: (() => Promise<import('./visionExtractor').VisionConfig | null>) | null = null;
   /** 防止同一资料并发向量化 */
   private readonly vectorizingMaterials = new Set<string>();
 
@@ -111,11 +113,14 @@ export class MaterialManager {
       model: string;
       dimension: number;
     } | null>;
+    /** 可选：Vision API 配置读取（按需注入，未注入则跳过 vision 提取） */
+    getVisionConfig?: () => Promise<import('./visionExtractor').VisionConfig | null>;
   }): void {
     this.embeddingClient = deps.embeddingClient;
     this.vectorIndex = deps.vectorIndex;
     this.hybridRetriever = deps.hybridRetriever;
     this.getHybridConfig = deps.getConfig;
+    this.getVisionConfig = deps.getVisionConfig ?? null;
   }
 
   private get materialsDir(): string {
@@ -765,14 +770,18 @@ export class MaterialManager {
   }
 
   private async _ensureTextForIndexing(entry: MaterialEntry): Promise<string> {
+    // 检查任一已存在
+    const mdPath = this.paths.materialMarkdownPath(entry.subject, entry.id);
+    if (await fileExists(mdPath)) {
+      const md = await fs.readFile(mdPath, 'utf-8');
+      if (md.trim()) return md;
+    }
     if (await fileExists(entry.textPath)) {
       const cached = await this.ensureMaterialText(entry);
-      if (cached.trim()) {
-        return cached;
-      }
+      if (cached.trim()) return cached;
     }
 
-    // marker / OCR 进度通过 vectorize 通道广播（共用同一条 webview log channel）
+    // 没有任何缓存，跑提取流水线
     const onProgress: ExtractProgressCallback = (event) => {
       this.vectorizeProgressEmitter.fire({
         kind: event.stage === 'done' || event.stage === 'fallback' ? 'chunk-batch' : event.stage === 'error' ? 'error' : 'start',
@@ -783,19 +792,84 @@ export class MaterialManager {
         message: event.message ?? `[提取] ${event.stage}`,
       });
     };
-    const extracted = await extractTextFromFile(entry.filePath, { strategy: 'auto', onProgress });
-    if (!extracted.replace(/\s/g, '').length) {
+    // 注入 vision 配置让 strategy='auto' 能用 vision API 优先
+    const visionConfig = this.getVisionConfig ? await this.getVisionConfig() : null;
+    const result: ExtractResult = await extractFileWithMeta(entry.filePath, {
+      strategy: 'auto',
+      onProgress,
+      visionConfig: visionConfig ?? undefined,
+    });
+    if (!result.text.replace(/\s/g, '').length) {
       throw new Error('未能从资料中提取到可用文本');
     }
 
-    await writeText(entry.textPath, extracted);
-    return extracted;
+    // 按 format 写入对应文件 — markdown 流水线的核心：marker 输出走 .md
+    if (result.format === 'markdown') {
+      await writeText(mdPath, result.text);
+    } else {
+      await writeText(entry.textPath, result.text);
+    }
+    return result.text;
   }
 
   /**
    * 强制重新用 marker 提取（用户手动触发）。删旧 extracted.txt + summary.json，
    * 然后重跑 ensureMaterialIndexed 走完整流水线（提取 → 解析 summary → 自动向量化）。
    */
+  /**
+   * 用 Vision API 重新提取（强制重建 .md + summary）。
+   * 用户场景：在资料卡片上点击 ✨ 紫色按钮（vision 深度提取）
+   */
+  async reextractMaterialWithVision(materialId: string, onProgress?: ExtractProgressCallback): Promise<{
+    ok: boolean;
+    chars: number;
+    error?: string;
+  }> {
+    try {
+      const material = await this.getMaterialById(materialId);
+      if (!material) return { ok: false, chars: 0, error: '资料不存在' };
+
+      const visionConfig = this.getVisionConfig ? await this.getVisionConfig() : null;
+      if (!visionConfig?.enabled) {
+        return { ok: false, chars: 0, error: 'Vision API 未启用（设置→资料检索→Vision API）' };
+      }
+
+      const mdPath = this.paths.materialMarkdownPath(material.subject, material.id);
+      try { await fs.unlink(material.textPath); } catch { /* noop */ }
+      try { await fs.unlink(mdPath); } catch { /* noop */ }
+      try { await fs.unlink(material.summaryPath); } catch { /* noop */ }
+
+      const result = await extractFileWithMeta(material.filePath, {
+        strategy: 'vision-only',
+        onProgress,
+        visionConfig,
+      });
+      if (!result.text.replace(/\s/g, '').length) {
+        return { ok: false, chars: 0, error: 'Vision 提取失败' };
+      }
+      await writeText(mdPath, result.text);
+
+      const summary = await this.parser.parse(result.text, material.subject);
+      summary.materialId = material.id;
+      await writeJson(material.summaryPath, summary);
+
+      await this._setEntryState(material, 'indexed', {
+        indexedAt: new Date().toISOString(),
+        lastError: undefined,
+        // @ts-expect-error 字段已在 types.ts 加入
+        extractMethod: 'vision',
+      });
+
+      return { ok: true, chars: result.text.length };
+    } catch (err) {
+      return {
+        ok: false,
+        chars: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   async reextractMaterialWithMarker(materialId: string, onProgress?: ExtractProgressCallback): Promise<{
     ok: boolean;
     chars: number;
@@ -805,28 +879,30 @@ export class MaterialManager {
       const material = await this.getMaterialById(materialId);
       if (!material) return { ok: false, chars: 0, error: '资料不存在' };
 
-      // 删旧文本 / 汇总；保留 source.pdf 和 vector-index.json
+      const mdPath = this.paths.materialMarkdownPath(material.subject, material.id);
+      // 删 .txt + .md + summary，强制全部重生
       try { await fs.unlink(material.textPath); } catch { /* noop */ }
+      try { await fs.unlink(mdPath); } catch { /* noop */ }
       try { await fs.unlink(material.summaryPath); } catch { /* noop */ }
 
-      const text = await extractTextFromFile(material.filePath, { strategy: 'marker-only', onProgress });
-      if (!text.replace(/\s/g, '').length) {
+      const result = await extractFileWithMeta(material.filePath, { strategy: 'marker-only', onProgress });
+      if (!result.text.replace(/\s/g, '').length) {
         return { ok: false, chars: 0, error: 'marker 提取失败' };
       }
-      await writeText(material.textPath, text);
+      // marker 输出永远是 markdown → 写 .md
+      await writeText(mdPath, result.text);
 
-      // 重新跑 textbookParser
-      const summary = await this.parser.parse(text, material.subject);
+      // 重新跑 textbookParser（会自动检测 markdown 格式）
+      const summary = await this.parser.parse(result.text, material.subject);
       summary.materialId = material.id;
       await writeJson(material.summaryPath, summary);
 
-      // 标 status 为 indexed 并重置错误（如有）
       await this._setEntryState(material, 'indexed', {
         indexedAt: new Date().toISOString(),
         lastError: undefined,
       });
 
-      return { ok: true, chars: text.length };
+      return { ok: true, chars: result.text.length };
     } catch (err) {
       return {
         ok: false,
@@ -1264,20 +1340,40 @@ export class MaterialManager {
     return content || refreshed;
   }
 
+  /**
+   * 读取资料的提取文本。优先级：
+   * 1. extracted.md (marker 输出，含 LaTeX / 章节 ## / 表格) ← 最佳
+   * 2. extracted.txt (pdf-parse / OCR 纯文本)
+   * 3. 原始 .md / .txt 文件（直接上传文本资料的情况）
+   */
   private async _readMaterialText(entry: MaterialEntry): Promise<string> {
+    // 优先 .md（marker 输出）
+    const mdPath = this.paths.materialMarkdownPath(entry.subject, entry.id);
+    if (await fileExists(mdPath)) {
+      const md = await fs.readFile(mdPath, 'utf-8');
+      if (md.trim().length >= 100) return md;
+    }
+    // 然后 .txt（pdf-parse 输出）
     if (await fileExists(entry.textPath)) {
       const content = await this.ensureMaterialText(entry);
-      if (content) {
-        return content;
-      }
+      if (content) return content;
     }
-
+    // 兜底：直接上传的文本文件
     const ext = path.extname(entry.filePath).toLowerCase();
     if (ext === '.md' || ext === '.markdown' || ext === '.txt') {
       return fs.readFile(entry.filePath, 'utf-8');
     }
-
     return '';
+  }
+
+  /**
+   * 资料的"格式" — 决定 textbookParser 和 _chunkText 走 markdown 还是 plain 路径。
+   * 检查 extracted.md 是否存在；存在 → 'markdown'；否则 'plain'。
+   */
+  private async _detectMaterialFormat(entry: MaterialEntry): Promise<'markdown' | 'plain'> {
+    const mdPath = this.paths.materialMarkdownPath(entry.subject, entry.id);
+    if (await fileExists(mdPath)) return 'markdown';
+    return 'plain';
   }
 
   private async _loadMaterialSummary(entry: MaterialEntry): Promise<MaterialSummary | null> {
@@ -1330,21 +1426,24 @@ export class MaterialManager {
   /**
    * 切分资料文本为 chunk 列表。
    *
-   * v2 增强：heading-aware chunking
-   * - 自动识别章节标题（"第 N 章"、"## "、"3.2 "、"Chapter N" 等）
-   * - 跟踪当前所在章节，把最近的 chapter / section 标题作为 [上下文头] 拼接到
-   *   chunk 开头，形如：[第 3 章 动态规划 / 3.2 最优子结构]\n\n<原文>
-   * - 同时利好关键词检索（章节词进入 IDF）和向量检索（语义边界更清晰）
+   * v3 增强（markdown-aware）：
+   * - 识别 markdown 代码块 ``` ``` / 数学块 $$ ... $$ / 表格 |...| —— 这些块**整体不切**
+   * - heading-aware：用 # ## ### 边界 / 第N章 / Chapter N 等 → 章节上下文头
+   * - 每 chunk 头部加 [章 / 节] 前缀，便于 IDF 关键词检索 + 向量语义边界
    *
-   * 副作用：行为变更会让旧的 vector-index.json 文本 hash 全部不命中，触发增量重建。
-   * 这是预期的——bge-m3 也会因此召回质量提升。
+   * 副作用：行为变更会让旧的 vector-index.json 文本 hash 全部不命中 → 增量重建。
    */
   private _chunkText(text: string): string[] {
     const normalized = text.replace(/\r\n/g, '\n').replace(/\t/g, ' ').trim();
     if (!normalized) { return []; }
 
+    // 第一步：把"不可切分块"（code / math / table）整体抽出来作为单个 paragraph
+    // 然后按 \n{2,} 切其余文本。最后顺序拼回 paragraphs 数组。
+    const blocks: string[] = this._splitMarkdownAware(normalized);
+
     const chunks: string[] = [];
-    const paragraphs = normalized.split(/\n{2,}/).map(paragraph => paragraph.trim()).filter(Boolean);
+    // 兼容老变量名 paragraphs（下面用）
+    const paragraphs = blocks.filter((b) => b.trim().length > 0);
     let current = '';
     let currentChapter = '';
     let currentSection = '';
@@ -1432,6 +1531,82 @@ export class MaterialManager {
       .replace(/[、。：:.,;；]+$/, '')
       .trim()
       .slice(0, 60);
+  }
+
+  /**
+   * markdown-aware 段落切分：
+   * - 代码块 ```...```、数学块 $$...$$、表格（连续的 |...| 行）当作单个 paragraph 不切
+   * - 其余文本按 \n{2,} 切常规段落
+   * - 长段落（> 1500 字）走 _splitLongText 软切
+   *
+   * 不可切分块的检测顺序很关键 — code 比 math 优先（``` 内可能有 $$）。
+   */
+  private _splitMarkdownAware(text: string): string[] {
+    const result: string[] = [];
+    const lines = text.split('\n');
+    let i = 0;
+    let normalBuffer: string[] = [];
+
+    const flushNormal = () => {
+      if (normalBuffer.length === 0) return;
+      const block = normalBuffer.join('\n').trim();
+      if (block) {
+        // 普通文本按 \n{2,} 切多个 paragraph
+        for (const p of block.split(/\n{2,}/)) {
+          const tp = p.trim();
+          if (tp) result.push(tp);
+        }
+      }
+      normalBuffer = [];
+    };
+
+    while (i < lines.length) {
+      const line = lines[i];
+      // 1. 代码块 ```lang\n ... \n```
+      if (/^\s*```/.test(line)) {
+        flushNormal();
+        const start = i;
+        i++; // 跳过开头的 ```
+        while (i < lines.length && !/^\s*```/.test(lines[i])) i++;
+        if (i < lines.length) i++; // 跳过结尾的 ```
+        const block = lines.slice(start, i).join('\n');
+        result.push(block);
+        continue;
+      }
+      // 2. 数学块 $$ ... $$（独立成行的 $$）
+      if (/^\s*\$\$\s*$/.test(line)) {
+        flushNormal();
+        const start = i;
+        i++; // 跳过开头的 $$
+        while (i < lines.length && !/^\s*\$\$\s*$/.test(lines[i])) i++;
+        if (i < lines.length) i++; // 跳过结尾的 $$
+        const block = lines.slice(start, i).join('\n');
+        result.push(block);
+        continue;
+      }
+      // 3. 表格（连续 ≥ 2 行 | ... | 风格）
+      if (/^\|.*\|/.test(line.trim())) {
+        // 看是否是表格而非单行（至少需要紧跟一行 | --- |...| 分隔行 或者多行 |..|）
+        const start = i;
+        let tableLines = 1;
+        i++;
+        while (i < lines.length && /^\|.*\|/.test(lines[i].trim())) {
+          tableLines++;
+          i++;
+        }
+        if (tableLines >= 2) {
+          flushNormal();
+          result.push(lines.slice(start, i).join('\n'));
+          continue;
+        }
+        // 单行不算表格，回退当作普通行
+        i = start;
+      }
+      normalBuffer.push(line);
+      i++;
+    }
+    flushNormal();
+    return result;
   }
 
   private async _buildRelevantSummaryText(

@@ -100,6 +100,17 @@ export class TextbookParser {
       };
     }
 
+    // markdown-aware 路径：marker 输出的 .md 含明确 ## / ### 标题
+    // 直接结构化映射，不需要走 AI 摸黑识别（速度 + 质量都 +）
+    if (this._looksLikeMarkdown(normalizedText)) {
+      const mdResult = this._parseMarkdown(normalizedText, subject);
+      if (mdResult.chapters.length >= 3) {
+        // 章节足够多就直接用结构化结果（章节足够代表 marker 输出 OK）
+        return mdResult;
+      }
+      // 章节数过少 → 不信任，回退 AI 路径（marker 偶尔输出 ## 但章节结构紊乱）
+    }
+
     const fullChunks = this.buildChunks(normalizedText);
     if (fullChunks.length > this.maxAiChunks) {
       const outlineSnapshot = this.buildOutlineSnapshot(normalizedText);
@@ -195,6 +206,158 @@ export class TextbookParser {
         generatedAt: new Date().toISOString(),
         truncated: text.length > 15000,
       },
+    };
+  }
+
+  /**
+   * 探测文本是否是 markdown 格式（marker 输出的特征）。
+   * 启发：> 5 个 `## ` 行 OR > 3 个 `### ` 行 OR 含明确 markdown 表格。
+   */
+  private _looksLikeMarkdown(text: string): boolean {
+    const h2Count = (text.match(/(^|\n)##\s+/g) || []).length;
+    const h3Count = (text.match(/(^|\n)###\s+/g) || []).length;
+    const tableLines = (text.match(/^\|[^\n]*\|[^\n]*\|/gm) || []).length;
+    return h2Count >= 5 || h3Count >= 3 || tableLines >= 5;
+  }
+
+  /**
+   * 直接从 markdown 结构提取章节 / 小节 / 习题。
+   *
+   * 规则：
+   *   `# `   → 文档级标题（书名等），不算章节
+   *   `## `  → 章 (chapter)；提取 chapterNumber + title
+   *   `### ` → 节 (section)，挂在最近的章下
+   *   `####` → 小节 (subsection)，并入 section
+   *   含"习题/Exercise/练习/课后题"关键字的 ## 或 ### → exerciseMapping
+   *
+   * 章节摘要：取章后到下一章前的前 200-300 字作为 summary。
+   * keyPoints：扫章内的 ###/4 级 heading + 首段内的关键名词（粗略）。
+   */
+  private _parseMarkdown(text: string, subject: Subject): MaterialSummary {
+    const lines = text.split('\n');
+    type Heading = { level: number; raw: string; title: string; chapterNumber?: string; lineIndex: number; isExercise: boolean };
+    const headings: Heading[] = [];
+    const exerciseRegex = /(习题|练习|课后题|本章习题|思考题|Exercises?|Problems?)/i;
+
+    lines.forEach((line, i) => {
+      const m = line.match(/^(#{1,4})\s+(.+?)\s*$/);
+      if (!m) return;
+      const level = m[1].length;
+      const title = m[2].replace(/[#*_`]/g, '').trim();
+      // 提取 chapter number（第N章 / Chapter N / N. / N-N）
+      let chapterNumber: string | undefined;
+      const cnMatch = title.match(/^第\s*([0-9一二三四五六七八九十百零两]+)\s*[章节篇]/);
+      const enMatch = title.match(/^Chapter\s+(\d+)/i);
+      const numMatch = title.match(/^(\d+)\s*\./);
+      if (cnMatch) chapterNumber = cnMatch[1];
+      else if (enMatch) chapterNumber = enMatch[1];
+      else if (numMatch) chapterNumber = numMatch[1];
+      headings.push({
+        level,
+        raw: line,
+        title,
+        chapterNumber,
+        lineIndex: i,
+        isExercise: exerciseRegex.test(title),
+      });
+    });
+
+    // 章节边界：所有 level=2 的 heading（# 是文档标题，不计）
+    // 如果没有 level=2 但有 level=1（罕见），也计为章
+    const chapterLevel = headings.some((h) => h.level === 2) ? 2 : 1;
+    const chapterHeadings = headings.filter((h) => h.level === chapterLevel && !h.isExercise);
+
+    const chapters: MaterialSummary['chapters'] = [];
+    const sectionMappings: MaterialSummary['sectionMappings'] = [];
+    const exerciseMappings: MaterialSummary['exerciseMappings'] = [];
+
+    chapterHeadings.forEach((ch, idx) => {
+      const startLine = ch.lineIndex;
+      const endLine = idx + 1 < chapterHeadings.length ? chapterHeadings[idx + 1].lineIndex : lines.length;
+      const chapterBody = lines.slice(startLine + 1, endLine).join('\n');
+      // 摘要：取 chapter body 前 300 字（去除嵌套 heading）
+      const summaryText = chapterBody
+        .split(/\n/)
+        .filter((l) => !/^#{1,4}\s/.test(l))
+        .join('\n')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 300);
+
+      // 章内的小节：level >= chapterLevel+1
+      const sectionsInChapter = headings.filter(
+        (h) => h.level === chapterLevel + 1 &&
+          h.lineIndex > startLine && h.lineIndex < endLine,
+      );
+      const subSections = headings.filter(
+        (h) => h.level >= chapterLevel + 2 &&
+          h.lineIndex > startLine && h.lineIndex < endLine,
+      );
+
+      // keyPoints：取章内 level+1/level+2 标题作为知识点（最多 8 条）
+      const keyPoints = [...sectionsInChapter, ...subSections]
+        .map((s) => s.title)
+        .filter((t) => t.length >= 2 && t.length <= 60)
+        .slice(0, 8);
+
+      chapters.push({
+        chapterNumber: ch.chapterNumber,
+        title: ch.title,
+        summary: summaryText,
+        keyPoints,
+        topicMapping: [],
+        sectionNumbers: sectionsInChapter.map((s) => s.chapterNumber || s.title.slice(0, 20)),
+        relatedExerciseTitles: headings
+          .filter((h) => h.isExercise && h.lineIndex > startLine && h.lineIndex < endLine)
+          .map((h) => h.title),
+      } as any);
+
+      // sectionMappings 映射
+      sectionsInChapter.forEach((s) => {
+        sectionMappings.push({
+          chapterNumber: ch.chapterNumber,
+          chapterTitle: ch.title,
+          sectionNumber: s.chapterNumber,
+          sectionTitle: s.title,
+          summary: '',
+          keyPoints: [],
+          anchorTerms: [s.title],
+          topicMapping: [],
+        } as any);
+      });
+
+      // exerciseMappings 映射（章内的习题 heading）
+      headings
+        .filter((h) => h.isExercise && h.lineIndex > startLine && h.lineIndex < endLine)
+        .forEach((ex) => {
+          exerciseMappings.push({
+            chapterNumber: ch.chapterNumber,
+            chapterTitle: ch.title,
+            sectionNumber: undefined,
+            sectionTitle: undefined,
+            title: ex.title,
+            exerciseType: 'general',
+            summary: '',
+            keyPoints: [],
+            topicMapping: [],
+            anchorTerms: [ex.title],
+            relatedSections: [],
+          } as any);
+        });
+    });
+
+    return {
+      materialId: '',
+      documentType: 'unknown',
+      chapters,
+      sectionMappings,
+      exerciseMappings,
+      parserMeta: {
+        source: 'markdown-direct',
+        chunkCount: chapters.length,
+        generatedAt: new Date().toISOString(),
+        truncated: false,
+      } as any,
     };
   }
 

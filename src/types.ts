@@ -546,6 +546,23 @@ export interface LearningPreferences {
        */
       hybridWeight?: number;
     };
+    /**
+     * Vision API 配置（PDF → markdown 深度提取）。
+     * 默认 Qwen3-VL-8B（实测苏德矿微积分 31s/页 + 5 并发 ≈ 6s/页等效）
+     * 跟 chat / embedding profile 解耦：可走任何 OpenAI 兼容 vision endpoint
+     */
+    vision?: {
+      enabled?: boolean;
+      baseUrl?: string;
+      apiToken?: string;
+      model?: string;
+      /** 并发请求数，默认 5 */
+      concurrency?: number;
+      /** PDF → PNG 的 dpi，默认 200 */
+      dpi?: number;
+      /** 单页 max_tokens 默认 6000 */
+      maxTokens?: number;
+    };
   };
   /** UI 偏好。 */
   ui?: {
@@ -831,6 +848,14 @@ export interface MaterialEntry {
   lastError?: string;
   /** 资料类型，影响检索时按 tag 加权。可选——旧资料默认 'other'。 */
   materialType?: MaterialType;
+  /**
+   * 实际用的提取方式（影响下游 textbookParser / _chunkText 选 markdown 还是 plain 路径）。
+   * 'vision' / 'marker' → markdown
+   * 'pdf-parse' / 'windows-ocr' → plain text
+   */
+  extractMethod?: 'vision' | 'marker' | 'pdf-parse' | 'windows-ocr';
+  /** 可选用户反馈得分（建议 7：检索质量 👍 / 👎），用于推荐升级提取方式 */
+  qualityScore?: number;
 }
 
 export interface MaterialIndex {
@@ -1236,6 +1261,7 @@ export type SidebarCommand =
   | { type: 'reindexAllSubjectsAllVectors'; requireConfirm?: boolean }
   | { type: 'reparseMaterialSummary'; subject: Subject; materialId: string }
   | { type: 'reextractMaterialMarker'; subject: Subject; materialId: string }
+  | { type: 'reextractMaterialVision'; subject: Subject; materialId: string }
   | { type: 'getVectorIndexStats'; subject: Subject }
   // ===== Adaptive Insights =====
   | { type: 'getCourseProfile'; subject: Subject }

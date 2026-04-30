@@ -198,6 +198,14 @@ export class StoragePathResolver {
     return path.join(this.materialDir(subject, materialId), 'extracted.txt');
   }
 
+  /**
+   * Marker 输出的 markdown（含 LaTeX 公式 / 章节 ## / 表格 / 代码块）。
+   * 与 .txt 互斥优先级：读取时 .md 优先；只有 marker 走过的资料才会有 .md。
+   */
+  materialMarkdownPath(subject: Subject, materialId: string): string {
+    return path.join(this.materialDir(subject, materialId), 'extracted.md');
+  }
+
   materialSummaryPath(subject: Subject, materialId: string): string {
     return path.join(this.materialDir(subject, materialId), 'summary.json');
   }
