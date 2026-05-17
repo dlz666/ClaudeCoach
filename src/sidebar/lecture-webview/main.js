@@ -24,7 +24,10 @@
   let md = null;
   if (typeof window.markdownit === 'function') {
     md = window.markdownit({
-      html: false,
+      // html:true 是为了让 AI 生成的 <details>/<summary> 折叠块、<sub>/<sup>、
+      // <table> 等内联 HTML 正常渲染。XSS 风险被 CSP 兜住：webview 的 CSP 把
+      // script-src 限到 nonce 白名单，AI 输出里的 <script> 跑不了。
+      html: true,
       linkify: true,
       typographer: false,
       breaks: false,

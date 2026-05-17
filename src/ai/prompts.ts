@@ -1483,11 +1483,15 @@ export function projectSpecPrompt(args: {
      // implement me — see tests
    }
    \`\`\`
-   ✗ **绝对禁止**：
-   - \`# TODO 1: 检查 x / # TODO 2: 算 step / # TODO 3: 滑动\` 这种把算法步骤写出来的注释
-   - "// 提示：用 useState 管理 count" 这种实现暗示
-   - "// 用 set.has() 检查是否存在" 这种 API 用法提示
-   学生应该**读测试反推行为，自己拆步骤，自己设计算法**。Stub 的存在仅仅是让代码能编译，**不是教程**。
+   ✗ **绝对禁止**（这些会让验证直接 reject，spec 被打回让你重做）：
+   - 任何 \`// TODO\`、\`# TODO\`、\`/* TODO\` 注释（无论有没有编号、有没有冒号）
+   - 任何 \`// Hint:\`、\`# Hint:\` 注释
+   - 任何把算法步骤拼出来的引导（"先做 X 再做 Y"、"用 useState 管理 count"、
+     "用 set.has() 检查"、"步骤 1 / 步骤 2"等）
+   - 多行实现思路注释列表
+   **学生需要的所有引导，都放到 TODO.md / README.md 文件里**（role: 'doc'），
+   **不要污染源码文件**。Stub 函数 body 里**只允许**：throw / raise + （可选）一行 docstring 描述函数做什么。
+   学生应**读测试反推行为，自己拆步骤，自己设计算法**。Stub 的存在仅仅是让代码能编译，**不是教程**。
 4. \`doc\`：README.md，user 进项目第一眼看的内容。结构：
    - 这个项目要做什么（产品视角）
    - 完成后你能学到什么 capability

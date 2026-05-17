@@ -180,11 +180,19 @@ export class ProjectGenerator {
       /expect\(\s*true\s*\)\.toBe\(\s*false\s*\)/,
       /assert\s+False\b/i,
     ];
+    // Stub 文件**内部**禁止出现的注释模式：
+    //   - 任何 TODO/Hint 注释（无论是否编号）—— 实现引导应放 TODO.md，不污染源码
+    //   - "step N" / "第 N 步" / "步骤 N" 这种把算法步骤拼出来的注释
+    // 这些必须在 stub function body 里都干净（只允许 docstring + throw/raise）。
     const STUB_STEP_TODO_PATTERNS: RegExp[] = [
-      /\bTODO\s*\d+\s*[:：]/,
-      /#\s*步骤\s*\d+/,
+      /^\s*\/\/\s*TODO\b/im,             // // TODO 或 // TODO:
+      /^\s*\/\/\s*Hint\b/im,             // // Hint
+      /^\s*#\s*TODO\b/im,                // # TODO (Python)
+      /^\s*#\s*Hint\b/im,                // # Hint (Python)
+      /^\s*\/\*\s*TODO\b/im,             // /* TODO */
       /\/\/\s*step\s*\d+/i,
-      /\/\/\s*第\s*\d+\s*步/,
+      /^\s*#\s*步骤\s*\d+/m,
+      /^\s*\/\/\s*第\s*\d+\s*步/m,
     ];
 
     // 检查每个文件
