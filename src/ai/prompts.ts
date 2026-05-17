@@ -229,6 +229,11 @@ export interface PromptContext {
   scope?: PromptContextScope;
   /** 当前课程的教学法 tag（多选）。决定讲义骨架 / 出题分布 / 批改风格。 */
   courseTags?: CourseTag[];
+  /**
+   * 创建课程时用户附带的额外说明 / 重点 / 限制（仅 generateCourse 用，
+   * 注入到 outline 生成 prompt 末尾作为用户原话）。
+   */
+  creationInstruction?: string;
 }
 
 type PromptInjectField =
@@ -583,7 +588,9 @@ export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext):
     },
     {
       role: 'user',
-      content: `请为“${subjectName}”生成课程大纲`,
+      content: ctx.creationInstruction
+        ? `请为“${subjectName}”生成课程大纲。\n\n用户的额外要求（请认真遵循）：${ctx.creationInstruction}`
+        : `请为“${subjectName}”生成课程大纲`,
     },
   ];
 }

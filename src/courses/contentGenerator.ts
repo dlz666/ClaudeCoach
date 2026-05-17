@@ -43,6 +43,11 @@ interface GenerationContext {
   /** 课程教学法 tag，会进入 prompt 决定讲义骨架/题型分布。 */
   courseTags?: import('../types').CourseTag[];
   /**
+   * 创建课程时用户附带的额外说明 / 重点 / 限制（如"按 OpenAI Cookbook 顺序"、
+   * "跳过历史背景"）。仅 generateCourse 用，注入到 outline 生成 prompt 末尾。
+   */
+  creationInstruction?: string;
+  /**
    * 连胜/连败信号：从 AdaptiveTriggerState 来，让难度调节立刻反应近期表现。
    * 比 masteryPercent 更灵敏（≥1 grade 就有信号，无需等 ≥2）。
    */

@@ -1207,7 +1207,16 @@ export type PromptContextScope =
 
 // ===== Sidebar Messages =====
 export type SidebarCommand =
-  | { type: 'generateCourse'; subject: Subject }
+  | {
+      type: 'generateCourse';
+      subject: Subject;
+      /** 创建时一并设的教学法 tag。空数组 / undefined = 不设。 */
+      tags?: CourseTag[];
+      /** 创建时一并指定的初始难度（覆盖 prefs.difficulty.global）。 */
+      difficulty?: 'beginner' | 'basic' | 'intermediate' | 'challenge';
+      /** 用户给 AI 的额外说明 / 重点 / 限制（如"按 OpenAI Cookbook 顺序"）。 */
+      instruction?: string;
+    }
   | { type: 'rebuildCourseOutline'; subject: Subject; materialId?: string }
   | { type: 'previewRebuildCourseOutline'; request: OutlineRebuildPreviewRequest }
   | { type: 'applyRebuildCourseOutline'; request: OutlineRebuildApplyRequest }

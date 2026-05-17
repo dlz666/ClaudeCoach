@@ -1403,12 +1403,32 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             ]);
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
             const materialSummary = await this.materialManager.getRelevantSummary(msg.subject, '');
+            // 创建时一并指定的设置：tags / 初始难度 / 额外说明
+            const createTags = Array.isArray(msg.tags) ? msg.tags : undefined;
+            const createInstruction = typeof msg.instruction === 'string' && msg.instruction.trim()
+              ? msg.instruction.trim()
+              : undefined;
+            // 初始难度覆盖：在 prefs 上做局部 clone，不污染全局
+            const effectivePrefs = msg.difficulty
+              ? { ...prefs, difficulty: { ...prefs.difficulty, global: msg.difficulty } }
+              : prefs;
             const outline = await this.contentGen.generateCourse(msg.subject, {
-              profile, preferences: prefs, diagnosis: diag, materialSummary, ...courseProfileContext,
+              profile,
+              preferences: effectivePrefs,
+              diagnosis: diag,
+              materialSummary,
+              ...courseProfileContext,
+              courseTags: createTags,
+              creationInstruction: createInstruction,
             });
+            // 把 tags 持久化到 outline（contentGen 不一定会自动写）
+            if (createTags && createTags.length) {
+              await this.courseManager.setCourseTags(msg.subject, createTags);
+            }
             await this._refreshCourses();
             this._post({ type: 'courseGenerated', outline });
-            this._post({ type: 'log', message: `课程已生成：${outline.title}`, level: 'info' });
+            const tagLabel = createTags && createTags.length ? `，tags: ${createTags.join(' / ')}` : '';
+            this._post({ type: 'log', message: `课程已生成：${outline.title}${tagLabel}`, level: 'info' });
           });
           break;
         }

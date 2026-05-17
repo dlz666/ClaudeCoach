@@ -2319,6 +2319,60 @@ pre.hljs code,
   background: var(--accent-soft);
 }
 
+/* ===== 创建新课程：tag + 设置展开块 ===== */
+
+.new-course-options {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--surface-1) 50%, transparent);
+}
+
+.new-course-options > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  user-select: none;
+  padding: 4px 0;
+}
+
+.new-course-options[open] > summary {
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.new-course-options > summary:hover {
+  color: var(--vscode-foreground);
+}
+
+.new-course-options .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.new-course-options .form-row .form-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.new-course-options input,
+.new-course-options textarea,
+.new-course-options select {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
 /* ===== Projects tab ===== */
 
 .project-create-form {

@@ -92,6 +92,30 @@
       </div>
       <div id="new-course-panel" class="stack hidden">
         <input type="text" id="subject-input" placeholder="输入课程名称">
+
+        <details class="new-course-options" id="new-course-options" open>
+          <summary>教学法 Tag（多选，影响讲义结构 / 出题分布 / 批改风格）</summary>
+          <div id="new-course-tags-checklist" class="course-tags-checklist"></div>
+        </details>
+
+        <details class="new-course-options" id="new-course-extra-options">
+          <summary>课程设置（可选）</summary>
+          <label class="form-row">
+            <span class="form-label">初始难度</span>
+            <select id="new-course-difficulty">
+              <option value="">用全局默认</option>
+              <option value="beginner">入门</option>
+              <option value="basic">基础</option>
+              <option value="intermediate">进阶</option>
+              <option value="challenge">挑战</option>
+            </select>
+          </label>
+          <label class="form-row">
+            <span class="form-label">额外说明 / 重点（可选）</span>
+            <textarea id="new-course-instruction" rows="2" placeholder="如：偏重实战项目；跳过历史背景；按 OpenAI Cookbook 的顺序…"></textarea>
+          </label>
+        </details>
+
         <button class="btn primary" id="btn-generate-course">生成课程大纲</button>
       </div>
     </section>

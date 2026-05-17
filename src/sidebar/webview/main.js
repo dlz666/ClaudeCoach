@@ -786,6 +786,8 @@
     if (enabled) {
       state.selectedSubject = null;
       renderDiagnosis(null);
+      // 首次进入创建模式时渲染新课程的 tag checklist（复用 COURSE_TAGS）
+      renderNewCourseTagsChecklist();
     }
     els.newCoursePanel?.classList.toggle('hidden', !enabled);
     if (enabled) {
@@ -3019,13 +3021,62 @@
     setCreateCourseMode(true);
   });
 
+  /**
+   * 渲染创建新课程时的 tag checklist。复用 COURSE_TAGS 数据 + 旧 modal 的样式
+   * （.course-tag-row / .course-tags-checklist）。每次进创建模式都重渲一遍，
+   * 保留用户上次的勾选。
+   */
+  function renderNewCourseTagsChecklist() {
+    const el = document.getElementById('new-course-tags-checklist');
+    if (!el) return;
+    const prevChecked = new Set(
+      Array.from(el.querySelectorAll('input[type="checkbox"]:checked'))
+        .map((cb) => cb.getAttribute('data-course-tag'))
+        .filter(Boolean),
+    );
+    el.innerHTML = COURSE_TAGS.map((t) => {
+      const checked = prevChecked.has(t.value);
+      return `
+        <label class="course-tag-row${checked ? ' checked' : ''}">
+          <input type="checkbox" data-course-tag="${escapeHtml(t.value)}"${checked ? ' checked' : ''}>
+          <div>
+            <div class="ct-label">${escapeHtml(t.label)}</div>
+            <div class="ct-desc">${escapeHtml(t.desc)}</div>
+          </div>
+        </label>
+      `;
+    }).join('');
+    el.querySelectorAll('.course-tag-row').forEach((row) => {
+      const cb = row.querySelector('input[type="checkbox"]');
+      if (!cb) return;
+      cb.addEventListener('change', () => {
+        row.classList.toggle('checked', cb.checked);
+      });
+    });
+  }
+
   els.btnGenerateCourse?.addEventListener('click', () => {
     const subject = getDraftSubject();
     if (!subject) {
       addLog('请先填写课程名称。', 'warn');
       return;
     }
-    vscode.postMessage({ type: 'generateCourse', subject });
+    // 收集 tags
+    const tagsEl = document.getElementById('new-course-tags-checklist');
+    const tags = Array.from(tagsEl?.querySelectorAll('input[type="checkbox"]:checked') || [])
+      .map((cb) => cb.getAttribute('data-course-tag'))
+      .filter(Boolean);
+    // 收集课程设置（可选）
+    const difficulty = (document.getElementById('new-course-difficulty')?.value || '').trim() || undefined;
+    const instruction = (document.getElementById('new-course-instruction')?.value || '').trim() || undefined;
+
+    vscode.postMessage({
+      type: 'generateCourse',
+      subject,
+      tags: tags.length ? tags : undefined,
+      difficulty,
+      instruction,
+    });
   });
 
   els.btnRefreshCourses?.addEventListener('click', () => {
