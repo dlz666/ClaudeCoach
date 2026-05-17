@@ -790,6 +790,14 @@ export interface InlineApplyRequest {
   sourceLineEnd: number;
   /** 用户最终采纳的内容（可能是 AI 直出，也可能用户编辑过）。 */
   finalContent: string;
+  /**
+   * 调用者声明的意图，后端据此决定写回策略：
+   *  - `rewrite`：把选区原文替换为 finalContent（destructive，需要选区精确匹配）。
+   *  - `ask` / `idea`：把 finalContent 作为兄弟块**追加到选区所在 block 之后**，
+   *    选区原文一字不动（non-destructive）。
+   * 缺省时按 selectionText 是否为空回退到旧行为，保持向后兼容。
+   */
+  intent?: 'rewrite' | 'ask' | 'idea';
 }
 
 // ===== Materials =====
@@ -1100,6 +1108,138 @@ export interface ExamPrepSession {
   latestReadiness?: ExamReadinessSnapshot;
 }
 
+// ===== Projects (TDD-style learning project) =====
+//
+// 设计哲学：AI 写**测试 + 骨架**，user 写**核心实现**。
+// 流程：
+//   1. AI 生成 spec → 写到磁盘成完整可跑的 project 目录
+//      - boilerplate（package.json / 配置 / 入口文件）
+//      - test 骨架（test cases，body 是 placeholder 或 TODO 注释）
+//      - user stub 文件（带类型签名 + TODO 注释的空函数）
+//      - README + TODO.md（说明：你的任务、怎么跑测试、验收标准）
+//   2. user 在 IDE 自己写 stub 文件里的实现
+//   3. user 自己跑 testCommand，看 pass/fail，自己迭代
+//   4. user 卡住 → 跑回 ClaudeCoach 侧边栏问 AI
+// 不做：spawn `claude -p` agent / 自动写代码 / 自动跑测试 / resume checkpoint。
+
+/** 项目所属学科。`cs` / `engineering` / `frontier-research` / 或任意自定义 string。 */
+export type ProjectSubject = string;
+
+/** 一个 project 在生命周期中的状态。 */
+export type ProjectStatus =
+  | 'spec-pending'    // AI 还在生成 spec
+  | 'scaffolded'      // 文件已写到磁盘，user 可以打开 IDE 开干
+  | 'in-progress'     // user 报告了至少一次进展
+  | 'completed'       // user 标记已完成
+  | 'archived';       // 归档不再追踪
+
+/** 单个文件在 project 里的角色。决定 user 看到它时该怎么对待。 */
+export type ProjectFileRole =
+  | 'boilerplate'     // AI 写完整内容，user 不该改（package.json / 配置文件 / 入口）
+  | 'test-skeleton'   // AI 写测试骨架（test name + describe），body 是 `it.todo()` 或 placeholder
+  | 'user-stub'       // AI 写函数签名 + TODO 注释，user 来填实现
+  | 'doc';            // README / TODO.md / 学习目标文档
+
+/** AI 在生成 spec 阶段，每个文件的"密度"标注。 */
+export type ProjectStubDensity =
+  | 'thin'    // 仅签名 + 一行 TODO
+  | 'medium'  // 签名 + TODO 列表注释 + import 占位
+  | 'thick';  // medium + 关键 API 注释提示 + 步骤拆分
+
+/** AI 生成的一个完整 project 规约（写盘前的中间数据）。 */
+export interface ProjectSpec {
+  /** 项目标题，e.g. "Implement minimal SSM in PyTorch" */
+  title: string;
+  /** 1-2 句话描述：要学什么 + 最终成果。 */
+  description: string;
+  /** 学习目标（user 完成后能 demo 出来的能力）。 */
+  learningGoals: string[];
+  /** 前置知识。AI 应该谨慎判断 user 是否具备。 */
+  prerequisites: string[];
+  /** 用到的技术栈，e.g. ["TypeScript", "Vitest", "React 19"]。 */
+  techStack: string[];
+  /** 运行测试的 shell 命令，e.g. "npm test"。user 在自己终端跑。 */
+  testCommand: string;
+  /** 完整的文件列表（含 boilerplate / test 骨架 / user stub / doc）。 */
+  files: ProjectFileSpec[];
+  /** user 要做的事，按顺序列出。 */
+  todos: ProjectTodo[];
+  /** Markdown 描述：怎么验证完成（运行什么、看到什么算 pass）。 */
+  testStrategy: string;
+}
+
+export interface ProjectFileSpec {
+  /** 相对项目根的路径，e.g. "src/hooks/useCounter.ts" */
+  path: string;
+  /** 角色，决定 user 看到时怎么对待。 */
+  role: ProjectFileRole;
+  /** 完整文件内容（boilerplate / test 骨架 / user stub 都是完整的可跑代码）。 */
+  content: string;
+  /** 仅 user-stub 用：stub 密度。 */
+  stubDensity?: ProjectStubDensity;
+}
+
+export interface ProjectTodo {
+  id: string;                       // "todo-1", "todo-2"
+  description: string;              // user 看到的描述
+  targetFile: string;               // "src/hooks/useCounter.ts"
+  /** 用什么测试 verify，e.g. "tests/useCounter.test.ts 的 'should increment' case 应 pass"。 */
+  checkCriteria?: string;
+  /** AI 标注的实现难度，1-5。 */
+  difficulty?: number;
+}
+
+/** 持久化到 `.coach-meta.json` 的 project 元数据（不含 spec 全文）。 */
+export interface ProjectMeta {
+  id: string;
+  subject: ProjectSubject;
+  title: string;
+  description: string;
+  status: ProjectStatus;
+  createdAt: string;                // ISO timestamp
+  updatedAt: string;                // ISO timestamp
+  /** 绝对路径：user 项目目录所在位置。可在 `~/ClaudeCoach/workspaces/<wsId>/projects/<subject>/<id>/` */
+  projectDir: string;
+  testCommand: string;
+  techStack: string[];
+  /** AI 生成的 spec 是否还能找到（spec.json 在 projectDir 里）。 */
+  hasSpec: boolean;
+  /** 可选：关联到课程主题。 */
+  linkedCourse?: {
+    subject: Subject;
+    topicId?: string;
+    lessonId?: string;
+  };
+  /** user 的进度自报告：完成了多少 todo / 总 todo 数。 */
+  progress?: {
+    completedTodos: number;
+    totalTodos: number;
+    lastUpdated: string;
+  };
+}
+
+/** 生成 project 的入参（user 在 UI 里填的）。 */
+export interface CreateProjectRequest {
+  subject: ProjectSubject;
+  /** user 输入的"我想做什么"，AI 据此出 spec。 */
+  prompt: string;
+  /** 可选：tech stack 偏好（"React 19"、"Python 3.12"），不填 AI 自己选。 */
+  techStackHint?: string;
+  /** 可选：关联到课程主题。 */
+  linkedCourse?: ProjectMeta['linkedCourse'];
+  /** 项目目录名（user 可改，否则用 sanitize(title)）。 */
+  dirName?: string;
+}
+
+/** spec 生成 + 文件 scaffold 的结果。 */
+export interface ProjectScaffoldResult {
+  ok: boolean;
+  meta?: ProjectMeta;
+  spec?: ProjectSpec;
+  errorMessage?: string;
+  warnings?: string[];
+}
+
 // ===== Token Budget =====
 export interface TokenBudget {
   modelContextWindow: number;
@@ -1199,7 +1339,8 @@ export type PromptContextScope =
   | 'grade'
   | 'diagnosis'
   | 'outline-gen'
-  | 'lecture-edit';
+  | 'lecture-edit'
+  | 'project-spec';
 
 // ===== Sidebar Messages =====
 export type SidebarCommand =
@@ -1302,7 +1443,14 @@ export type SidebarCommand =
   | { type: 'gradeExamSubmission'; sessionId: string; submissionId: string }
   | { type: 'submitExamTextAnswers'; sessionId: string; variantSetId?: string; answers: Array<{ questionNumber: string; answer: string }> }
   | { type: 'recomputeExamReadiness'; sessionId: string }
-  | { type: 'openExamWorkbench'; sessionId: string };
+  | { type: 'openExamWorkbench'; sessionId: string }
+  // ===== Projects (TDD-style learning project) =====
+  | { type: 'createProject'; request: CreateProjectRequest }
+  | { type: 'listProjects'; subject?: ProjectSubject }
+  | { type: 'openProject'; projectId: string }
+  | { type: 'deleteProject'; projectId: string; purgeFiles?: boolean }
+  | { type: 'updateProjectProgress'; projectId: string; completedTodos: number; status?: ProjectStatus }
+  | { type: 'getProjectSpec'; projectId: string };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
@@ -1397,6 +1545,14 @@ export type SidebarResponse =
         >>;
       };
     }
+  // ===== Project 模块响应 =====
+  | { type: 'projectsList'; subject?: ProjectSubject; data: ProjectMeta[] }
+  | { type: 'projectCreated'; meta: ProjectMeta; spec: ProjectSpec; warnings?: string[] }
+  | { type: 'projectScaffoldFailed'; errorMessage: string }
+  | { type: 'projectSpec'; projectId: string; spec: ProjectSpec | null }
+  | { type: 'projectOpened'; projectId: string; projectDir: string }
+  | { type: 'projectProgressUpdated'; meta: ProjectMeta }
+  | { type: 'projectDeleted'; projectId: string }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };

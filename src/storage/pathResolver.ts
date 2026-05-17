@@ -349,6 +349,40 @@ export class StoragePathResolver {
     return path.join(this.coachDir, 'metacog', `${sanitizeSegment(subject, 'subject')}.jsonl`);
   }
 
+  // ===== Projects (TDD-style learning) =====
+  // 布局：~/ClaudeCoach/workspaces/<wsId>/projects/<subject>/<projectId>/
+  //         ├─ .coach-meta.json      （ProjectMeta：状态、createdAt、testCommand 等）
+  //         ├─ .coach-spec.json      （ProjectSpec：AI 生成的完整规约，含 files / todos）
+  //         ├─ README.md             （AI 写的 user-facing README）
+  //         ├─ TODO.md               （AI 写的 user-facing TODO 列表）
+  //         └─ <project 自己的文件>  （boilerplate / test 骨架 / user-stub 实现文件）
+  // 全局索引：~/ClaudeCoach/app/projects-index.json（让 listProjects 不用扫所有 subject）
+
+  get workspaceProjectsDir(): string {
+    return path.join(this.workspaceRoot, 'projects');
+  }
+
+  projectSubjectDir(subject: string): string {
+    return path.join(this.workspaceProjectsDir, sanitizeSegment(subject, 'subject'));
+  }
+
+  projectDir(subject: string, projectId: string): string {
+    return path.join(this.projectSubjectDir(subject), projectId);
+  }
+
+  projectMetaPath(subject: string, projectId: string): string {
+    return path.join(this.projectDir(subject, projectId), '.coach-meta.json');
+  }
+
+  projectSpecPath(subject: string, projectId: string): string {
+    return path.join(this.projectDir(subject, projectId), '.coach-spec.json');
+  }
+
+  /** 全局 project 索引：projectId → {subject, dir} 映射，避免扫盘。 */
+  get projectsIndexPath(): string {
+    return path.join(this.appDir, 'projects-index.json');
+  }
+
   courseTopicsDir(subject: Subject): string {
     return path.join(this.courseSubjectDir(subject), 'topics');
   }

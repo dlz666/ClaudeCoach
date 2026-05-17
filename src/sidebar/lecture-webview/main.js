@@ -381,11 +381,11 @@
     });
   }
 
-  /** idea 模式：本地直接把想法以引用块追加到选区下方，不调 AI。 */
+  /** idea 模式：本地直接把想法作为 callout 块追加到选区下方，不调 AI。 */
   function submitInlineIdea(info, instruction) {
     if (!vscode) return;
     const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
-    const ideaBlock = '\n\n> 💡 **我的想法**：' + instruction.replace(/\n/g, '\n> ');
+    const ideaBlock = wrapAsCallout('💡 我的想法', instruction);
     vscode.postMessage({
       type: 'inlineApply',
       request: {
@@ -398,6 +398,37 @@
         intent: 'idea',
       },
     });
+  }
+
+  /**
+   * 把一段任意 Markdown 内容包成"分隔线 callout 块"。
+   *
+   * 旧实现是给每行加 `> ` 做 blockquote 引用，对内部代码块 / 公式 / 表格 /
+   * 列表都会破坏格式（fenced code 的结束反引号会被加上 `> ` 前缀，公式块
+   * 被切碎，等等）。新实现用顶部+底部 `---` 分隔线 + 粗体标题，把回答作为
+   * **平级 block** 嵌入，AI 原本的所有结构都完整保留，markdown-it / KaTeX
+   * / highlight.js / mermaid 都能正常渲染。
+   */
+  function wrapAsCallout(label, rawContent) {
+    var body = normalizeMarkdown(rawContent);
+    // 注意首尾空行：保证和上一段 / 下一段都有空行分隔，否则 markdown-it 会把
+    // `---` 当作 setext 标题下划线，把上一行变成 H2。
+    return '\n\n---\n\n**' + label + '**\n\n' + body + '\n\n---\n';
+  }
+
+  /**
+   * 规整 AI / 用户输入：
+   *  - 统一换行
+   *  - 剥掉 AI 偶尔包出来的 ```markdown ... ``` 围栏（内部代码块不会被误伤）
+   *  - 首尾 trim
+   *  - 折叠 3+ 连续空行为 2 个（避免 callout 内塌缩出大段空白）
+   */
+  function normalizeMarkdown(text) {
+    var t = String(text == null ? '' : text).replace(/\r\n/g, '\n');
+    var fence = t.trim().match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i);
+    if (fence) t = fence[1];
+    t = t.replace(/\n{3,}/g, '\n\n');
+    return t.trim();
   }
 
   function submitInlineSuggest(info, instruction) {
@@ -517,8 +548,11 @@
       actions.appendChild(btnSaveAsIdea);
       actions.appendChild(btnClose);
       btnSaveAsIdea.addEventListener('click', () => {
-        const note = '\n\n> 🤖 **AI 回答**：\n> ' + suggestion.replace(/\n/g, '\n> ');
         if (!vscode) return;
+        // 把 AI 回答作为 callout 块**追加到选区所在 block 之后**，
+        // 不动选区原文，且保留 AI 输出内部所有 markdown 结构（代码块 / 公式 /
+        // 表格 / 列表都不会再被 `>` 前缀破坏）。
+        const note = wrapAsCallout('🤖 AI 回答', suggestion);
         vscode.postMessage({
           type: 'inlineApply',
           request: {
@@ -586,7 +620,11 @@
         selectionText: turn.info.text || '',
         sourceLineStart: turn.info.startLine,
         sourceLineEnd: turn.info.endLine,
-        finalContent: suggestion,
+        finalContent: normalizeMarkdown(suggestion),
+        // rewrite 是 destructive 模式，后端会走严格匹配 replace；
+        // 如果选区文本没法精确匹配（公式 / 富文本渲染差异），后端会返回 failed，
+        // 不再静默覆盖原文。
+        intent: 'rewrite',
       },
     });
     // 标记为正在写回
@@ -637,6 +675,40 @@
         if (el.parentNode) el.parentNode.removeChild(el);
       }, 320);
     }, 3200);
+  }
+
+  // ===== undo pill =====
+  // 写回成功后，右下角浮出一个"↶ 撤回上次写入"小药丸。点击后让宿主用 .bak
+  // 还原。10 秒不点自动隐藏（再次写回时会重新显示）。
+  let _undoPillEl = null;
+  let _undoPillTimer = null;
+
+  function ensureUndoPill() {
+    if (_undoPillEl && document.body.contains(_undoPillEl)) return _undoPillEl;
+    const el = document.createElement('button');
+    el.className = 'lecture-undo-pill';
+    el.type = 'button';
+    el.textContent = '↶ 撤回上次写入';
+    el.title = '把讲义恢复到上一次写入之前的状态（再点一次可重做）';
+    el.addEventListener('click', () => {
+      if (!vscode) return;
+      vscode.postMessage({ type: 'revertLastWriteback' });
+      // 文案切换，提示 redo 语义
+      el.textContent = '↷ 重做（再撤回）';
+    });
+    document.body.appendChild(el);
+    _undoPillEl = el;
+    return el;
+  }
+
+  function showUndoPill() {
+    const el = ensureUndoPill();
+    el.classList.add('visible');
+    el.textContent = '↶ 撤回上次写入';
+    if (_undoPillTimer) clearTimeout(_undoPillTimer);
+    _undoPillTimer = setTimeout(() => {
+      el.classList.remove('visible');
+    }, 12000);
   }
 
   // ===== events =====
@@ -740,6 +812,7 @@
           // 写回完成：移除对应气泡
           removeBubble(msg.turnId);
           toast('已写回讲义', 'success');
+          showUndoPill();
         } else {
           flashStatus('已刷新', 'info');
         }
@@ -759,6 +832,7 @@
           if (appliedRange) flashChangedRange(appliedRange);
           removeBubble(turnId);
           toast('AI 已直接改写', 'success');
+          showUndoPill();
         } else if (status === 'failed') {
           showFailedBubble(turnId, errorMessage || 'AI 处理失败');
           toast(errorMessage || 'AI 处理失败', 'error');
@@ -769,10 +843,13 @@
         if (msg.appliedRange) flashChangedRange(msg.appliedRange);
         removeBubble(msg.turnId);
         toast('已采纳并写回', 'success');
+        showUndoPill();
         break;
       }
       case 'log': {
         if (msg.level === 'error') toast(msg.message, 'error');
+        else if (msg.level === 'warn') toast(msg.message, 'warn');
+        else if (msg.level === 'info') toast(msg.message, 'info');
         break;
       }
       default:

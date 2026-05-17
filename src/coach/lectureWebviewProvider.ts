@@ -243,9 +243,76 @@ export class LectureWebviewProvider {
           ctx.panel.webview.postMessage({ type: 'log', level: 'error', message });
         }
         return;
+      case 'revertLastWriteback':
+        await this.handleRevertLastWriteback(ctx);
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * 撤回上一次写回：把 `<file>.bak` 的内容写回 `<file>`，并把当前内容备份到
+   * `<file>.bak`（实现一次"乒乓"，再点一下撤回就回到刚被撤掉的版本，等效 redo）。
+   * 没有 .bak 时直接报错给前端。
+   */
+  private async handleRevertLastWriteback(ctx: PanelContext): Promise<void> {
+    const filePath = ctx.args.filePath;
+    const backupPath = filePath + '.bak';
+    let backupContent: string;
+    try {
+      backupContent = await fs.readFile(backupPath, 'utf8');
+    } catch {
+      ctx.panel.webview.postMessage({
+        type: 'log',
+        level: 'error',
+        message: '找不到备份文件（可能从未写回过，或备份已被清理）。',
+      });
+      return;
+    }
+
+    let currentContent: string;
+    try {
+      currentContent = await fs.readFile(filePath, 'utf8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({
+        type: 'log',
+        level: 'error',
+        message: `读取当前讲义失败：${message}`,
+      });
+      return;
+    }
+
+    // 写之前先让 onDidChangeTextDocument 让路
+    ctx.ignoreNextChangeUntil = Date.now() + 1500;
+
+    try {
+      // 把当前内容存为新的 .bak（实现乒乓 / redo）
+      await fs.writeFile(backupPath, currentContent, 'utf8');
+      // 把 .bak 的旧内容写回主文件。注意：这里不走 writeMarkdown / fixLatex，
+      // 因为我们就是要把"上一次写入前"的原文一字不动还原。
+      await fs.writeFile(filePath, backupContent, 'utf8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({
+        type: 'log',
+        level: 'error',
+        message: `撤回失败：${message}`,
+      });
+      return;
+    }
+
+    ctx.panel.webview.postMessage({
+      type: 'lectureFileChanged',
+      filePath,
+      content: backupContent,
+    });
+    ctx.panel.webview.postMessage({
+      type: 'log',
+      level: 'info',
+      message: '已撤回上一次写回（再点一次可重做）。',
+    });
   }
 
   private async handleInlineSuggest(ctx: PanelContext, request: InlineSuggestRequest): Promise<void> {
@@ -337,13 +404,19 @@ export class LectureWebviewProvider {
     const cleaned = stripFenceWrapper(suggestion).trim();
 
     if (effectiveApplyMode === 'auto-apply') {
+      // webview 行号是半开区间（与 markdown-it token.map 一致），
+      // writeback 契约是闭区间，必须在这里转换。
+      const inclusiveEnd = Math.max(request.sourceLineStart, request.sourceLineEnd - 1);
+      const hasSelection = !!(request.selectionText && request.selectionText.trim());
       const writeInput: WritebackInput = {
         filePath: ctx.args.filePath,
         sourceLineStart: request.sourceLineStart,
-        sourceLineEnd: request.sourceLineEnd,
+        sourceLineEnd: inclusiveEnd,
         selectionText: request.selectionText,
         newContent: cleaned,
-        mode: !request.selectionText || !request.selectionText.trim() ? 'insertAfter' : 'replace',
+        // intent: 'rewrite' 且有选区 → replace（严格匹配，找不到会 fail，不再静默吞内容）
+        // 否则 → appendBelowBlock，永远不动选区原文
+        mode: intent === 'rewrite' && hasSelection ? 'replace' : 'appendBelowBlock',
       };
       const writeResult = await this.runWriteback(ctx, writeInput, request.turnId);
       ctx.panel.webview.postMessage({
@@ -381,17 +454,40 @@ export class LectureWebviewProvider {
   private async handleInlineApply(ctx: PanelContext, request: InlineApplyRequest): Promise<void> {
     if (!request || typeof request.turnId !== 'string') return;
 
+    // webview 行号是半开区间（与 markdown-it token.map 一致），
+    // writeback 契约是闭区间，必须在这里转换。
+    const inclusiveEnd = Math.max(request.sourceLineStart, request.sourceLineEnd - 1);
+    const hasSelection = !!(request.selectionText && request.selectionText.trim());
+
+    // 写回模式由意图决定，而不是由"有没有选区"决定：
+    //   - rewrite + 有选区 → replace（严格精确匹配，匹配不上 fail，不再静默覆盖）
+    //   - ask / idea / 无选区 → appendBelowBlock（永远不动选区原文，追加到所选 block 之后）
+    //   - 没传 intent + 无选区 → appendBelowBlock（兼容旧前端"无选区即插入"的语义）
+    //   - 没传 intent + 有选区 → replace（兼容旧前端"有选区即替换"的语义）
+    const intent = request.intent;
+    const safeAppend = intent === 'ask' || intent === 'idea';
+    const mode: WritebackInput['mode'] =
+      safeAppend ? 'appendBelowBlock'
+      : (!hasSelection ? 'appendBelowBlock' : 'replace');
+
     const writeInput: WritebackInput = {
       filePath: ctx.args.filePath,
       sourceLineStart: request.sourceLineStart,
-      sourceLineEnd: request.sourceLineEnd,
+      sourceLineEnd: inclusiveEnd,
       selectionText: request.selectionText,
       newContent: request.finalContent,
-      mode: !request.selectionText || !request.selectionText.trim() ? 'insertAfter' : 'replace',
+      mode,
     };
 
     const writeResult = await this.runWriteback(ctx, writeInput, request.turnId);
     if (writeResult.ok) {
+      if (writeResult.warning) {
+        ctx.panel.webview.postMessage({
+          type: 'log',
+          level: 'warn',
+          message: writeResult.warning,
+        });
+      }
       ctx.panel.webview.postMessage({
         type: 'inlineApplied',
         turnId: request.turnId,

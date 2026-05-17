@@ -290,6 +290,12 @@ function shouldInclude(field: PromptInjectField, scope: PromptContextScope): boo
         || field === 'currentCourseTitle'
         || field === 'courseOutlineSummary'
         || field === 'courseTags';
+    case 'project-spec':
+      // 生成 TDD 项目骨架：profile + preferences 提示用户水平 / 节奏；
+      // 不注入 diagnosis、materialSummary、chapterProfile（项目不锚定章节）
+      return field === 'profile'
+        || field === 'preferences'
+        || field === 'currentCourseTitle';
     default:
       return true;
   }
@@ -1584,6 +1590,132 @@ export function examReadinessAnalysisPrompt(args: {
 最近模考成绩：${typeof latestPercentage === 'number' ? `${latestPercentage}%` : '未做过模考'}
 
 请生成 preExamChecklist。`,
+    },
+  ];
+}
+
+// ===== Project (TDD-style learning project) =====
+
+/**
+ * 生成一个完整的 project spec：
+ *   - boilerplate（package.json / 配置文件 / 入口）
+ *   - test 骨架（it.todo / describe + 占位 body，AI 描述要测什么，user 来填或扩展）
+ *   - user stub 文件（函数签名 + TODO 注释 + 必要的 import 占位）
+ *   - README + TODO（学习目标、运行测试方式、验收标准）
+ *
+ * 约定：
+ *   - AI 决定每个 user-stub 文件的"密度"（thin/medium/thick），看复杂度
+ *   - 测试骨架走 "B 选项"：测试名 + describe，body 是 `it.todo('...')` 或带注释的 placeholder
+ *   - 不写 user 应该实现的核心逻辑
+ *   - 输出严格 JSON，符合 ProjectSpec interface
+ */
+export function projectSpecPrompt(args: {
+  subject: string;
+  userPrompt: string;
+  techStackHint?: string;
+  linkedCourseTitle?: string;
+  linkedTopicTitle?: string;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { subject, userPrompt, techStackHint, linkedCourseTitle, linkedTopicTitle, ctx } = args;
+  const scopedCtx: PromptContext = { ...ctx, scope: 'project-spec' };
+
+  const contextLines: string[] = [
+    `用户想要学习的领域：${subject}`,
+    `用户的项目想法（原话）：${userPrompt}`,
+  ];
+  if (techStackHint) {
+    contextLines.push(`用户的技术栈偏好：${techStackHint}`);
+  }
+  if (linkedCourseTitle) {
+    contextLines.push(`关联课程：${linkedCourseTitle}${linkedTopicTitle ? ` / ${linkedTopicTitle}` : ''}`);
+  }
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `
+
+你是 TDD 式学习项目的设计者。你要生成一个 user 可以打开 IDE 立刻开干的完整项目骨架。
+
+【核心原则】
+- **AI 写测试 + boilerplate + stub 文件骨架**；**user 写核心实现**。
+- 测试是学习目标的可执行规约：跑通 = 学到了。
+- 不允许 AI 给 user 写最关键的算法/业务逻辑——那是 user 的学习内容。
+- 项目要可以"开箱即跑测试"（即使所有 user-stub 还没填，npm test 也能列出 todo 测试）。
+
+【文件分类（你必须给每个文件正确的 role）】
+1. \`boilerplate\`：完整写好，user 不该改。例：
+   - package.json / pyproject.toml / Cargo.toml
+   - tsconfig.json / vite.config.ts / vitest.config.ts
+   - .gitignore / 测试 setup 文件 / 类型声明
+   - 入口文件（如 main.ts 仅做 wiring）
+2. \`test-skeleton\`：测试文件，**body 是 \`it.todo()\` 或占位描述**。例：
+   \`\`\`ts
+   describe('useCounter', () => {
+     it.todo('should initialize count to 0');
+     it.todo('should increment count when increment() called');
+     it.todo('should clamp count to max when over max');
+   });
+   \`\`\`
+   或者带 placeholder body 但带 TODO 注释：
+   \`\`\`ts
+   it('should increment', () => {
+     // TODO: import useCounter, render with renderHook, call increment, assert count === 1
+     expect(true).toBe(false); // 失败提醒 user 实现
+   });
+   \`\`\`
+3. \`user-stub\`：user 要实现的核心代码文件。你写：
+   - 完整 import 语句（thin/medium/thick 都要）
+   - 函数/class 签名 + 类型注解
+   - 函数体内放 TODO 注释 + （视密度）拆分步骤注释
+   - \`thin\`：仅一行 \`// TODO: implement\`
+   - \`medium\`：3-5 行 TODO 列表注释
+   - \`thick\`：medium + 关键 API hint
+   - 必须能编译通过（用 \`throw new Error('not implemented')\` 等占位）
+4. \`doc\`：README.md / TODO.md，user 进项目第一眼看的内容。
+
+【输出严格 JSON，schema 如下】
+\`\`\`json
+{
+  "title": "string，项目标题，简短，e.g. 'Implement minimal React useCounter hook'",
+  "description": "string，1-2 句话：学什么 + 最终产物",
+  "learningGoals": ["string", ...], // 3-5 条
+  "prerequisites": ["string", ...], // 0-3 条
+  "techStack": ["string", ...],     // 用到的库/语言/工具
+  "testCommand": "string，e.g. 'npm test'",
+  "files": [
+    {
+      "path": "相对路径，e.g. 'src/hooks/useCounter.ts'",
+      "role": "boilerplate" | "test-skeleton" | "user-stub" | "doc",
+      "content": "完整文件内容",
+      "stubDensity": "thin" | "medium" | "thick"  // 仅 role=user-stub 时给
+    }
+  ],
+  "todos": [
+    {
+      "id": "todo-1",
+      "description": "string，user 看的描述",
+      "targetFile": "相对路径",
+      "checkCriteria": "string，怎么算 pass",
+      "difficulty": 1-5
+    }
+  ],
+  "testStrategy": "markdown 字符串，说明：跑什么命令 / 看什么 / 哪些测试该 pass / 排查思路"
+}
+\`\`\`
+
+【约束】
+- files 总数 5-20 个，不能太大也不能太小。
+- todos 数量与 user-stub 文件数大致一致（每个 stub 1-3 个 todo）。
+- 不要生成已废弃技术（CRA / TSLint / Bower 等）。
+- 难度判断：user_prompt 表达的水平 + 学习目标合理性 → 选合适的 difficulty。
+- techStack 选项要符合现代主流（2026 年）。
+- **只输出 JSON**，不要 markdown 围栏，不要解释。`,
+    },
+    {
+      role: 'user',
+      content: contextLines.join('\n') + '\n\n请生成 ProjectSpec JSON。',
     },
   ];
 }

@@ -6,6 +6,8 @@ import { Grader } from '../courses/grader';
 import { CourseManager } from '../courses/courseManager';
 import { ExerciseScanner } from '../courses/exerciseScanner';
 import { MaterialManager } from '../materials/materialManager';
+import { ProjectStore } from '../projects/projectStore';
+import { ProjectGenerator } from '../projects/projectGenerator';
 import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
 import { AdaptiveEngine } from '../progress/adaptiveEngine';
@@ -120,6 +122,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private _taskId = 0;
   private _activeTaskKeys = new Map<string, string>();
   private aiClient = new AIClient();
+  private projectStore = new ProjectStore();
+  private projectGenerator = new ProjectGenerator(this.aiClient, this.projectStore);
   private chatHistory: ChatMessage[] = [];
   private lastOpenedLessonFile?: ChatEditTarget;
   private selectedMaterialId?: string;
@@ -3202,6 +3206,110 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand('claudeCoach.openExamWorkbench', {
             sessionId: String(msg.sessionId),
           });
+          break;
+        }
+
+        // ===== Projects =====
+
+        case 'createProject': {
+          this._startTask('生成项目骨架', async () => {
+            try {
+              const profile = await this.progressStore.getProfile().catch(() => null);
+              const preferences = await this.prefsStore.get().catch(() => null);
+              const result = await this.projectGenerator.createProject(msg.request, {
+                profile,
+                preferences,
+              });
+              if (result.ok && result.meta && result.spec) {
+                this._post({
+                  type: 'projectCreated',
+                  meta: result.meta,
+                  spec: result.spec,
+                  warnings: result.warnings,
+                });
+                this._post({
+                  type: 'log',
+                  message: `项目已创建：${result.meta.title}（${result.meta.projectDir}）`,
+                  level: 'info',
+                });
+              } else {
+                this._post({
+                  type: 'projectScaffoldFailed',
+                  errorMessage: result.errorMessage ?? '未知错误',
+                });
+              }
+            } catch (error) {
+              this._post({
+                type: 'projectScaffoldFailed',
+                errorMessage: (error as Error).message,
+              });
+            }
+          });
+          break;
+        }
+
+        case 'listProjects': {
+          const data = await this.projectStore.listAll(msg.subject);
+          this._post({ type: 'projectsList', subject: msg.subject, data });
+          break;
+        }
+
+        case 'getProjectSpec': {
+          const spec = await this.projectStore.readSpecByProjectId(msg.projectId);
+          this._post({ type: 'projectSpec', projectId: msg.projectId, spec });
+          break;
+        }
+
+        case 'openProject': {
+          const meta = await this.projectStore.readMetaByProjectId(msg.projectId);
+          if (!meta) {
+            this._post({ type: 'error', message: '找不到该项目，可能已被删除。' });
+            break;
+          }
+          // 在新 VS Code 窗口里打开项目目录（不替换当前 ClaudeCoach 工作区）
+          const uri = vscode.Uri.file(meta.projectDir);
+          await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+          this._post({ type: 'projectOpened', projectId: msg.projectId, projectDir: meta.projectDir });
+          break;
+        }
+
+        case 'updateProjectProgress': {
+          const meta = await this.projectStore.updateProgress(
+            msg.projectId,
+            msg.completedTodos,
+            msg.status,
+          );
+          if (meta) {
+            this._post({ type: 'projectProgressUpdated', meta });
+          } else {
+            this._post({ type: 'error', message: '更新项目进度失败：找不到项目。' });
+          }
+          break;
+        }
+
+        case 'deleteProject': {
+          // 二级确认（webview 不支持 confirm 弹窗，所以用 modal）
+          const purge = msg.purgeFiles === true;
+          const confirmMsg = purge
+            ? '彻底删除项目目录（含所有代码）？此操作不可撤销。'
+            : '从 ClaudeCoach 列表移除项目？磁盘上的代码不会删除。';
+          const choice = await vscode.window.showWarningMessage(
+            confirmMsg,
+            { modal: true },
+            purge ? '删除全部' : '从列表移除',
+          );
+          if (!choice) break;
+          const result = await this.projectStore.deleteProject(msg.projectId, { purgeFiles: purge });
+          if (result.ok) {
+            this._post({ type: 'projectDeleted', projectId: msg.projectId });
+            this._post({
+              type: 'log',
+              message: purge ? `项目目录已删除：${result.removedDir}` : '项目已从列表移除（代码保留）',
+              level: 'info',
+            });
+          } else {
+            this._post({ type: 'error', message: '删除项目失败。' });
+          }
           break;
         }
 

@@ -11,6 +11,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="learn">学习</button>
     <button class="tab" data-tab="chat">对话</button>
+    <button class="tab" data-tab="projects">项目</button>
     <button class="tab" data-tab="materials">资料库</button>
     <button class="tab" data-tab="settings">设置</button>
     <button class="tab" data-tab="logs">日志</button>
@@ -221,6 +222,47 @@
         <button class="btn primary" id="btn-chat-send">发送</button>
       </div>
     </div>
+  </div>
+
+  <div id="tab-projects" class="tab-content">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>🛠 创建 TDD 学习项目</h3>
+          <p class="section-subtitle">AI 写测试 + 骨架，你写核心实现，跑测试自己迭代。</p>
+        </div>
+      </div>
+      <div class="project-create-form">
+        <label class="form-row">
+          <span class="form-label">学科 / 领域</span>
+          <input type="text" id="project-subject" placeholder="如：前端 / 系统编程 / LLM 研究" />
+        </label>
+        <label class="form-row">
+          <span class="form-label">项目想法</span>
+          <textarea id="project-prompt" rows="4" placeholder="比如：用 PyTorch 实现一个最小的 Mamba SSM 层，包含 selective state 机制"></textarea>
+        </label>
+        <label class="form-row">
+          <span class="form-label">技术栈偏好（可选）</span>
+          <input type="text" id="project-techstack" placeholder="如：TypeScript + Vitest / Python 3.12 + pytest" />
+        </label>
+        <div class="form-actions">
+          <button class="btn primary" id="btn-create-project">生成项目骨架</button>
+          <span class="form-hint">AI 会在 ~/ClaudeCoach/.../projects/ 下生成完整可跑的项目目录</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>我的项目</h3>
+        </div>
+        <button class="btn ghost small" id="btn-refresh-projects">刷新</button>
+      </div>
+      <div id="projects-list" class="projects-list">
+        <p class="muted">还没有项目，去上面创建一个。</p>
+      </div>
+    </section>
   </div>
 
   <div id="tab-materials" class="tab-content">

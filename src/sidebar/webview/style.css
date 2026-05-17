@@ -2396,3 +2396,142 @@ pre.hljs code,
 .suggestion-evidence-toggle:hover {
   background: var(--accent-soft);
 }
+
+/* ===== Projects tab ===== */
+
+.project-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.project-create-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-create-form .form-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.project-create-form input,
+.project-create-form textarea {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.project-create-form input:focus,
+.project-create-form textarea:focus {
+  outline: none;
+  border-color: var(--accent, var(--vscode-button-background));
+}
+
+.project-create-form .form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.project-create-form .form-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.project-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--vscode-sideBar-background, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.project-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.project-card-meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.project-card-meta .pc-tag {
+  background: var(--accent-soft, color-mix(in srgb, var(--vscode-button-background) 16%, transparent));
+  color: var(--vscode-button-foreground);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+}
+
+.project-card-desc {
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.project-card-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.project-card-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--vscode-input-background);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.project-card-progress-fill {
+  height: 100%;
+  background: var(--vscode-charts-green, #4caf50);
+  transition: width 0.2s ease;
+}
+
+.project-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.project-status-spec-pending { color: var(--vscode-descriptionForeground); }
+.project-status-scaffolded   { color: var(--vscode-charts-blue, #4099e8); }
+.project-status-in-progress  { color: var(--vscode-charts-yellow, #d4a73d); }
+.project-status-completed    { color: var(--vscode-charts-green, #4caf50); }
+.project-status-archived     { color: var(--vscode-descriptionForeground); opacity: 0.6; }

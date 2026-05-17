@@ -2834,7 +2834,113 @@
     if (tabName === 'chat') {
       scrollChatToBottom();
     }
+    if (tabName === 'projects') {
+      // 首次打开 / 切回 projects 标签时刷新列表
+      vscode.postMessage({ type: 'listProjects' });
+    }
   }
+
+  // ===== Projects 标签 =====
+
+  function renderProjectsList(items) {
+    const el = document.getElementById('projects-list');
+    if (!el) return;
+    if (!Array.isArray(items) || items.length === 0) {
+      el.innerHTML = '<p class="muted">还没有项目，去上面创建一个。</p>';
+      return;
+    }
+    el.innerHTML = '';
+    for (const meta of items) {
+      const card = document.createElement('div');
+      card.className = 'project-card';
+      card.dataset.projectId = meta.id;
+      const completed = meta.progress?.completedTodos ?? 0;
+      const total = meta.progress?.totalTodos ?? 0;
+      const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+      const statusLabel = {
+        'spec-pending': '生成中',
+        'scaffolded': '已生成',
+        'in-progress': '进行中',
+        'completed': '已完成',
+        'archived': '已归档',
+      }[meta.status] || meta.status;
+
+      card.innerHTML = `
+        <div class="project-card-header">
+          <div>
+            <p class="project-card-title">${escapeHtml(meta.title)}</p>
+            <div class="project-card-meta">
+              <span class="pc-tag">${escapeHtml(meta.subject)}</span>
+              <span class="project-status-${meta.status}">● ${statusLabel}</span>
+              <span>${escapeHtml(meta.techStack?.join(', ') || '')}</span>
+            </div>
+          </div>
+        </div>
+        <p class="project-card-desc">${escapeHtml(meta.description)}</p>
+        <div class="project-card-progress">
+          <span>${completed} / ${total} todo</span>
+          <div class="project-card-progress-bar">
+            <div class="project-card-progress-fill" style="width: ${pct}%"></div>
+          </div>
+          <span>${pct}%</span>
+        </div>
+        <div class="project-card-actions">
+          <button class="btn primary small" data-act="open">在 IDE 打开</button>
+          <button class="btn ghost small" data-act="mark-done">标记完成</button>
+          <button class="btn ghost small" data-act="delete">从列表移除</button>
+        </div>
+      `;
+      card.querySelector('[data-act="open"]').addEventListener('click', () => {
+        vscode.postMessage({ type: 'openProject', projectId: meta.id });
+      });
+      card.querySelector('[data-act="mark-done"]').addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'updateProjectProgress',
+          projectId: meta.id,
+          completedTodos: total,
+          status: 'completed',
+        });
+      });
+      card.querySelector('[data-act="delete"]').addEventListener('click', () => {
+        vscode.postMessage({ type: 'deleteProject', projectId: meta.id, purgeFiles: false });
+      });
+      el.appendChild(card);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  document.getElementById('btn-create-project')?.addEventListener('click', () => {
+    const subject = (document.getElementById('project-subject').value || '').trim();
+    const prompt = (document.getElementById('project-prompt').value || '').trim();
+    const techStackHint = (document.getElementById('project-techstack').value || '').trim();
+    if (!subject) {
+      showToast('请填写学科 / 领域', 'warn');
+      return;
+    }
+    if (!prompt) {
+      showToast('请描述项目想法', 'warn');
+      return;
+    }
+    vscode.postMessage({
+      type: 'createProject',
+      request: {
+        subject,
+        prompt,
+        techStackHint: techStackHint || undefined,
+      },
+    });
+  });
+
+  document.getElementById('btn-refresh-projects')?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'listProjects' });
+  });
 
   els.tabs.forEach((tab) => {
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
@@ -3987,6 +4093,51 @@
       }
       case 'log': {
         addLog(msg.message, msg.level);
+        break;
+      }
+      // ===== Projects =====
+      case 'projectsList': {
+        renderProjectsList(msg.data || []);
+        break;
+      }
+      case 'projectCreated': {
+        showToast('项目已创建：' + (msg.meta?.title || ''), 'success');
+        if (Array.isArray(msg.warnings) && msg.warnings.length) {
+          msg.warnings.forEach((w) => addLog('[项目] ' + w, 'warn'));
+        }
+        vscode.postMessage({ type: 'listProjects' });
+        // 清空表单
+        const subjEl = document.getElementById('project-subject');
+        const promptEl = document.getElementById('project-prompt');
+        const tsEl = document.getElementById('project-techstack');
+        if (subjEl) subjEl.value = '';
+        if (promptEl) promptEl.value = '';
+        if (tsEl) tsEl.value = '';
+        break;
+      }
+      case 'projectScaffoldFailed': {
+        showToast('生成项目失败：' + (msg.errorMessage || '未知错误'), 'error');
+        addLog('[项目] 生成失败：' + (msg.errorMessage || '未知错误'), 'error');
+        break;
+      }
+      case 'projectOpened': {
+        showToast('已在新窗口打开项目', 'info');
+        break;
+      }
+      case 'projectProgressUpdated': {
+        vscode.postMessage({ type: 'listProjects' });
+        showToast('项目进度已更新', 'success');
+        break;
+      }
+      case 'projectDeleted': {
+        vscode.postMessage({ type: 'listProjects' });
+        showToast('项目已删除', 'info');
+        break;
+      }
+      case 'projectSpec': {
+        // 暂存到 state；详情视图未实现，留作后续
+        state.projectSpecs = state.projectSpecs || {};
+        state.projectSpecs[msg.projectId] = msg.spec;
         break;
       }
       case 'error': {

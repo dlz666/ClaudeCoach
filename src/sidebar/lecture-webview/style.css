@@ -533,6 +533,45 @@ html, body {
   color: color-mix(in srgb, var(--danger) 92%, white 6%);
 }
 
+.lecture-toast.warn {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+  color: color-mix(in srgb, var(--warn) 92%, white 6%);
+}
+
+/* ===== undo pill ===== */
+
+.lecture-undo-pill {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9999;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--vscode-editor-foreground);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.lecture-undo-pill.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.lecture-undo-pill:hover {
+  background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
 .lecture-toast.fading {
   opacity: 0;
   transform: translateY(8px);
