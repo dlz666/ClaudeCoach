@@ -2803,6 +2803,7 @@
     renderWrongQuestions();
     renderLearningPlan();
     renderInsights();
+    refreshCourseProjectsSection();
     if (state.preferences) {
       renderPerSubjectDifficulty(state.preferences);
     }
@@ -2819,19 +2820,24 @@
     if (tabName === 'chat') {
       scrollChatToBottom();
     }
-    if (tabName === 'projects') {
-      // 首次打开 / 切回 projects 标签时刷新列表
-      vscode.postMessage({ type: 'listProjects' });
-    }
   }
 
-  // ===== Projects 标签 =====
+  // ===== Projects（嵌在课程面板里，按当前课程的 subject 过滤）=====
 
-  function renderProjectsList(items) {
+  /** 缓存所有项目元数据，rendering 时按 state.selectedSubject 过滤。 */
+  state.allProjects = state.allProjects || [];
+
+  function renderProjectsList() {
     const el = document.getElementById('projects-list');
     if (!el) return;
-    if (!Array.isArray(items) || items.length === 0) {
-      el.innerHTML = '<p class="muted">还没有项目，去上面创建一个。</p>';
+    const subject = state.selectedSubject;
+    if (!subject) {
+      el.innerHTML = '<p class="muted">请先选择课程。</p>';
+      return;
+    }
+    const items = (state.allProjects || []).filter((m) => m.subject === subject);
+    if (items.length === 0) {
+      el.innerHTML = '<p class="muted">还没有项目，点上方"＋ 新项目"创建一个。</p>';
       return;
     }
     el.innerHTML = '';
@@ -2853,15 +2859,14 @@
       card.innerHTML = `
         <div class="project-card-header">
           <div>
-            <p class="project-card-title">${escapeHtml(meta.title)}</p>
+            <p class="project-card-title">${escapeProjHtml(meta.title)}</p>
             <div class="project-card-meta">
-              <span class="pc-tag">${escapeHtml(meta.subject)}</span>
               <span class="project-status-${meta.status}">● ${statusLabel}</span>
-              <span>${escapeHtml(meta.techStack?.join(', ') || '')}</span>
+              <span>${escapeProjHtml(meta.techStack?.join(', ') || '')}</span>
             </div>
           </div>
         </div>
-        <p class="project-card-desc">${escapeHtml(meta.description)}</p>
+        <p class="project-card-desc">${escapeProjHtml(meta.description)}</p>
         <div class="project-card-progress">
           <span>${completed} / ${total} todo</span>
           <div class="project-card-progress-bar">
@@ -2893,7 +2898,7 @@
     }
   }
 
-  function escapeHtml(s) {
+  function escapeProjHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -2901,30 +2906,58 @@
       .replace(/"/g, '&quot;');
   }
 
+  /** 当 selectedSubject 变化 / 课程加载完成时，刷新课程项目区显隐。 */
+  function refreshCourseProjectsSection() {
+    const sec = document.getElementById('course-projects-section');
+    if (!sec) return;
+    if (state.selectedSubject) {
+      sec.classList.remove('hidden');
+      // 拉一次列表（后端按 subject 过滤会更省，但先全量 + 前端过滤简单可靠）
+      vscode.postMessage({ type: 'listProjects' });
+    } else {
+      sec.classList.add('hidden');
+    }
+  }
+
+  // ＋ 新项目按钮：折叠/展开创建表单
+  document.getElementById('btn-toggle-project-form')?.addEventListener('click', () => {
+    const form = document.getElementById('course-project-form');
+    if (!form) return;
+    form.classList.toggle('hidden');
+    if (!form.classList.contains('hidden')) {
+      document.getElementById('project-prompt')?.focus();
+    }
+  });
+
+  document.getElementById('btn-cancel-create-project')?.addEventListener('click', () => {
+    document.getElementById('course-project-form')?.classList.add('hidden');
+    const promptEl = document.getElementById('project-prompt');
+    const tsEl = document.getElementById('project-techstack');
+    if (promptEl) promptEl.value = '';
+    if (tsEl) tsEl.value = '';
+  });
+
   document.getElementById('btn-create-project')?.addEventListener('click', () => {
-    const subject = (document.getElementById('project-subject').value || '').trim();
-    const prompt = (document.getElementById('project-prompt').value || '').trim();
-    const techStackHint = (document.getElementById('project-techstack').value || '').trim();
-    if (!subject) {
-      showToast('请填写学科 / 领域', 'warn');
+    if (!state.selectedSubject) {
+      showToast('请先选择课程', 'warn');
       return;
     }
+    const prompt = (document.getElementById('project-prompt').value || '').trim();
+    const techStackHint = (document.getElementById('project-techstack').value || '').trim();
     if (!prompt) {
       showToast('请描述项目想法', 'warn');
       return;
     }
+    const course = (state.courses || []).find((c) => c.subject === state.selectedSubject);
     vscode.postMessage({
       type: 'createProject',
       request: {
-        subject,
+        subject: state.selectedSubject,
         prompt,
         techStackHint: techStackHint || undefined,
+        linkedCourse: course ? { subject: course.subject } : undefined,
       },
     });
-  });
-
-  document.getElementById('btn-refresh-projects')?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'listProjects' });
   });
 
   els.tabs.forEach((tab) => {
@@ -3961,7 +3994,8 @@
       }
       // ===== Projects =====
       case 'projectsList': {
-        renderProjectsList(msg.data || []);
+        state.allProjects = Array.isArray(msg.data) ? msg.data : [];
+        renderProjectsList();
         break;
       }
       case 'projectCreated': {
@@ -3970,13 +4004,12 @@
           msg.warnings.forEach((w) => addLog('[项目] ' + w, 'warn'));
         }
         vscode.postMessage({ type: 'listProjects' });
-        // 清空表单
-        const subjEl = document.getElementById('project-subject');
+        // 清空 + 收起创建表单
         const promptEl = document.getElementById('project-prompt');
         const tsEl = document.getElementById('project-techstack');
-        if (subjEl) subjEl.value = '';
         if (promptEl) promptEl.value = '';
         if (tsEl) tsEl.value = '';
+        document.getElementById('course-project-form')?.classList.add('hidden');
         break;
       }
       case 'projectScaffoldFailed': {
