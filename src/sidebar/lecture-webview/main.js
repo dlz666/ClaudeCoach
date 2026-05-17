@@ -118,16 +118,59 @@
     if (mermaidInited) return;
     if (typeof window.mermaid === 'undefined') return;
     try {
-      // 跟随 VS Code 主题。检测 body 背景色判断 dark/light
-      const bg = getComputedStyle(document.body).backgroundColor || '';
-      const isDark = /rgb\((\d+),\s*(\d+),\s*(\d+)/.test(bg) && (() => {
-        const [, r, g, b] = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/) || [];
-        const lum = (Number(r) + Number(g) + Number(b)) / 3;
-        return lum < 128;
-      })();
+      // 跟随 VS Code 主题。优先看 body 上的 vscode-* class（最可靠），
+      // 否则回退到背景色亮度判断。
+      let isDark = false;
+      const cls = document.body.className || '';
+      if (/vscode-(dark|high-contrast(?!-light))/.test(cls)) {
+        isDark = true;
+      } else if (/vscode-(light|high-contrast-light)/.test(cls)) {
+        isDark = false;
+      } else {
+        const bg = getComputedStyle(document.body).backgroundColor || '';
+        const m = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+        if (m) {
+          const lum = (Number(m[1]) + Number(m[2]) + Number(m[3])) / 3;
+          isDark = lum < 128;
+        }
+      }
       window.mermaid.initialize({
         startOnLoad: false,
-        theme: isDark ? 'dark' : 'default',
+        // 'neutral' 在深浅主题下文字对比度都比 default/dark 好
+        theme: 'neutral',
+        themeVariables: isDark
+          ? {
+              primaryColor: '#2d3a4f',
+              primaryTextColor: '#e6e6e6',
+              primaryBorderColor: '#7d8aa0',
+              lineColor: '#b0b8c4',
+              secondaryColor: '#3a4555',
+              tertiaryColor: '#2d3a4f',
+              textColor: '#e6e6e6',
+              labelTextColor: '#e6e6e6',
+              nodeTextColor: '#e6e6e6',
+              actorTextColor: '#e6e6e6',
+              actorLineColor: '#b0b8c4',
+              noteTextColor: '#1f2937',
+              clusterBkg: '#374151',
+              clusterBorder: '#7d8aa0',
+            }
+          : {
+              primaryColor: '#dbeafe',
+              primaryTextColor: '#1f2937',
+              primaryBorderColor: '#3b82f6',
+              lineColor: '#4b5563',
+              secondaryColor: '#e0e7ff',
+              tertiaryColor: '#f3f4f6',
+              textColor: '#1f2937',
+              labelTextColor: '#1f2937',
+              nodeTextColor: '#1f2937',
+              actorTextColor: '#1f2937',
+              actorLineColor: '#4b5563',
+              noteTextColor: '#1f2937',
+              clusterBkg: '#f3f4f6',
+              clusterBorder: '#9ca3af',
+            },
         securityLevel: 'strict',
         fontFamily: 'inherit',
       });
@@ -896,6 +939,31 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       hidePopover();
+    }
+    // Ctrl/Cmd + Z → 撤回上次 AI 写入。仅在 undo pill 可见时生效，
+    // 用 .visible class 判断（写入后 12s 内）。不在 input/textarea/可编辑节点里。
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey && !e.altKey) {
+      const t = e.target;
+      const tag = (t && t.tagName) ? t.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+      if (_undoPillEl && _undoPillEl.classList.contains('visible')) {
+        e.preventDefault();
+        if (vscode) vscode.postMessage({ type: 'revertLastWriteback' });
+        _undoPillEl.textContent = '↷ 重做（再撤回）';
+        return;
+      }
+    }
+    // Ctrl/Cmd + Shift + Z → 重做（再次 revertLastWriteback）。
+    // 后端 revertLastWriteback 是幂等 swap：A↔B 来回换。
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')) {
+      const t = e.target;
+      const tag = (t && t.tagName) ? t.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+      if (_undoPillEl && _undoPillEl.classList.contains('visible')) {
+        e.preventDefault();
+        if (vscode) vscode.postMessage({ type: 'revertLastWriteback' });
+        return;
+      }
     }
   });
 

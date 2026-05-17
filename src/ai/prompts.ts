@@ -846,8 +846,8 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
     : detail === 'detailed' ? '4000-6000 字（详尽，含证明、推导、多个例子）'
     : '2000-3000 字（标准，含定义、关键例子、本节小结）';
 
-  // 视觉化建议：按学科 hint 引导 mermaid / ASCII
-  const visualHint = buildVisualHint(subject);
+  // 视觉化建议：按学科 hint 引导 mermaid / DOT / SVG + 通用样式约束
+  const visualHint = buildVisualHint(subject) + '\n\n' + VISUAL_STYLE_RULES;
 
   // Misconception 前置防御：找出与本节相关的常见误区，让 AI 在讲义里主动澄清
   // 同步引入避免循环；require 是 ts-node / commonjs 友好
@@ -912,6 +912,15 @@ ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节�
     { role: 'user', content: `请为"${subjectLabel(subject)}"课程中"${topicTitle}"主题下的"${lessonTitle}"编写讲义。` },
   ];
 }
+
+/**
+ * 通用样式约束：保证 mermaid / DOT 在 webview 的深浅主题下文字都清晰可见。
+ */
+const VISUAL_STYLE_RULES = [
+  '⚠ **Mermaid 内部不要写 `style A fill:#xxx,color:#yyy` 或 `classDef` 设颜色** —— webview 已经统一注入 themeVariables 适配主题。手动设色容易让文字变浅灰色不可读。',
+  '⚠ **DOT 内部不要写 `color="#xxx"` / `fontcolor="#xxx"` / `bgcolor="#xxx"`** 给节点/边整体上色 —— webview CSS 会把黑色描边/文字统一替换成主题前景色。只在你"要突出某条边/节点"时用 `color=red` / `color=blue` 这种命名色（语义清晰，CSS 不会覆盖）。',
+  '⚠ 别在代码块外再加 markdown 标题或 `**强调**` 包住整段，会破坏 fence 识别。',
+].join('\n');
 
 /**
  * 可视化路由原则（webview 已集成的渲染器）：
@@ -982,6 +991,7 @@ function buildVisualHint(subject: Subject): string {
     '没必要硬塞图，讲义本身写清楚比放图重要',
   ].map((x) => '- ' + x).join('\n');
 }
+
 
 export function exercisePrompt(subject: Subject, lessonTitle: string, count: number, difficulty: number, ctx: PromptContext): ChatMessage[] {
   const scopedCtx: PromptContext = { ...ctx, scope: 'exercise-gen' };
