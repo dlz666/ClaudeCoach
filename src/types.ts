@@ -628,152 +628,6 @@ export interface LearningPreferences {
   };
 }
 
-// ===== Coach: 主动学习核心 schemas =====
-
-/** 学习计划：用户设定的目标 + AI 拆解的每日清单。 */
-export interface PlanMilestone {
-  topicId: string;
-  topicTitle: string;
-  expectedDoneBy: string; // ISO date
-  status: 'pending' | 'in-progress' | 'done' | 'skipped';
-}
-
-export interface LearningPlan {
-  schemaVersion: number;
-  subject: Subject;
-  /** 用户结构化输入 + 可选自由文本说明。 */
-  goal: {
-    targetEndDate: string;     // ISO
-    dailyMinutes: number;
-    extraNotes?: string;        // 用户自由补充
-  };
-  createdAt: string;
-  updatedAt: string;
-  milestones: PlanMilestone[];
-  /** 落后多少天才告警。 */
-  driftThresholdDays: number;
-  lastDriftCheckAt?: string | null;
-}
-
-/** 学习会话：本次打开扩展期间的活动汇总。 */
-export interface StudySession {
-  id: string;
-  startedAt: string;
-  endedAt?: string;
-  activeMillis: number;
-  lessonsTouched: string[];        // lessonId 列表
-  exercisesSubmitted: number;
-  trigger: 'webview-visible' | 'editor-open' | 'manual';
-  lastActivityAt: string;
-}
-
-/** 间隔重复队列项。复用 WrongQuestion 作为源头，元数据单存。 */
-export interface SpacedRepetitionItem {
-  id: string;
-  sourceWrongQuestionId: string;
-  subject: Subject;
-  topicId: string;
-  lessonId: string;
-  repetitionCount: number;
-  easeFactor: number;
-  intervalDays: number;
-  nextDueAt: string;
-  lastReviewedAt?: string | null;
-  /** 上次重测的质量（0=完全错，5=完美）。映射自 score。 */
-  lastQuality?: number;
-}
-
-export interface SpacedRepetitionQueue {
-  schemaVersion: number;
-  subject: Subject;
-  items: SpacedRepetitionItem[];
-  updatedAt: string;
-}
-
-/** Coach 候选建议。生命周期在 Suggestion 池内管理。 */
-export type CoachSuggestionKind =
-  | 'daily-brief'
-  | 'idle-nudge'
-  | 'sr-due'
-  | 'metacog-question'
-  | 'drift-alert'
-  | 'related-lesson'
-  | 'streak-up'
-  | 'streak-down'
-  | 'next-step';
-
-export type CoachSuggestionUrgency = 'low' | 'medium' | 'high';
-
-export interface CoachSuggestionAction {
-  label: string;
-  command: string;
-  args?: Record<string, unknown>;
-}
-
-export interface CoachSuggestion {
-  id: string;
-  kind: CoachSuggestionKind;
-  subject?: Subject;
-  topicId?: string;
-  lessonId?: string;
-  createdAt: string;
-  expiresAt?: string;
-  urgency: CoachSuggestionUrgency;
-  title: string;
-  body: string;
-  actions: CoachSuggestionAction[];
-  /** 去重键。同 dedupKey 的旧建议会被新建议替换或合并。 */
-  dedupKey: string;
-  dispatchedAt?: string | null;
-  dismissedAt?: string | null;
-  actedAt?: string | null;
-}
-
-/** 用户活动事件（轻量）。 */
-export type LearnerActivityKind =
-  | 'lesson-open'
-  | 'lecture-render'
-  | 'inline-suggest'
-  | 'inline-apply'
-  | 'exercise-open'
-  | 'exercise-submit'
-  | 'webview-visible'
-  | 'webview-hidden'
-  | 'editor-typing'
-  | 'idle-detected'
-  | 'coach-suggestion-dispatched'
-  | 'coach-suggestion-acted'
-  | 'coach-suggestion-dismissed';
-
-export interface LearnerActivityEntry {
-  at: string;
-  kind: LearnerActivityKind;
-  subject?: Subject;
-  topicId?: string;
-  lessonId?: string;
-  meta?: Record<string, unknown>;
-}
-
-/** Daily brief 缓存条目。 */
-export interface DailyBriefEntry {
-  dateKey: string;       // YYYY-MM-DD
-  subject?: Subject;
-  generatedAt: string;
-  yesterdayRecap: string;
-  todaySuggestions: string[];
-  srDueCount: number;
-  planProgress?: {
-    completedMilestones: number;
-    totalMilestones: number;
-    daysAhead: number;   // 正数=领先，负数=落后
-  };
-}
-
-export interface DailyBriefCache {
-  schemaVersion: number;
-  entries: DailyBriefEntry[];
-}
-
 /** Inline 编辑：webview 与后端之间的消息载荷。 */
 export interface InlineSuggestRequest {
   filePath: string;
@@ -1327,17 +1181,6 @@ export type SidebarCommand =
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }
   | { type: 'inlineApply'; request: InlineApplyRequest }
   | { type: 'inlineDismiss'; turnId: string }
-  // ===== Coach（Phase 2-3） =====
-  | { type: 'getDailyBrief'; subject?: Subject; force?: boolean }
-  | { type: 'coachAction'; suggestionId: string }
-  | { type: 'coachDismissSuggestion'; suggestionId: string }
-  | { type: 'setDoNotDisturb'; durationMinutes: number | null }
-  | { type: 'getLearningPlan'; subject: Subject }
-  | { type: 'setLearningPlan'; plan: Omit<LearningPlan, 'schemaVersion' | 'createdAt' | 'updatedAt' | 'milestones' | 'lastDriftCheckAt'> & { autoDecompose?: boolean } }
-  | { type: 'updateLearningPlanMilestones'; subject: Subject; milestones: PlanMilestone[] }
-  | { type: 'metacogAnswer'; subject: Subject; topicId: string; lessonId: string; question: string; answer: string }
-  | { type: 'getCoachSuggestions' }
-  | { type: 'getActivityLog' }
   // ===== Projects (TDD-style learning project) =====
   | { type: 'createProject'; request: CreateProjectRequest }
   | { type: 'listProjects'; subject?: ProjectSubject }
@@ -1403,13 +1246,6 @@ export type SidebarResponse =
   // channel 让前端知道这条 delta 该往哪个组件追加（讲义气泡 / 侧栏对话 / 大纲预览等）。
   | { type: 'aiStreamDelta'; turnId: string; channel: 'lecture' | 'chat' | 'outline'; delta: string }
   | { type: 'aiStreamEnd'; turnId: string; channel: 'lecture' | 'chat' | 'outline'; finalText?: string; error?: string }
-  // ===== Coach 响应 =====
-  | { type: 'dailyBrief'; data: DailyBriefEntry }
-  | { type: 'coachSuggestions'; data: CoachSuggestion[] }
-  | { type: 'activityLog'; data: LearnerActivityEntry[] }
-  | { type: 'learningPlan'; subject: Subject; data: LearningPlan | null }
-  | { type: 'doNotDisturbState'; until: string | null }
-  | { type: 'coachStreakUpdate'; subject: Subject; streak: number; direction: 'up' | 'down' | 'reset' }
   // ===== AI Profile 响应 =====
   | { type: 'aiProfilesList'; data: AIProfile[]; activeProfileId: string }
   // ===== 数据管理响应 =====

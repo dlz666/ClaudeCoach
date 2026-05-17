@@ -59,22 +59,6 @@
       </ol>
     </section>
 
-    <!-- 今日 Coach（P1-4: 默认显示带 placeholder，不要默认 hidden）-->
-    <section class="panel coach-card" id="coach-today-section">
-      <div class="panel-header">
-        <div>
-          <h3>🤖 今日 Coach</h3>
-          <p class="section-subtitle" id="coach-brief-subtitle">你的个性化学习线索</p>
-        </div>
-        <div class="coach-card-actions">
-          <button class="btn ghost small" id="btn-coach-refresh-brief" title="生成今日建议" type="button">↻</button>
-          <button class="btn ghost small" id="btn-coach-dnd" title="勿扰 1 小时" type="button">🔕</button>
-        </div>
-      </div>
-      <div id="coach-brief-body" class="muted">点击上方 ↻ 生成今日建议。基于你昨天的学习活动和待复习错题给出 3 条具体动作。</div>
-      <div id="coach-suggestions-list"></div>
-    </section>
-
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -290,21 +274,6 @@
           <span id="insights-strength-tags"></span>
         </div>
       </div>
-    </section>
-
-    <section class="panel learning-plan-panel hidden" id="learning-plan-section">
-      <div class="panel-header">
-        <div>
-          <h3>📅 学习计划</h3>
-          <p class="section-subtitle">设定目标 → AI 自动拆解每日里程碑 → 跟踪偏差</p>
-        </div>
-        <button class="btn ghost small" id="btn-edit-plan" type="button">编辑计划</button>
-      </div>
-      <div id="plan-progress-bar" class="plan-progress-bar hidden">
-        <div id="plan-progress-fill" class="plan-progress-fill" style="width:0%"></div>
-      </div>
-      <div id="plan-status" class="muted">本课程暂无学习计划</div>
-      <div id="plan-milestones-list"></div>
     </section>
 
     <section class="panel">
@@ -565,87 +534,6 @@
             <option value="zh">中文</option>
             <option value="en">英文</option>
           </select>
-        </div>
-      </div>
-    </section>
-
-    <section class="cc-settings-section settings-group" id="group-coach" data-section="coach" data-section-title="Coach" data-section-sub="主动学习行为：简报、闲置提醒、间隔重复、勿扰" data-active="false">
-      <header class="cc-settings-section-header">
-        <div>
-          <h3 class="cc-settings-section-title">主动 Coach</h3>
-          <p class="cc-settings-section-sub">主动学习行为：简报、闲置提醒、间隔重复、勿扰</p>
-        </div>
-        <button class="btn ghost small reset-group-btn" type="button" data-reset-group="coach">恢复默认</button>
-      </header>
-      <div class="settings-group-body">
-        <div class="setting-row">
-          <label class="inline-check"><input type="checkbox" id="coach-enabled" checked> 启用主动 Coach</label>
-        </div>
-        <div class="setting-row">
-          <label>Loop 开关</label>
-          <div class="check-row">
-            <label class="inline-check"><input type="checkbox" data-coach-loop="dailyBrief" checked> 每日简报</label>
-            <label class="inline-check"><input type="checkbox" data-coach-loop="idleNudge" checked> 闲置提醒</label>
-            <label class="inline-check"><input type="checkbox" data-coach-loop="srPrompt" checked> 间隔重复</label>
-            <label class="inline-check"><input type="checkbox" data-coach-loop="metacog" checked> 元认知提示</label>
-            <label class="inline-check"><input type="checkbox" data-coach-loop="planSync" checked> 计划同步</label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>Toast 通知级别</label>
-          <div class="check-row" id="coach-toast-level">
-            <label class="inline-check"><input type="radio" name="coach-toast-level" value="all"> 全部</label>
-            <label class="inline-check"><input type="radio" name="coach-toast-level" value="high-only" checked> 仅高优先级</label>
-            <label class="inline-check"><input type="radio" name="coach-toast-level" value="silent"> 静默</label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>勿扰时段</label>
-          <div class="time-range">
-            <input type="time" id="coach-dnd-start" value="22:00">
-            <span>—</span>
-            <input type="time" id="coach-dnd-end" value="08:00">
-          </div>
-          <div class="quick-dnd-row">
-            <button class="btn ghost small" id="btn-dnd-1h" type="button">勿扰 1 小时</button>
-            <button class="btn ghost small" id="btn-dnd-today" type="button">勿扰今日</button>
-            <button class="btn ghost small" id="btn-dnd-custom" type="button">自定义...</button>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label for="coach-idle-threshold">Idle 阈值（分钟）</label>
-          <div class="slider-row">
-            <input type="range" id="coach-idle-threshold" min="3" max="15" value="8">
-            <span id="coach-idle-threshold-value" class="hint">8 分钟</span>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>SR 题面策略</label>
-          <div class="check-row" id="coach-sr-policy">
-            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="reuse" checked> 复用原题</label>
-            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="variant"> 同构变体</label>
-            <label class="inline-check"><input type="radio" name="coach-sr-policy" value="mixed"> 混合</label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>Daily Brief 缓存策略</label>
-          <div class="check-row" id="coach-brief-cache">
-            <label class="inline-check"><input type="radio" name="coach-brief-cache" value="lazy" checked> 懒加载（点开时拉）</label>
-            <label class="inline-check"><input type="radio" name="coach-brief-cache" value="prefetch"> 预取（启动时拉）</label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>节流配额</label>
-          <div class="range-group">
-            <span>每小时上限 <input type="number" id="coach-throttle-hour" value="3" min="0" max="20" class="num-input"></span>
-            <span>每天上限 <input type="number" id="coach-throttle-day" value="12" min="0" max="100" class="num-input"></span>
-          </div>
         </div>
       </div>
     </section>
@@ -1054,37 +942,6 @@
     <div class="cc-settings-savebar">
       <span class="cc-save-hint">改动会自动保存</span>
       <button class="btn primary" id="btn-save-prefs" title="立刻提交一次（自动保存已开启）">立即保存</button>
-    </div>
-  </div>
-
-  <div id="learning-plan-modal" class="modal-overlay hidden" aria-hidden="true">
-    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="learning-plan-modal-title">
-      <div class="modal-header">
-        <h3 id="learning-plan-modal-title">设定学习计划</h3>
-        <button class="btn ghost small" id="btn-close-plan-modal" type="button">关闭</button>
-      </div>
-      <div class="modal-body">
-        <div class="setting-row">
-          <label for="plan-subject">学科</label>
-          <input type="text" id="plan-subject" readonly>
-        </div>
-        <div class="setting-row">
-          <label for="plan-target-date">截止日期</label>
-          <input type="date" id="plan-target-date">
-        </div>
-        <div class="setting-row">
-          <label for="plan-daily-minutes">每日学习时间（分钟）</label>
-          <input type="number" id="plan-daily-minutes" min="10" max="240" value="60">
-        </div>
-        <div class="setting-row">
-          <label for="plan-extra-notes">补充说明（可选）</label>
-          <textarea id="plan-extra-notes" rows="3" placeholder="例如：跳过隐马尔可夫那一节"></textarea>
-        </div>
-        <div class="actions-row">
-          <button class="btn primary" id="btn-save-plan" type="button">保存（AI 自动拆解）</button>
-          <button class="btn ghost" id="btn-cancel-plan" type="button">取消</button>
-        </div>
-      </div>
     </div>
   </div>
 

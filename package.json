@@ -83,16 +83,6 @@
         "command": "claudeCoach.inlineRewrite",
         "title": "ClaudeCoach: 重写选中段落",
         "category": "ClaudeCoach"
-      },
-      {
-        "command": "claudeCoach.coachDoNotDisturb",
-        "title": "ClaudeCoach: 勿扰 1 小时",
-        "category": "ClaudeCoach"
-      },
-      {
-        "command": "claudeCoach.coachOpenPanel",
-        "title": "ClaudeCoach: 打开今日 Coach 面板",
-        "category": "ClaudeCoach"
       }
     ],
     "keybindings": [

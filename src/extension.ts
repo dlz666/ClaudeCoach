@@ -10,18 +10,11 @@ import { AdaptiveEngine } from './progress/adaptiveEngine';
 import { CourseProfileStore } from './progress/courseProfileStore';
 import { LectureWebviewProvider } from './coach/lectureWebviewProvider';
 import { registerInlineEditCommands } from './coach/inlineEdit';
-import { CoachAgent } from './coach/coachAgent';
-import { CoachEventBus } from './coach/coachEventBus';
-import { CoachStateStore } from './coach/coachState';
-import { SuggestionStore } from './coach/suggestionStore';
-import { SessionLogger } from './coach/sessionLogger';
-import { LearningPlanStore } from './coach/learningPlanStore';
 import { CourseManager } from './courses/courseManager';
 import { MaterialManager } from './materials/materialManager';
 import { VectorIndex } from './materials/vectorIndex';
 import { HybridRetriever } from './materials/hybridRetriever';
 import { EmbeddingClient } from './ai/embeddingClient';
-import { getStoragePathResolver } from './storage/pathResolver';
 
 async function revealAIConfigCard(sidebarProvider: SidebarProvider): Promise<void> {
   await vscode.commands.executeCommand('workbench.view.extension.claude-coach');
@@ -97,14 +90,6 @@ export async function activate(context: vscode.ExtensionContext) {
     },
   });
 
-  // ===== Coach 框架 =====
-  const paths = getStoragePathResolver();
-  const coachEventBus = new CoachEventBus();
-  const coachStateStore = new CoachStateStore(paths);
-  const suggestionStore = new SuggestionStore(paths);
-  const sessionLogger = new SessionLogger(paths, coachEventBus);
-  const learningPlanStore = new LearningPlanStore(paths);
-
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   context.subscriptions.push(statusBar);
 
@@ -112,13 +97,6 @@ export async function activate(context: vscode.ExtensionContext) {
     context.extensionUri,
     aiProfiles,
     () => { void refreshStatusBar(); },
-    {
-      coachEventBus,
-      coachStateStore,
-      suggestionStore,
-      sessionLogger,
-      learningPlanStore,
-    },
     // 重要：复用 extension.ts 创建（已 setHybridDeps）的 materialManager 实例。
     // 否则 SidebarProvider 会自己 new 一个 MaterialManager，没有 hybrid 依赖，
     // 所有资料的向量化状态读出来都是 false（即便磁盘上 vector-index.json 已存在）。
@@ -141,29 +119,6 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBar.show();
   };
 
-  // ===== CoachAgent 启动 =====
-  const coachAgent = new CoachAgent({
-    bus: coachEventBus,
-    prefs: preferencesStore,
-    state: coachStateStore,
-    suggestions: suggestionStore,
-    sessions: sessionLogger,
-    plans: learningPlanStore,
-    courseManager,
-    courseProfileStore,
-    adaptiveEngine,
-    ai,
-    postToSidebar: (msg) => sidebarProvider.postMessage(msg),
-    showToast: (level, message) => {
-      if (level === 'error') vscode.window.showErrorMessage(message);
-      else if (level === 'warn') vscode.window.showWarningMessage(message);
-      else vscode.window.showInformationMessage(message);
-    },
-  });
-  coachAgent.start();
-  sidebarProvider.attachCoachAgent(coachAgent);
-  context.subscriptions.push(coachAgent);
-
   // ===== 讲义自渲染 webview provider =====
   LectureWebviewProvider.register(context, context.extensionUri, {
     ai,
@@ -184,19 +139,6 @@ export async function activate(context: vscode.ExtensionContext) {
   )) {
     context.subscriptions.push(disposable);
   }
-
-  // ===== 编辑器活动监听（接通 idle 检测） =====
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument((event) => {
-      const fsPath = event.document.uri.fsPath;
-      if (!fsPath.toLowerCase().endsWith('.md')) return;
-      coachEventBus.emit({
-        kind: 'editor-typing',
-        at: new Date().toISOString(),
-        meta: { filePath: fsPath, changes: event.contentChanges.length },
-      });
-    }),
-  );
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('claudeCoach.sidebar', sidebarProvider, {
@@ -228,14 +170,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('claudeCoach.importMaterial', () => {
       sidebarProvider.sendCommand({ type: 'triggerImportMaterial' });
-    }),
-    vscode.commands.registerCommand('claudeCoach.coachOpenPanel', async () => {
-      await vscode.commands.executeCommand('workbench.view.extension.claude-coach');
-      sidebarProvider.sendCommand({ type: 'activateTab', tab: 'learn', focus: 'coach' });
-    }),
-    vscode.commands.registerCommand('claudeCoach.coachDoNotDisturb', async () => {
-      await coachStateStore.setDoNotDisturb(new Date(Date.now() + 60 * 60 * 1000).toISOString());
-      vscode.window.showInformationMessage('ClaudeCoach: 已勿扰 1 小时。');
     }),
     vscode.commands.registerCommand('claudeCoach.syncFromClaude', async () => {
       try {

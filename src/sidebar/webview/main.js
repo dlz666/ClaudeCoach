@@ -82,14 +82,6 @@
       theme: 'auto',
     },
     coach: {
-      active: true,
-      loops: { dailyBrief: true, idle: true, sr: true, metacog: true, drift: true },
-      notifications: { toastLevel: 'high-only', quietHoursStart: '22:00', quietHoursEnd: '08:00' },
-      throttle: { maxToastsPerHour: 3, maxBannersPerHour: 12 },
-      doNotDisturbUntil: null,
-      idleThresholdMinutes: 8,
-      sr: { variantStrategy: 'reuse' },
-      dailyBrief: { cacheStrategy: 'per-day' },
       lecture: {
         viewerMode: 'lecture-webview',
         applyMode: 'preview-confirm',
@@ -137,10 +129,6 @@
     aiProfiles: [],
     activeProfileId: null,
     workspaceAIOverride: null,
-    learningPlan: null,
-    coachSuggestions: [],
-    dailyBrief: null,
-    doNotDisturbUntil: null,
     settingsCollapsedGroups: saved.settingsCollapsedGroups || {}, // v1 legacy（不再使用，保留向后兼容）
     settingsActiveSection: saved.settingsActiveSection || null,    // v2：当前激活的 settings section ('pace' / 'aiStyle' / ...)
     materialsFilter: saved.materialsFilter || 'all',               // v2：资料库 filter chip 选择
@@ -294,22 +282,6 @@
     aiIncludeHistory: $('ai-include-history'),
     prefLangExercises: $('pref-lang-exercises'),
 
-    // ===== 主动 Coach =====
-    coachEnabled: $('coach-enabled'),
-    coachLoopCheckboxes: Array.from(document.querySelectorAll('[data-coach-loop]')),
-    coachToastLevelRadios: Array.from(document.querySelectorAll('input[name="coach-toast-level"]')),
-    coachDndStart: $('coach-dnd-start'),
-    coachDndEnd: $('coach-dnd-end'),
-    btnDnd1h: $('btn-dnd-1h'),
-    btnDndToday: $('btn-dnd-today'),
-    btnDndCustom: $('btn-dnd-custom'),
-    coachIdleThreshold: $('coach-idle-threshold'),
-    coachIdleThresholdValue: $('coach-idle-threshold-value'),
-    coachSrPolicyRadios: Array.from(document.querySelectorAll('input[name="coach-sr-policy"]')),
-    coachBriefCacheRadios: Array.from(document.querySelectorAll('input[name="coach-brief-cache"]')),
-    coachThrottleHour: $('coach-throttle-hour'),
-    coachThrottleDay: $('coach-throttle-day'),
-
     // ===== 资料检索 =====
     retrievalGroundingDefault: $('retrieval-grounding-default'),
     retrievalStrictnessRadios: Array.from(document.querySelectorAll('input[name="retrieval-strictness"]')),
@@ -390,14 +362,6 @@
     btnImportPrefs: $('btn-import-prefs'),
     btnResetAllPrefs: $('btn-reset-all-prefs'),
 
-    // ===== 今日 Coach =====
-    coachTodaySection: $('coach-today-section'),
-    coachBriefSubtitle: $('coach-brief-subtitle'),
-    coachBriefBody: $('coach-brief-body'),
-    coachSuggestionsList: $('coach-suggestions-list'),
-    btnCoachRefreshBrief: $('btn-coach-refresh-brief'),
-    btnCoachDnd: $('btn-coach-dnd'),
-
     // ===== Onboarding =====
     onboardingCard: $('onboarding-card'),
     onboardingStepAi: $('onboarding-step-ai'),
@@ -406,22 +370,6 @@
     onboardingStepLesson: $('onboarding-step-lesson'),
     btnOnboardingDismiss: $('btn-onboarding-dismiss'),
     btnOnboardingGoAi: $('btn-onboarding-go-ai'),
-
-    // ===== 学习计划 =====
-    learningPlanSection: $('learning-plan-section'),
-    btnEditPlan: $('btn-edit-plan'),
-    planProgressBar: $('plan-progress-bar'),
-    planProgressFill: $('plan-progress-fill'),
-    planStatus: $('plan-status'),
-    planMilestonesList: $('plan-milestones-list'),
-    learningPlanModal: $('learning-plan-modal'),
-    planSubject: $('plan-subject'),
-    planTargetDate: $('plan-target-date'),
-    planDailyMinutes: $('plan-daily-minutes'),
-    planExtraNotes: $('plan-extra-notes'),
-    btnSavePlan: $('btn-save-plan'),
-    btnCancelPlan: $('btn-cancel-plan'),
-    btnClosePlanModal: $('btn-close-plan-modal'),
 
     // ===== 重置组按钮 =====
     resetGroupButtons: Array.from(document.querySelectorAll('[data-reset-group]')),
@@ -1943,26 +1891,6 @@
     if (els.aiIncludeProofs) els.aiIncludeProofs.checked = !!merged.aiStyle?.includeProofs;
     if (els.aiIncludeHistory) els.aiIncludeHistory.checked = !!merged.aiStyle?.includeHistory;
 
-    // ===== Coach =====
-    if (els.coachEnabled) els.coachEnabled.checked = merged.coach?.active !== false;
-    const loops = merged.coach?.loops || {};
-    const loopKeyMap = { dailyBrief: 'dailyBrief', idleNudge: 'idle', srPrompt: 'sr', metacog: 'metacog', planSync: 'drift' };
-    els.coachLoopCheckboxes?.forEach((cb) => {
-      const dataKey = cb.getAttribute('data-coach-loop');
-      const stateKey = loopKeyMap[dataKey] || dataKey;
-      cb.checked = loops[stateKey] !== false;
-    });
-    setRadioGroup(els.coachToastLevelRadios, merged.coach?.notifications?.toastLevel || 'high-only');
-    if (els.coachDndStart) els.coachDndStart.value = merged.coach?.notifications?.quietHoursStart || '22:00';
-    if (els.coachDndEnd) els.coachDndEnd.value = merged.coach?.notifications?.quietHoursEnd || '08:00';
-    const idleMin = merged.coach?.idleThresholdMinutes ?? 8;
-    if (els.coachIdleThreshold) els.coachIdleThreshold.value = String(idleMin);
-    if (els.coachIdleThresholdValue) els.coachIdleThresholdValue.textContent = `${idleMin} 分钟`;
-    setRadioGroup(els.coachSrPolicyRadios, merged.coach?.sr?.variantStrategy || 'reuse');
-    setRadioGroup(els.coachBriefCacheRadios, merged.coach?.dailyBrief?.cacheStrategy || 'per-day');
-    if (els.coachThrottleHour) els.coachThrottleHour.value = String(merged.coach?.throttle?.maxToastsPerHour ?? 3);
-    if (els.coachThrottleDay) els.coachThrottleDay.value = String(merged.coach?.throttle?.maxBannersPerHour ?? 12);
-
     // ===== 资料检索 =====
     if (els.retrievalGroundingDefault) els.retrievalGroundingDefault.checked = !!merged.retrieval?.defaultGrounding;
     setRadioGroup(els.retrievalStrictnessRadios, merged.retrieval?.strictness || 'balanced');
@@ -2081,14 +2009,6 @@
       .map((cb) => cb.getAttribute('data-explain-style'))
       .filter(Boolean);
 
-    const loops = current.coach?.loops || {};
-    const loopKeyMap = { dailyBrief: 'dailyBrief', idleNudge: 'idle', srPrompt: 'sr', metacog: 'metacog', planSync: 'drift' };
-    (els.coachLoopCheckboxes || []).forEach((cb) => {
-      const dataKey = cb.getAttribute('data-coach-loop');
-      const stateKey = loopKeyMap[dataKey] || dataKey;
-      loops[stateKey] = !!cb.checked;
-    });
-
     return {
       difficulty: {
         global: els.prefDifficulty?.value || current.difficulty?.global || 'basic',
@@ -2156,25 +2076,6 @@
         theme: getRadioGroup(els.uiThemeRadios) || current.ui?.theme || 'auto',
       },
       coach: {
-        active: !!els.coachEnabled?.checked,
-        loops,
-        notifications: {
-          toastLevel: getRadioGroup(els.coachToastLevelRadios) || current.coach?.notifications?.toastLevel || 'high-only',
-          quietHoursStart: els.coachDndStart?.value || current.coach?.notifications?.quietHoursStart || '22:00',
-          quietHoursEnd: els.coachDndEnd?.value || current.coach?.notifications?.quietHoursEnd || '08:00',
-        },
-        throttle: {
-          maxToastsPerHour: Number(els.coachThrottleHour?.value ?? current.coach?.throttle?.maxToastsPerHour ?? 3),
-          maxBannersPerHour: Number(els.coachThrottleDay?.value ?? current.coach?.throttle?.maxBannersPerHour ?? 12),
-        },
-        doNotDisturbUntil: state.doNotDisturbUntil ?? current.coach?.doNotDisturbUntil ?? null,
-        idleThresholdMinutes: Number(els.coachIdleThreshold?.value ?? current.coach?.idleThresholdMinutes ?? 8),
-        sr: {
-          variantStrategy: getRadioGroup(els.coachSrPolicyRadios) || current.coach?.sr?.variantStrategy || 'reuse',
-        },
-        dailyBrief: {
-          cacheStrategy: getRadioGroup(els.coachBriefCacheRadios) || current.coach?.dailyBrief?.cacheStrategy || 'per-day',
-        },
         lecture: {
           viewerMode: getRadioGroup(els.lectureReaderModeRadios) || current.coach?.lecture?.viewerMode || 'lecture-webview',
           applyMode: getRadioGroup(els.lectureApplyModeRadios) || current.coach?.lecture?.applyMode || 'preview-confirm',
@@ -2208,8 +2109,6 @@
     } else if (groupKey === 'aiStyle') {
       current.aiStyle = deepClone(DEFAULT_PREFS.aiStyle);
       current.language = deepClone(DEFAULT_PREFS.language);
-    } else if (groupKey === 'coach') {
-      current.coach = deepClone(DEFAULT_PREFS.coach);
     } else if (groupKey === 'retrieval') {
       current.retrieval = deepClone(DEFAULT_PREFS.retrieval);
     } else if (groupKey === 'lecture') {
@@ -2500,178 +2399,6 @@
     if (els.aiWsModel) els.aiWsModel.value = ov.modelOverride || ov.model || '';
   }
 
-  // ===== 今日 Coach 渲染 =====
-  function renderCoachToday() {
-    if (!els.coachTodaySection) return;
-    els.coachTodaySection.classList.remove('hidden');
-    const brief = state.dailyBrief;
-    if (!brief) {
-      if (els.coachBriefSubtitle) els.coachBriefSubtitle.textContent = '今天还没有简报。';
-      if (els.coachBriefBody) els.coachBriefBody.innerHTML = '<p class="muted">点击右上角 ↻ 生成今日建议。</p>';
-      return;
-    }
-    if (els.coachBriefSubtitle) {
-      const dateLabel = brief.date || new Date().toLocaleDateString();
-      els.coachBriefSubtitle.textContent = `更新于 ${escapeHtml(dateLabel)}`;
-    }
-    if (els.coachBriefBody) {
-      const recap = brief.yesterdayRecap || brief.recap || '';
-      const todayList = Array.isArray(brief.todaySuggestions) ? brief.todaySuggestions
-                       : Array.isArray(brief.suggestions) ? brief.suggestions : [];
-      const recapHtml = recap ? `<div class="coach-recap"><strong>昨日回顾</strong><div>${escapeHtml(recap)}</div></div>` : '';
-      const todayHtml = todayList.length
-        ? `<div class="coach-today-list"><strong>今日建议</strong><ul>${todayList.map((s) => `<li>${escapeHtml(typeof s === 'string' ? s : (s.title || s.body || ''))}</li>`).join('')}</ul></div>`
-        : '';
-      els.coachBriefBody.innerHTML = recapHtml + todayHtml || '<p class="muted">今日尚无建议。</p>';
-    }
-  }
-
-  function renderCoachSuggestions() {
-    if (!els.coachSuggestionsList) return;
-    const items = Array.isArray(state.coachSuggestions) ? state.coachSuggestions : [];
-    if (!items.length) {
-      els.coachSuggestionsList.innerHTML = '';
-      return;
-    }
-    els.coachSuggestionsList.innerHTML = items.map((s) => {
-      // Evidence trail: payload.evidence 是 { kind, ref, summary, createdAt }[]，可选
-      const evidence = (s.payload && Array.isArray(s.payload.evidence)) ? s.payload.evidence : [];
-      const evidenceId = `ev-${escapeHtml(s.id)}`;
-      const evidenceHtml = evidence.length ? `
-        <div class="suggestion-evidence" id="${evidenceId}" hidden>
-          <div class="evidence-title">为什么我看到这条建议？</div>
-          <ul>
-            ${evidence.slice(0, 5).map((e) => `
-              <li>
-                <strong>[${escapeHtml(e.kind || 'event')}]</strong>
-                ${escapeHtml(e.summary || e.ref || '')}
-                ${e.createdAt ? `<span class="muted">（${escapeHtml(e.createdAt.slice(0, 10))}）</span>` : ''}
-              </li>
-            `).join('')}
-          </ul>
-        </div>
-      ` : '';
-      const evidenceToggle = evidence.length
-        ? `<button class="suggestion-evidence-toggle" type="button" data-toggle-evidence="${evidenceId}" title="展开 / 折叠驱动事件">为什么？</button>`
-        : '';
-      return `
-        <div class="coach-chip urgency-${escapeHtml(s.urgency || 'low')}" data-suggestion-id="${escapeHtml(s.id)}">
-          <span class="coach-chip-title">${escapeHtml(s.title || s.body || '')}</span>
-          <span class="coach-chip-actions">
-            ${evidenceToggle}
-            <button class="coach-chip-act" type="button" data-suggestion-action="open" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
-            <button class="coach-chip-dismiss" type="button" data-suggestion-action="dismiss" data-suggestion-id="${escapeHtml(s.id)}" title="忽略">✕</button>
-          </span>
-          ${evidenceHtml}
-        </div>
-      `;
-    }).join('');
-
-    els.coachSuggestionsList.querySelectorAll('[data-suggestion-action]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const suggestionId = btn.getAttribute('data-suggestion-id');
-        const action = btn.getAttribute('data-suggestion-action');
-        if (action === 'dismiss') {
-          vscode.postMessage({ type: 'coachDismissSuggestion', suggestionId });
-        } else {
-          vscode.postMessage({ type: 'coachAction', suggestionId });
-        }
-      });
-    });
-    els.coachSuggestionsList.querySelectorAll('[data-toggle-evidence]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const targetId = btn.getAttribute('data-toggle-evidence');
-        if (!targetId) return;
-        const target = document.getElementById(targetId);
-        if (target) {
-          target.hidden = !target.hidden;
-        }
-      });
-    });
-  }
-
-  function updateDndButton() {
-    if (!els.btnCoachDnd) return;
-    const active = state.doNotDisturbUntil && new Date(state.doNotDisturbUntil).getTime() > Date.now();
-    els.btnCoachDnd.textContent = active ? '🔔' : '🔕';
-    els.btnCoachDnd.title = active
-      ? `勿扰至 ${new Date(state.doNotDisturbUntil).toLocaleTimeString()}`
-      : '勿扰 1 小时';
-  }
-
-  // ===== 学习计划渲染 =====
-  function renderLearningPlan() {
-    if (!els.learningPlanSection) return;
-    if (!state.selectedSubject) {
-      els.learningPlanSection.classList.add('hidden');
-      return;
-    }
-    els.learningPlanSection.classList.remove('hidden');
-    const plan = state.learningPlan;
-    if (!plan) {
-      if (els.planStatus) els.planStatus.textContent = '本课程暂无学习计划。点击右上角"编辑计划"创建。';
-      if (els.planProgressBar) els.planProgressBar.classList.add('hidden');
-      if (els.planMilestonesList) els.planMilestonesList.innerHTML = '';
-      return;
-    }
-    const milestones = Array.isArray(plan.milestones) ? plan.milestones : [];
-    const total = milestones.length;
-    const done = milestones.filter((m) => m.status === 'done').length;
-    const percent = total ? Math.round((done / total) * 100) : 0;
-    if (els.planProgressBar) els.planProgressBar.classList.remove('hidden');
-    if (els.planProgressFill) els.planProgressFill.style.width = `${percent}%`;
-    if (els.planStatus) {
-      const goal = plan.goal || {};
-      els.planStatus.textContent = `目标：${goal.targetEndDate || '?'} / 每日 ${goal.dailyMinutes || '?'} 分钟 / 进度 ${done}/${total}（${percent}%）`;
-    }
-    if (els.planMilestonesList) {
-      const today = new Date();
-      els.planMilestonesList.innerHTML = milestones.map((m) => {
-        const expectedDate = m.expectedDoneBy ? new Date(m.expectedDoneBy) : null;
-        const overdue = m.status !== 'done' && expectedDate && expectedDate < today;
-        const cls = overdue ? 'overdue' : m.status;
-        const statusLabel = overdue ? '已延期' : (m.status === 'done' ? '完成' : m.status === 'in-progress' ? '进行中' : m.status === 'skipped' ? '跳过' : '待开始');
-        return `
-          <div class="plan-milestone status-${escapeHtml(cls)}">
-            <span class="plan-milestone-title">${escapeHtml(m.topicTitle || m.topicId || '-')}</span>
-            <span class="plan-milestone-date muted">${escapeHtml(m.expectedDoneBy || '-')}</span>
-            <span class="plan-milestone-status">${escapeHtml(statusLabel)}</span>
-          </div>
-        `;
-      }).join('');
-    }
-  }
-
-  function openLearningPlanModal() {
-    if (!state.selectedSubject) {
-      addLog('请先选择课程后再编辑学习计划。', 'warn');
-      return;
-    }
-    if (els.learningPlanModal) {
-      els.learningPlanModal.classList.remove('hidden');
-      els.learningPlanModal.setAttribute('aria-hidden', 'false');
-    }
-    const plan = state.learningPlan;
-    if (els.planSubject) els.planSubject.value = subjectLabel(state.selectedSubject);
-    if (els.planTargetDate) {
-      const def = plan?.goal?.targetEndDate || (() => {
-        const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10);
-      })();
-      els.planTargetDate.value = def;
-    }
-    if (els.planDailyMinutes) els.planDailyMinutes.value = String(plan?.goal?.dailyMinutes || 60);
-    if (els.planExtraNotes) els.planExtraNotes.value = plan?.goal?.extraNotes || '';
-  }
-
-  function closeLearningPlanModal() {
-    if (els.learningPlanModal) {
-      els.learningPlanModal.classList.add('hidden');
-      els.learningPlanModal.setAttribute('aria-hidden', 'true');
-    }
-  }
-
   // ===== 数据管理 - 学科选择 =====
   function syncDataSubjectSelect() {
     if (!els.dataSubjectSelect) return;
@@ -2936,7 +2663,6 @@
     syncDataSubjectSelect();
     renderOutlineRebuildModal();
     renderWrongQuestions();
-    renderLearningPlan();
     renderInsights();
     refreshCourseProjectsSection();
     if (state.preferences) {
@@ -2944,9 +2670,6 @@
     }
     persist();
     requestWrongQuestions();
-    if (state.selectedSubject) {
-      vscode.postMessage({ type: 'getLearningPlan', subject: state.selectedSubject });
-    }
   }
 
   function activateTab(tabName) {
@@ -3650,9 +3373,6 @@
     if (event.key === 'Escape' && !els.answerSubmitModal?.classList.contains('hidden')) {
       closeAnswerSubmitModal();
     }
-    if (event.key === 'Escape' && els.learningPlanModal && !els.learningPlanModal.classList.contains('hidden')) {
-      closeLearningPlanModal();
-    }
   });
 
   els.btnOutlineRebuildModeFull?.addEventListener('click', () => {
@@ -3839,24 +3559,6 @@
   bindAutoSave(els.prefLangExercises);
   bindAutoSave(els.prefLangCode);
 
-  // Coach
-  bindAutoSave(els.coachEnabled);
-  els.coachLoopCheckboxes?.forEach((cb) => bindAutoSave(cb));
-  els.coachToastLevelRadios?.forEach((r) => bindAutoSave(r));
-  bindAutoSave(els.coachDndStart);
-  bindAutoSave(els.coachDndEnd);
-  if (els.coachIdleThreshold) {
-    els.coachIdleThreshold.addEventListener('input', () => {
-      const v = els.coachIdleThreshold.value;
-      if (els.coachIdleThresholdValue) els.coachIdleThresholdValue.textContent = `${v} 分钟`;
-      schedulePreferenceSave();
-    });
-  }
-  els.coachSrPolicyRadios?.forEach((r) => bindAutoSave(r));
-  els.coachBriefCacheRadios?.forEach((r) => bindAutoSave(r));
-  bindAutoSave(els.coachThrottleHour, 'input');
-  bindAutoSave(els.coachThrottleDay, 'input');
-
   // 资料检索
   bindAutoSave(els.retrievalGroundingDefault);
   els.retrievalStrictnessRadios?.forEach((r) => bindAutoSave(r));
@@ -4028,78 +3730,6 @@
 
   els.btnResetAllPrefs?.addEventListener('click', () => {
     vscode.postMessage({ type: 'resetAllPreferences', requireConfirm: true });
-  });
-
-  // ===== 今日 Coach 卡片交互 =====
-  els.btnCoachRefreshBrief?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'getDailyBrief', force: true });
-    addLog('正在刷新今日简报...', 'info');
-  });
-
-  els.btnCoachDnd?.addEventListener('click', () => {
-    const active = state.doNotDisturbUntil && new Date(state.doNotDisturbUntil).getTime() > Date.now();
-    if (active) {
-      vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 0 });
-      state.doNotDisturbUntil = null;
-    } else {
-      vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 60 });
-      state.doNotDisturbUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    }
-    updateDndButton();
-  });
-
-  els.btnDnd1h?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: 60 });
-    state.doNotDisturbUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    updateDndButton();
-  });
-
-  els.btnDndToday?.addEventListener('click', () => {
-    const end = new Date(); end.setHours(23, 59, 59, 999);
-    const minutes = Math.max(1, Math.round((end.getTime() - Date.now()) / 60000));
-    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: minutes });
-    state.doNotDisturbUntil = end.toISOString();
-    updateDndButton();
-  });
-
-  els.btnDndCustom?.addEventListener('click', () => {
-    const raw = window.prompt('设置勿扰时长（分钟）', '120');
-    if (!raw) return;
-    const minutes = Math.max(1, Math.round(Number(raw) || 0));
-    if (!minutes) return;
-    vscode.postMessage({ type: 'setDoNotDisturb', durationMinutes: minutes });
-    state.doNotDisturbUntil = new Date(Date.now() + minutes * 60 * 1000).toISOString();
-    updateDndButton();
-  });
-
-  // ===== 学习计划交互 =====
-  els.btnEditPlan?.addEventListener('click', openLearningPlanModal);
-  els.btnCancelPlan?.addEventListener('click', closeLearningPlanModal);
-  els.btnClosePlanModal?.addEventListener('click', closeLearningPlanModal);
-  els.learningPlanModal?.addEventListener('click', (event) => {
-    if (event.target === els.learningPlanModal) closeLearningPlanModal();
-  });
-
-  els.btnSavePlan?.addEventListener('click', () => {
-    if (!state.selectedSubject) {
-      addLog('请先选择课程。', 'warn');
-      return;
-    }
-    const targetEndDate = els.planTargetDate?.value || '';
-    const dailyMinutes = Number(els.planDailyMinutes?.value || 60);
-    const extraNotes = (els.planExtraNotes?.value || '').trim();
-    if (!targetEndDate) {
-      addLog('请填写截止日期。', 'warn');
-      return;
-    }
-    const plan = {
-      subject: state.selectedSubject,
-      goal: { targetEndDate, dailyMinutes, extraNotes: extraNotes || undefined },
-      driftThresholdDays: 2,
-    };
-    vscode.postMessage({ type: 'setLearningPlan', plan, autoDecompose: true });
-    addLog('正在让 AI 拆解学习计划...', 'info');
-    closeLearningPlanModal();
   });
 
   els.btnOpenDataDir?.addEventListener('click', () => {
@@ -4655,32 +4285,6 @@
         renderWorkspaceAIOverride();
         break;
       }
-      case 'dailyBrief': {
-        state.dailyBrief = msg.data || null;
-        renderCoachToday();
-        break;
-      }
-      case 'coachSuggestions': {
-        state.coachSuggestions = Array.isArray(msg.data) ? msg.data : [];
-        renderCoachSuggestions();
-        break;
-      }
-      case 'activityLog': {
-        // 暂时只 console.log，留扩展点
-        // eslint-disable-next-line no-console
-        console.log('[activityLog]', msg.data);
-        break;
-      }
-      case 'learningPlan': {
-        state.learningPlan = msg.data || null;
-        renderLearningPlan();
-        break;
-      }
-      case 'doNotDisturbState': {
-        state.doNotDisturbUntil = msg.until || null;
-        updateDndButton();
-        break;
-      }
       case 'dataOpResult': {
         const op = msg.operation || '操作';
         const ok = !!msg.ok;
@@ -4709,12 +4313,8 @@
   renderResolvedAIConfig(null, null);
   renderOutlineRebuildModal();
   renderWrongQuestions();
-  renderLearningPlan();
-  renderCoachToday();
-  renderCoachSuggestions();
   renderAIProfiles();
   renderWorkspaceAIOverride();
-  updateDndButton();
   updateTaskBlockedState();
 
   refreshCoursePanelData();
@@ -4726,11 +4326,6 @@
   vscode.postMessage({ type: 'getDataDir' });
   vscode.postMessage({ type: 'getResolvedAIConfig' });
   vscode.postMessage({ type: 'listAIProfiles' });
-  vscode.postMessage({ type: 'getDailyBrief' });
-  vscode.postMessage({ type: 'getCoachSuggestions' });
-  if (state.selectedSubject) {
-    vscode.postMessage({ type: 'getLearningPlan', subject: state.selectedSubject });
-  }
   // 创建课程的 tag chip 列表：启动时就 render，避免依赖 setCreateCourseMode 时机。
   // 即使 panel 现在是 hidden，DOM 也已就绪，innerHTML 写完后 chip 全部就位。
   renderNewCourseTagsChecklist();

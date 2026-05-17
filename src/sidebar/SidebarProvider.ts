@@ -44,7 +44,6 @@ import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../
 import { buildCourseSummaryMd, openMarkdownPreview, reprocessMarkdown, writeMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
 import { fileExists, ensureDir } from '../utils/fileSystem';
 import { getDataDirectory } from '../config';
-import { recordGradeForCoach } from '../coach/streakHook';
 
 interface ChatEditTarget {
   subject: Subject;
@@ -100,15 +99,6 @@ interface CoursePreviewCacheEntry {
   createdAt: number;
 }
 
-/** 由 extension.ts 注入的 Coach 框架共享实例。 */
-export interface SidebarCoachDeps {
-  coachEventBus: import('../coach/coachEventBus').CoachEventBus;
-  coachStateStore: import('../coach/coachState').CoachStateStore;
-  suggestionStore: import('../coach/suggestionStore').SuggestionStore;
-  sessionLogger: import('../coach/sessionLogger').SessionLogger;
-  learningPlanStore: import('../coach/learningPlanStore').LearningPlanStore;
-}
-
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private contentGen = new ContentGenerator();
@@ -141,13 +131,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * 当前 outline。apply 时持久化并清理；discard / 超时自动清理。
    */
   private readonly coursePreviews = new Map<string, CoursePreviewCacheEntry>();
-  private coachAgent?: import('../coach/coachAgent').CoachAgent;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly aiProfiles: AIProfileManager,
     private readonly onAIConfigChanged?: () => void,
-    private readonly coachDeps?: SidebarCoachDeps,
     /** Hybrid RAG 共享：必须从 extension.ts 注入已 setHybridDeps 的实例 */
     materialManager?: MaterialManager,
   ) {
@@ -178,12 +166,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  /** 由 extension.ts 注入 CoachAgent（避免循环依赖在 ctor 处理）。 */
-  attachCoachAgent(agent: import('../coach/coachAgent').CoachAgent): void {
-    this.coachAgent = agent;
-  }
-
-  /** 给 CoachAgent 用：把建议等响应推到 webview。 */
+  /** 给外部模块用：把响应推到 webview。 */
   postMessage(msg: SidebarResponse): void {
     this._view?.webview.postMessage(msg);
   }
@@ -200,18 +183,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     };
     webviewView.webview.html = this._getHtml(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
-    // Coach: 把 visibility 变化推给事件总线
-    webviewView.onDidChangeVisibility(() => {
-      this.coachDeps?.coachEventBus.emit({
-        kind: webviewView.visible ? 'webview-visible' as any : 'webview-hidden' as any,
-        at: new Date().toISOString(),
-      });
-    });
-    // 首次解析就视作可见
-    this.coachDeps?.coachEventBus.emit({
-      kind: 'webview-visible' as any,
-      at: new Date().toISOString(),
-    });
     void this._pushAIConfigState();
     // 推到下一个 macrotask 再跑资料 reconcile：先让 webview 的首次 getCourses / getMaterials
     // 进入 _handleMessage（否则启动期 reconcile 的同步开销会把这些消息卡在队列里）。
@@ -1223,46 +1194,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * 批改完成后让 Coach（streak / 跨课时 weakness / loop fanout）联动一次。
-   * Fire-and-forget：失败不影响批改主流程。
-   */
-  private _coachAfterGrade(args: {
-    subject: Subject;
-    topicId: string;
-    topicTitle: string;
-    lessonId: string;
-    lessonTitle: string;
-    result: GradeResult;
-  }): void {
-    if (!this.coachDeps || !this.coachAgent) {
-      return;
-    }
-    const bus = this.coachDeps.coachEventBus;
-    const agent = this.coachAgent;
-    const adaptiveEngine = this.adaptiveEngine;
-    void (async () => {
-      try {
-        const outline = await this.courseManager.getCourseOutline(args.subject).catch(() => null);
-        await recordGradeForCoach({
-          subject: args.subject,
-          topicId: args.topicId,
-          topicTitle: args.topicTitle,
-          lessonId: args.lessonId,
-          lessonTitle: args.lessonTitle,
-          score: args.result.score,
-          weaknessTags: args.result.weaknessTags ?? [],
-          adaptiveEngine,
-          bus,
-          agent,
-          outline,
-        });
-      } catch (err) {
-        console.error('[SidebarProvider] _coachAfterGrade error:', err);
-      }
-    })();
-  }
-
-  /**
    * Fire-and-forget 风格：如果触发器命中，启动一个独立 "自动诊断" task。
    * 不阻塞调用方，让批改任务能立即完成。
    */
@@ -1716,14 +1647,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             } else {
               await openMarkdownPreview(lessonPath, 'native-preview');
             }
-            // 给事件总线一个 lesson-opened 信号
-            this.coachDeps?.coachEventBus.emit({
-              kind: 'lesson-opened',
-              at: new Date().toISOString(),
-              subject: msg.subject,
-              topicId: msg.topicId,
-              lessonId: msg.lessonId,
-            });
             break;
           }
           if (lessonExists) {
@@ -1791,13 +1714,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             } else {
               await openMarkdownPreview(lPath, 'native-preview');
             }
-            this.coachDeps?.coachEventBus.emit({
-              kind: 'lesson-opened',
-              at: new Date().toISOString(),
-              subject: msg.subject,
-              topicId: msg.topicId,
-              lessonId: msg.lessonId,
-            });
           } else {
             vscode.window.showInformationMessage('该小节尚未生成讲义，请点击"讲义"按钮生成。');
           }
@@ -1915,7 +1831,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'log', message: `批改完成，得分 ${result.score}/100`, level: 'info' });
             await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
             await this._refreshCourses();
-            this._coachAfterGrade({ subject, topicId, topicTitle, lessonId, lessonTitle, result });
             await this._maybeRunAutoDiagnosis(subject);
           });
           break;
@@ -1965,9 +1880,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 scores.push(lastResult.score);
                 this._post({ type: 'gradeResult', result: lastResult });
                 succeeded += 1;
-                this._coachAfterGrade({
-                  subject, topicId, topicTitle, lessonId, lessonTitle, result: lastResult,
-                });
               } catch (error: any) {
                 this._post({
                   type: 'log',
@@ -2850,145 +2762,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             topicTitle: msg.topicTitle,
             lessonId: msg.lessonId,
             lessonTitle: msg.lessonTitle,
-          });
-          break;
-        }
-
-        // ===== Coach 消息 =====
-
-        case 'getDailyBrief': {
-          // Phase 3 Loop 1 实现具体生成；这里先返回占位让 UI 不空
-          this._post({
-            type: 'dailyBrief',
-            data: {
-              dateKey: new Date().toISOString().slice(0, 10),
-              subject: msg.subject as Subject | undefined,
-              generatedAt: new Date().toISOString(),
-              yesterdayRecap: '今日 Coach 模块已就绪。Loop 1 待 Phase 3 实施完整 brief 生成。',
-              todaySuggestions: ['完成今日错题复习', '尝试 Inline 编辑功能（Alt+I）', '在设置页配置 Coach 偏好'],
-              srDueCount: 0,
-            },
-          });
-          break;
-        }
-
-        case 'coachAction': {
-          const id = String(msg.suggestionId ?? '');
-          if (!id || !this.coachDeps) break;
-          await this.coachDeps.suggestionStore.markActed(id);
-          break;
-        }
-
-        case 'coachDismissSuggestion': {
-          const id = String(msg.suggestionId ?? '');
-          if (!id || !this.coachDeps) break;
-          await this.coachDeps.suggestionStore.markDismissed(id);
-          this._post({
-            type: 'coachSuggestions',
-            data: (await this.coachDeps.suggestionStore.getActive()) as unknown as import('../types').CoachSuggestion[],
-          });
-          break;
-        }
-
-        case 'setDoNotDisturb': {
-          if (!this.coachDeps) break;
-          const minutes = Number(msg.durationMinutes);
-          const until = Number.isFinite(minutes) && minutes > 0
-            ? new Date(Date.now() + minutes * 60 * 1000).toISOString()
-            : null;
-          await this.coachDeps.coachStateStore.setDoNotDisturb(until);
-          this._post({ type: 'doNotDisturbState', until });
-          this._post({ type: 'log', message: until ? `已勿扰至 ${until}` : '已取消勿扰', level: 'info' });
-          break;
-        }
-
-        case 'getLearningPlan': {
-          if (!this.coachDeps) break;
-          const subject = msg.subject as Subject;
-          const plan = await this.coachDeps.learningPlanStore.get(subject);
-          this._post({ type: 'learningPlan', subject, data: plan as any });
-          break;
-        }
-
-        case 'setLearningPlan': {
-          if (!this.coachDeps) break;
-          const planInput = msg.plan as any;
-          const subject = planInput.subject as Subject;
-          // 简化拆解：按章节数平均分配（Phase 3 Loop 5 改进 AI 拆解）
-          const outline = await this.courseManager.getCourseOutline(subject);
-          const milestones = (outline?.topics ?? []).map((topic, index) => {
-            const targetEnd = new Date(planInput.goal.targetEndDate);
-            const startDate = new Date();
-            const totalMs = targetEnd.getTime() - startDate.getTime();
-            const total = (outline?.topics?.length ?? 1);
-            const milestoneTime = startDate.getTime() + (totalMs * (index + 1)) / total;
-            return {
-              topicId: topic.id,
-              topicTitle: topic.title,
-              expectedDoneBy: new Date(milestoneTime).toISOString().slice(0, 10),
-              status: 'pending' as const,
-            };
-          });
-          const plan = {
-            schemaVersion: 1,
-            subject,
-            goal: {
-              targetEndDate: planInput.goal.targetEndDate,
-              dailyMinutes: planInput.goal.dailyMinutes,
-              extraNotes: planInput.goal.extraNotes,
-            },
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            milestones,
-            driftThresholdDays: planInput.driftThresholdDays ?? 2,
-            lastDriftCheckAt: null,
-          };
-          await this.coachDeps.learningPlanStore.save(plan as any);
-          this._post({ type: 'learningPlan', subject, data: plan as any });
-          this._post({ type: 'log', message: `已保存学习计划，共 ${milestones.length} 个里程碑`, level: 'info' });
-          break;
-        }
-
-        case 'metacogAnswer': {
-          // 简化版：仅记录到 courseProfileStore 作为 reflection 事件
-          const subject = msg.subject as Subject;
-          if (!subject) break;
-          await this.courseProfileStore.recordEvent(subject, {
-            id: `metacog-${Date.now()}`,
-            type: 'answer-revision',
-            subject,
-            topicId: msg.topicId ?? null,
-            lessonId: msg.lessonId ?? null,
-            createdAt: new Date().toISOString(),
-            summary: `Metacog Q: ${msg.question} | A: ${String(msg.answer ?? '').slice(0, 200)}`,
-            weaknessTags: [],
-            strengthTags: [],
-            rawRefs: [],
-          });
-          this._post({ type: 'log', message: '元认知反思已记录', level: 'info' });
-          break;
-        }
-
-        case 'getCoachSuggestions': {
-          if (!this.coachDeps) {
-            this._post({ type: 'coachSuggestions', data: [] });
-            break;
-          }
-          this._post({
-            type: 'coachSuggestions',
-            data: (await this.coachDeps.suggestionStore.getActive()) as unknown as import('../types').CoachSuggestion[],
-          });
-          break;
-        }
-
-        case 'getActivityLog': {
-          if (!this.coachDeps) {
-            this._post({ type: 'activityLog', data: [] });
-            break;
-          }
-          this._post({
-            type: 'activityLog',
-            data: (await this.coachDeps.sessionLogger.recentActivity(50)) as any,
           });
           break;
         }
