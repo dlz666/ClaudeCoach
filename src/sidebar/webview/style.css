@@ -2319,51 +2319,137 @@ pre.hljs code,
   background: var(--accent-soft);
 }
 
-/* ===== 创建新课程：tag + 设置展开块 ===== */
+/* ===== 创建新课程：扁平 chip 风格 ===== */
 
-.new-course-options {
+.new-course-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+/* 课程名称：醒目主输入 */
+.new-course-name {
+  font-size: 15px;
+  font-weight: 500;
+  padding: 10px 12px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--surface-1) 50%, transparent);
+  width: 100%;
+}
+.new-course-name:focus {
+  outline: none;
+  border-color: var(--accent, var(--vscode-button-background));
+  background: color-mix(in srgb, var(--vscode-input-background) 85%, var(--vscode-button-background) 15%);
 }
 
-.new-course-options > summary {
-  cursor: pointer;
-  font-size: 12px;
+/* Tag 标题行：一行内 label + hint */
+.new-course-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.new-course-row-title {
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+.new-course-row-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.7;
+}
+
+/* Tag chip 流式 */
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-input-background) 70%, transparent);
+  color: var(--vscode-foreground);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+  white-space: nowrap;
+}
+.tag-chip:hover {
+  border-color: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 8%, transparent);
+}
+.tag-chip.checked {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+  font-weight: 500;
+}
+.tag-chip.checked:hover {
+  background: var(--accent-strong, var(--vscode-button-hoverBackground, var(--vscode-button-background)));
+}
+.tag-chip-desc {
+  display: none;
+  /* desc 默认隐藏；hover 时通过 title 属性显示 */
+}
+
+/* "更多设置"折叠区 */
+.new-course-extra {
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.new-course-extra > summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--vscode-descriptionForeground);
   user-select: none;
-  padding: 4px 0;
+  padding: 2px 0;
+  list-style: none;
 }
-
-.new-course-options[open] > summary {
-  margin-bottom: 8px;
-  border-bottom: 1px dashed var(--border);
+.new-course-extra > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s ease;
 }
-
-.new-course-options > summary:hover {
+.new-course-extra[open] > summary::before {
+  transform: rotate(90deg);
+}
+.new-course-extra > summary:hover {
   color: var(--vscode-foreground);
 }
-
-.new-course-options .form-row {
+.new-course-extra-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.new-course-extra-grid .form-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin: 8px 0;
 }
-
-.new-course-options .form-row .form-label {
+.new-course-extra-grid .form-label {
   font-size: 11px;
-  font-weight: 600;
   color: var(--vscode-descriptionForeground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
-
-.new-course-options input,
-.new-course-options textarea,
-.new-course-options select {
+.new-course-extra-grid select,
+.new-course-extra-grid textarea {
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--border);
@@ -2371,6 +2457,13 @@ pre.hljs code,
   padding: 6px 8px;
   font-family: inherit;
   font-size: 12px;
+}
+
+.new-course-submit {
+  margin-top: 2px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 /* ===== Projects tab ===== */

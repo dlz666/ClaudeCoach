@@ -3022,35 +3022,31 @@
   });
 
   /**
-   * 渲染创建新课程时的 tag checklist。复用 COURSE_TAGS 数据 + 旧 modal 的样式
-   * （.course-tag-row / .course-tags-checklist）。每次进创建模式都重渲一遍，
-   * 保留用户上次的勾选。
+   * 渲染创建新课程时的 tag chip 列表。点击 chip = 切换选中。
+   * 重 render 时保留之前的选择状态。
+   * 启动时会调用一次（不再等 setCreateCourseMode），所以打开扩展就能看到。
    */
   function renderNewCourseTagsChecklist() {
     const el = document.getElementById('new-course-tags-checklist');
     if (!el) return;
     const prevChecked = new Set(
-      Array.from(el.querySelectorAll('input[type="checkbox"]:checked'))
-        .map((cb) => cb.getAttribute('data-course-tag'))
+      Array.from(el.querySelectorAll('.tag-chip.checked'))
+        .map((chip) => chip.getAttribute('data-course-tag'))
         .filter(Boolean),
     );
     el.innerHTML = COURSE_TAGS.map((t) => {
       const checked = prevChecked.has(t.value);
       return `
-        <label class="course-tag-row${checked ? ' checked' : ''}">
-          <input type="checkbox" data-course-tag="${escapeHtml(t.value)}"${checked ? ' checked' : ''}>
-          <div>
-            <div class="ct-label">${escapeHtml(t.label)}</div>
-            <div class="ct-desc">${escapeHtml(t.desc)}</div>
-          </div>
-        </label>
+        <span class="tag-chip${checked ? ' checked' : ''}" role="button" tabindex="0"
+              data-course-tag="${escapeHtml(t.value)}"
+              title="${escapeHtml(t.desc)}">${escapeHtml(t.label)}</span>
       `;
     }).join('');
-    el.querySelectorAll('.course-tag-row').forEach((row) => {
-      const cb = row.querySelector('input[type="checkbox"]');
-      if (!cb) return;
-      cb.addEventListener('change', () => {
-        row.classList.toggle('checked', cb.checked);
+    el.querySelectorAll('.tag-chip').forEach((chip) => {
+      const toggle = () => chip.classList.toggle('checked');
+      chip.addEventListener('click', toggle);
+      chip.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(); }
       });
     });
   }
@@ -3061,10 +3057,10 @@
       addLog('请先填写课程名称。', 'warn');
       return;
     }
-    // 收集 tags
+    // 收集 tags（从 chip 的 .checked class 读）
     const tagsEl = document.getElementById('new-course-tags-checklist');
-    const tags = Array.from(tagsEl?.querySelectorAll('input[type="checkbox"]:checked') || [])
-      .map((cb) => cb.getAttribute('data-course-tag'))
+    const tags = Array.from(tagsEl?.querySelectorAll('.tag-chip.checked') || [])
+      .map((chip) => chip.getAttribute('data-course-tag'))
       .filter(Boolean);
     // 收集课程设置（可选）
     const difficulty = (document.getElementById('new-course-difficulty')?.value || '').trim() || undefined;
@@ -4299,4 +4295,7 @@
   if (state.selectedSubject) {
     vscode.postMessage({ type: 'getLearningPlan', subject: state.selectedSubject });
   }
+  // 创建课程的 tag chip 列表：启动时就 render，避免依赖 setCreateCourseMode 时机。
+  // 即使 panel 现在是 hidden，DOM 也已就绪，innerHTML 写完后 chip 全部就位。
+  renderNewCourseTagsChecklist();
 })();
