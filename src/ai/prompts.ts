@@ -917,6 +917,10 @@ ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节�
  * 通用样式约束：保证 mermaid / DOT 在 webview 的深浅主题下文字都清晰可见。
  */
 const VISUAL_STYLE_RULES = [
+  '⚠ **Mermaid 节点标签里凡是含 `[` `]` `(` `)` `{` `}` `<` `>` `|` `"` 等特殊字符 → 必须用引号包起来**：',
+  '  例：`A[dist[s]=0]` ❌ 会报语法错；正确写法 `A["dist[s]=0"]` ✅',
+  '  例：`E{w(u,v)<x?}` ❌；正确 `E{"w(u,v)<x?"}` ✅',
+  '  例：`B[更新 dist[v]]` ❌；正确 `B["更新 dist[v]"]` ✅',
   '⚠ **Mermaid 内部不要写 `style A fill:#xxx,color:#yyy` 或 `classDef` 设颜色** —— webview 已经统一注入 themeVariables 适配主题。手动设色容易让文字变浅灰色不可读。',
   '⚠ **DOT 内部不要写 `color="#xxx"` / `fontcolor="#xxx"` / `bgcolor="#xxx"`** 给节点/边整体上色 —— webview CSS 会把黑色描边/文字统一替换成主题前景色。只在你"要突出某条边/节点"时用 `color=red` / `color=blue` 这种命名色（语义清晰，CSS 不会覆盖）。',
   '⚠ 别在代码块外再加 markdown 标题或 `**强调**` 包住整段，会破坏 fence 识别。',

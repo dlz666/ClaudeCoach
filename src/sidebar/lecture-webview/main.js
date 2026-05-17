@@ -181,6 +181,95 @@
   }
 
   /**
+   * 在送给 mermaid 之前自动给节点标签加引号 —— AI 经常生成 `A[dist[s]=0]` 这种
+   * 嵌套括号写法，mermaid 解析器没办法处理。state machine 逐字符扫：遇到
+   * `<id>[`/`(`/`{` 节点定义就用 depth 跟踪匹配的闭合括号，如果中间出现需要
+   * 转义的字符（[ ] ( ) { } < > " | / \）就给整个 label 包 "..."。
+   *
+   * 安全：已经包了 "..." 的不再重复；mermaid 配置行（%%{init...}%%、classDef）
+   * 跳过。
+   */
+  function preprocessMermaidSrc(src) {
+    if (!src || typeof src !== 'string') return src;
+    return src.split('\n').map(rewriteMermaidLine).join('\n');
+  }
+
+  const _MERMAID_NEEDS_QUOTE = /[\[\](){}<>"|/\\]/;
+
+  function rewriteMermaidLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    // mermaid directives / styles 都不动
+    if (/^(%%|classDef\b|class\b|style\b|linkStyle\b|click\b)/.test(trimmed)) return line;
+
+    let out = '';
+    let i = 0;
+    const n = line.length;
+    while (i < n) {
+      const c = line[i];
+      if (/[A-Za-z_]/.test(c)) {
+        // 读 identifier
+        let j = i;
+        while (j < n && /\w/.test(line[j])) j++;
+        const opener = line[j];
+        if (opener === '[' || opener === '(' || opener === '{') {
+          // 计连续开括号数（[[ / (( 等）
+          let openerLen = 0;
+          while (line[j + openerLen] === opener) openerLen++;
+          const close = opener === '[' ? ']' : opener === '(' ? ')' : '}';
+          const contentStart = j + openerLen;
+          // depth 跟踪，找到对应等级的闭括号
+          let depth = openerLen;
+          let k = contentStart;
+          let inStr = false;
+          while (k < n) {
+            const ch = line[k];
+            if (inStr) {
+              if (ch === '"') inStr = false;
+              k++;
+              continue;
+            }
+            if (ch === '"') { inStr = true; k++; continue; }
+            if (ch === opener) depth++;
+            else if (ch === close) {
+              depth--;
+              if (depth === 0) break;
+            }
+            k++;
+          }
+          if (k >= n) {
+            // 没找到匹配 close，整段原样输出
+            out += line.slice(i, contentStart);
+            i = contentStart;
+            continue;
+          }
+          // closer 是从 (k - openerLen + 1) 到 k 的连续 close 字符
+          const closerStart = k - openerLen + 1;
+          const content = line.slice(contentStart, closerStart);
+          const closer = line.slice(closerStart, k + 1);
+          const c_trimmed = content.trim();
+          const alreadyQuoted = c_trimmed.startsWith('"') && c_trimmed.endsWith('"');
+          if (!alreadyQuoted && _MERMAID_NEEDS_QUOTE.test(content)) {
+            const escaped = content.replace(/"/g, '#quot;');
+            out += line.slice(i, contentStart) + '"' + escaped + '"' + closer;
+          } else {
+            out += line.slice(i, k + 1);
+          }
+          i = k + 1;
+          continue;
+        }
+        // 不是节点定义，identifier 原样输出
+        out += line.slice(i, j);
+        i = j;
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  /**
    * 渲染所有 .language-mermaid 代码块为 SVG。
    * 容错：单个图错了不影响其他；失败时显示原文 + "复制到 mermaid.live" 链接。
    */
@@ -193,8 +282,10 @@
     for (const codeEl of blocks) {
       const pre = codeEl.parentElement;
       if (!pre) continue;
-      // 用 textContent 拿到原始 mermaid 源（已 unescape HTML 实体）
-      const source = codeEl.textContent || '';
+      // 用 textContent 拿到原始 mermaid 源（已 unescape HTML 实体），
+      // 然后自动给嵌套括号的 label 包引号
+      const rawSource = codeEl.textContent || '';
+      const source = preprocessMermaidSrc(rawSource);
       const id = `mermaid-${Date.now().toString(36)}-${counter++}`;
       try {
         const { svg } = await window.mermaid.render(id, source);
@@ -204,15 +295,21 @@
         pre.replaceWith(wrap);
       } catch (err) {
         console.warn('mermaid render failed for block', id, err);
-        // 降级：显示源码 + 给 mermaid.live 链接
+        // 降级：显示源码 + 给 mermaid.live 链接（用 base64 编码 state JSON）
         const fallback = document.createElement('div');
         fallback.className = 'mermaid-fallback';
-        const escaped = (source || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const liveUrl = 'https://mermaid.live/edit#pako:' + ''; // 简单跳转，用户可复制
+        const escaped = (rawSource || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        let liveUrl = 'https://mermaid.live/';
+        try {
+          const state = { code: rawSource, mermaid: { theme: 'neutral' }, autoSync: true, updateDiagram: true };
+          const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+          liveUrl = 'https://mermaid.live/edit#base64:' + b64;
+        } catch { /* keep default URL */ }
+        const errMsg = (err && err.message ? String(err.message) : '语法错').slice(0, 200);
         fallback.innerHTML = `
-          <div class="mermaid-fallback-banner">⚠ Mermaid 图渲染失败（语法错？）</div>
+          <div class="mermaid-fallback-banner">⚠ Mermaid 图渲染失败：${errMsg.replace(/[<&]/g, (c) => c === '<' ? '&lt;' : '&amp;')}</div>
           <pre><code class="language-mermaid">${escaped}</code></pre>
-          <a href="${liveUrl}" target="_blank" rel="noopener">在 mermaid.live 试试</a>
+          <a href="${liveUrl}" target="_blank" rel="noopener">在 mermaid.live 调试</a>
         `;
         pre.replaceWith(fallback);
       }
