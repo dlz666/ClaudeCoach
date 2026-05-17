@@ -2913,6 +2913,98 @@ pre.hljs code,
 .project-status-completed    { color: var(--vscode-charts-green, #4caf50); }
 .project-status-archived     { color: var(--vscode-descriptionForeground); opacity: 0.6; }
 
+/* ===== 🛠 项目面板：subsection 分组（推荐 + 已创建） ===== */
+
+.proj-subsection {
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+
+.proj-subsection-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.proj-subsection-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.proj-subsection-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.7;
+}
+
+/* 推荐项目卡片 */
+.proposals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.proposal-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-1, var(--vscode-sideBar-background)) 60%, transparent);
+}
+
+.proposal-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.proposal-card-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.proposal-card-diff {
+  font-size: 9px;
+  letter-spacing: -2px;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.proposal-card-desc {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin: 4px 0 6px;
+  line-height: 1.45;
+}
+
+.proposal-card-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.proposal-card-stack-pill {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--vscode-button-background)) 28%, transparent);
+}
+
+.proposal-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
 
 /* =================================================================
    v2 共享组件 (2026-05-17)

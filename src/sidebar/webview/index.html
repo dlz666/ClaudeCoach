@@ -202,16 +202,26 @@
       </div>
     </section>
 
-    <!-- 课程项目（TDD 式学习项目，AI 写测试 + 骨架，你写实现）-->
+    <!-- 🛠 项目：合并"推荐项目"（outline.projects）+"已创建项目"（projectStore）为单一面板 -->
     <section class="panel hidden" id="course-projects-section">
       <div class="panel-header">
         <div>
-          <h3>🛠 课程项目</h3>
+          <h3>🛠 项目</h3>
           <p class="section-subtitle">AI 写测试 + 骨架，你写核心实现，自己跑测试</p>
         </div>
         <button class="btn ghost small" id="btn-toggle-project-form" type="button">＋ 新项目</button>
       </div>
 
+      <!-- Subsection A：推荐项目（来自大纲 outline.projects[]，未落地的提案） -->
+      <div class="proj-subsection" id="proj-subsection-proposals" hidden>
+        <div class="proj-subsection-head">
+          <span class="proj-subsection-title">📋 推荐</span>
+          <span class="proj-subsection-hint">AI 生成大纲时附带的提案，点"落地"转成真项目</span>
+        </div>
+        <div id="proposals-list" class="proposals-list"></div>
+      </div>
+
+      <!-- 创建表单（默认折叠，点 ＋新项目展开） -->
       <div class="project-create-form hidden" id="course-project-form">
         <label class="form-row">
           <span class="form-label">项目想法</span>
@@ -227,8 +237,14 @@
         </div>
       </div>
 
-      <div id="projects-list" class="projects-list">
-        <p class="muted">还没有项目，点上方"＋ 新项目"创建一个。</p>
+      <!-- Subsection B：已创建的项目（来自 projectStore） -->
+      <div class="proj-subsection" id="proj-subsection-existing">
+        <div class="proj-subsection-head">
+          <span class="proj-subsection-title">✓ 已创建</span>
+        </div>
+        <div id="projects-list" class="projects-list">
+          <p class="muted">还没有项目，点上方"＋ 新项目"或从"推荐"落地一个。</p>
+        </div>
       </div>
     </section>
 

@@ -939,38 +939,10 @@
       </div>
     `).join('');
 
-    // outline.projects 推荐项目（仅对动手类课程）
-    const proposals = Array.isArray(course.projects) ? course.projects : [];
-    const proposalsHtml = proposals.length > 0 ? `
-      <div class="tree-proposals">
-        <div class="tree-proposals-title">🛠 推荐项目</div>
-        ${proposals.map((p) => `
-          <div class="tree-proposal" data-proposal-id="${escapeHtml(p.id)}">
-            <div class="tree-proposal-head">
-              <span class="tree-proposal-title">${escapeHtml(p.title || '')}</span>
-              <span class="tree-proposal-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
-            </div>
-            <p class="tree-proposal-desc">${escapeHtml(p.description || '')}</p>
-            ${p.realizedAs
-              ? `<button class="btn small ghost" disabled>已落地</button>`
-              : `<button class="btn small primary" data-act="realize-proposal" data-subject="${escapeHtml(course.subject)}" data-proposal-id="${escapeHtml(p.id)}">落地为项目</button>`}
-          </div>
-        `).join('')}
-      </div>
-    ` : '';
-
-    els.courseTree.innerHTML = topicsHtml + proposalsHtml;
-
-    // 推荐项目 "落地为项目" 按钮
-    els.courseTree.querySelectorAll('[data-act="realize-proposal"]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const subject = btn.getAttribute('data-subject');
-        const proposalId = btn.getAttribute('data-proposal-id');
-        if (!subject || !proposalId) return;
-        vscode.postMessage({ type: 'realizeProjectFromProposal', subject, proposalId });
-      });
-    });
+    // 注意：outline.projects 的"推荐项目"**不再**渲染在 course-tree 里。
+    // 跟"已创建的项目"合并到独立面板 #course-projects-section 的两个 subsection
+    // 见 renderCourseProjectProposals + renderProjectsList。
+    els.courseTree.innerHTML = topicsHtml;
 
     els.courseTree.querySelectorAll('.tree-topic').forEach((topicEl) => {
       topicEl.addEventListener('click', () => {
@@ -3089,7 +3061,7 @@
    */
   const PROJECT_ELIGIBLE_TAGS = new Set(['cs-skill', 'cs-theory', 'engineering']);
 
-  /** 当 selectedSubject / 课程 tags 变化时，刷新课程项目区显隐。 */
+  /** 当 selectedSubject / 课程 tags 变化时，刷新课程项目区显隐 + 两个 subsection。 */
   function refreshCourseProjectsSection() {
     const sec = document.getElementById('course-projects-section');
     if (!sec) return;
@@ -3102,8 +3074,56 @@
     const eligible = tags.some((t) => PROJECT_ELIGIBLE_TAGS.has(t));
     sec.classList.toggle('hidden', !eligible);
     if (eligible) {
-      vscode.postMessage({ type: 'listProjects' });
+      renderCourseProjectProposals();              // 📋 推荐 subsection（同步，从 state.courses 里读）
+      vscode.postMessage({ type: 'listProjects' }); // ✓ 已创建 subsection（异步，回 'projectsList' 后 render）
     }
+  }
+
+  /**
+   * 渲染"📋 推荐"subsection。数据源：当前 course.projects（outline 里 AI 附带的提案）。
+   * 数据天然在 state.courses 里，不需要后端请求。
+   */
+  function renderCourseProjectProposals() {
+    const wrap = document.getElementById('proj-subsection-proposals');
+    const list = document.getElementById('proposals-list');
+    if (!wrap || !list) return;
+    if (!state.selectedSubject) {
+      wrap.hidden = true;
+      return;
+    }
+    const course = (state.courses || []).find((c) => c.subject === state.selectedSubject);
+    const proposals = Array.isArray(course?.projects) ? course.projects : [];
+    if (proposals.length === 0) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    list.innerHTML = proposals.map((p) => `
+      <div class="proposal-card" data-proposal-id="${escapeProjHtml(p.id)}">
+        <div class="proposal-card-head">
+          <span class="proposal-card-title">${escapeProjHtml(p.title || '')}</span>
+          <span class="proposal-card-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
+        </div>
+        <p class="proposal-card-desc">${escapeProjHtml(p.description || '')}</p>
+        ${(p.suggestedTechStack || []).length
+          ? `<div class="proposal-card-stack">${(p.suggestedTechStack || []).map((s) => `<span class="proposal-card-stack-pill">${escapeProjHtml(s)}</span>`).join('')}</div>`
+          : ''}
+        <div class="proposal-card-actions">
+          ${p.realizedAs
+            ? `<button class="btn small ghost" disabled>✓ 已落地</button>`
+            : `<button class="btn small primary" data-act="realize-proposal" data-subject="${escapeProjHtml(course.subject)}" data-proposal-id="${escapeProjHtml(p.id)}">落地为项目</button>`}
+        </div>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-act="realize-proposal"]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const subject = btn.getAttribute('data-subject');
+        const proposalId = btn.getAttribute('data-proposal-id');
+        if (!subject || !proposalId) return;
+        vscode.postMessage({ type: 'realizeProjectFromProposal', subject, proposalId });
+      });
+    });
   }
 
   // ＋ 新项目按钮：折叠/展开创建表单
