@@ -182,6 +182,7 @@
   },
   "dependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
+    "@hpcc-js/wasm": "^2.33.5",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.44",
     "markdown-it": "^14.1.1",

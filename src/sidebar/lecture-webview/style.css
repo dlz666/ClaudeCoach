@@ -636,6 +636,68 @@ html, body {
   color: var(--vscode-textLink-foreground);
 }
 
+/* ===== GraphViz / DOT 视觉化 ===== */
+.graphviz-rendered {
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--vscode-editor-background, transparent);
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.08));
+  overflow-x: auto;
+  text-align: center;
+}
+.graphviz-rendered svg {
+  max-width: 100%;
+  height: auto;
+  /* GraphViz 默认输出黑底白字 / 白底黑字。强制 currentColor 让 stroke / text 跟随主题 */
+  color: var(--vscode-foreground);
+}
+/* 把 SVG 里所有黑色描边和文字改成跟随主题色（深色主题里黑字看不见）*/
+.graphviz-rendered svg text {
+  fill: var(--vscode-foreground);
+}
+.graphviz-rendered svg .node ellipse,
+.graphviz-rendered svg .node polygon,
+.graphviz-rendered svg .node path,
+.graphviz-rendered svg .node circle,
+.graphviz-rendered svg .edge path,
+.graphviz-rendered svg .edge polygon {
+  /* 仅当原 stroke 是黑色（GraphViz 默认）时改成主题前景色；
+     带颜色的节点（用户指定的 color=red 等）保留原样 */
+  stroke: var(--vscode-foreground);
+}
+.graphviz-rendered svg .node [stroke="black"],
+.graphviz-rendered svg .edge [stroke="black"] {
+  stroke: var(--vscode-foreground);
+}
+.graphviz-rendered svg .node [fill="black"] {
+  fill: var(--vscode-foreground);
+}
+/* 但 cluster 子图背景不应被强制覆盖 */
+.graphviz-rendered svg .cluster polygon {
+  stroke: color-mix(in srgb, var(--vscode-foreground) 50%, transparent);
+}
+
+.graphviz-fallback {
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #d4a017) 30%, transparent);
+}
+.graphviz-fallback-banner {
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: var(--vscode-charts-yellow, #d4a017);
+}
+.graphviz-fallback pre {
+  background: var(--vscode-editor-background, #1e1e1e);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+
 /* ===== Q&A 折叠块（wrapAsCallout 写回讲义的格式）===== */
 .markdown-body details.cc-qa {
   margin: 1.2em 0;

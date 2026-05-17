@@ -914,37 +914,73 @@ ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节�
 }
 
 /**
- * 按学科建议合适的视觉化方式：
- * - 数学/物理 → ASCII 投影 + 公式块为主，mermaid 用于概念依赖图
- * - 算法/CS → mermaid flowchart / sequenceDiagram 优先
- * - 离散/逻辑 → mermaid graph (LR/TB)
- * - 其他 → 看情况
+ * 可视化路由原则（webview 已集成的渲染器）：
+ *   - ```mermaid    流程 / 时序 / 状态机 / mindmap / quadrant / sankey / ER
+ *   - ```dot        二叉树 / 平衡树 / B 树 / Trie / 链表 / 哈希链 / 图算法 /
+ *                   网络拓扑 / AST / 控制流 / 多 cluster 架构图
+ *                   ⭐ 任何"精确结构图"优先 DOT —— LLM 写得好且 GraphViz 排版最准
+ *   - 公式：KaTeX：行内 $...$、块 $$...$$
+ *   - 自定义示意（受力 / 电路 / 几何 / 网络拓扑示意）→ 原生 <svg viewBox="..."> 块，
+ *     stroke="currentColor" 自动跟主题
+ *
+ * 按学科建议：
  */
 function buildVisualHint(subject: Subject): string {
   const s = (subject || '').toLowerCase();
   if (/algebra|代数|矩阵|linear|calculus|微积分|topology|geometry/.test(s)) {
     return [
-      '当涉及结构关系（如子空间包含、向量分解）→ 用 mermaid graph 画概念图',
-      '当涉及几何对象 → 用三反引号 text 块画 ASCII 投影示意',
+      '当涉及结构关系（如子空间包含、向量分解）→ 用 mermaid graph 或 ```dot 画概念图',
+      '当涉及几何对象 → 直接写 <svg viewBox="..."> 块（stroke="currentColor" 适配主题）',
       '矩阵直接用 \\(\\begin{bmatrix}...\\end{bmatrix}\\) LaTeX',
     ].map((s) => '- ' + s).join('\n');
   }
-  if (/data\s*struct|algo|算法|数据结构|operating|os|computer|网络/.test(s)) {
+  if (/data\s*struct|algo|算法|数据结构/.test(s)) {
     return [
-      '算法流程 → mermaid flowchart',
-      '类/对象交互 → mermaid sequenceDiagram',
-      '状态机 / 协议 → mermaid stateDiagram',
-      '链表 / 树 / 图 结构 → ASCII art（节点 + 箭头）',
+      '⭐ 二叉树 / AVL / 红黑树 / B 树 / Trie / 链表 / 哈希链 → ```dot 代码块（GraphViz 排树最准），用 node [shape=circle/box]，根据需要 rankdir=TB',
+      '⭐ 图算法（DFS/BFS/Dijkstra/最短路）→ ```dot 代码块，可加 color=red 标记当前边/节点',
+      '算法控制流 → ```mermaid flowchart',
+      '调用栈 / 递归展开 → ```mermaid flowchart 或 markdown 编号列表',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  if (/network|计算机网络|tcp|http|协议/.test(s)) {
+    return [
+      '⭐ 网络拓扑（路由器/交换机/主机连接）→ ```dot 代码块，subgraph cluster 划分 LAN',
+      '⭐ 协议交互（TCP 三次握手 / TLS / HTTP）→ ```mermaid sequenceDiagram',
+      '协议栈层级 → markdown 表格 或 ```dot rankdir=TB',
+      'TCP 状态机 / NAT 类型 → ```mermaid stateDiagram 或 ```dot',
+      '路由算法（Dijkstra/距离矢量）→ ```dot，边上写 label=cost',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  if (/operating|os|computer|系统/.test(s)) {
+    return [
+      '系统调用 / 中断流程 → ```mermaid flowchart 或 sequenceDiagram',
+      '进程状态机 → ```mermaid stateDiagram',
+      '内存布局 / 页表结构 → ```dot（精确的多框图）',
+      '调度算法 → markdown 表格 + ```mermaid gantt',
+    ].map((s) => '- ' + s).join('\n');
+  }
+  if (/llm|transformer|deep\s*learn|machine\s*learn|神经网络|大模型|nlp/.test(s)) {
+    return [
+      '⭐ 模型架构（Transformer block / 注意力层）→ ```dot 代码块，subgraph cluster 划分模块',
+      '⭐ 计算图（前向/反向）/ 张量流 → ```dot',
+      'Tokenizer 树 / BPE merge → ```dot',
+      '训练流程 / 数据 pipeline → ```mermaid flowchart',
+      'Attention 矩阵 / 概率分布 → markdown 表格（小规模）',
+      '损失曲线趋势 → 简单 ASCII 走势图',
     ].map((s) => '- ' + s).join('\n');
   }
   if (/discrete|离散|logic|逻辑|graph|图论|组合/.test(s)) {
     return [
       '关系 / 真值表 → markdown 表格',
-      '图论结构 → mermaid graph LR / TB',
-      '推理链 → mermaid flowchart 或编号列表',
+      '⭐ 图论结构（节点+边、路径、连通分量）→ ```dot 代码块',
+      '推理链 → ```mermaid flowchart 或编号列表',
     ].map((s) => '- ' + s).join('\n');
   }
-  return '- 当核心概念有"结构关系"时，加 mermaid 图（graph / flowchart / sequenceDiagram / stateDiagram 任选）\n- 没必要硬塞图，讲义本身写清楚比放图重要';
+  return [
+    '核心概念有"结构关系"时：树 / 图 / 拓扑 → ```dot；流程 / 时序 → ```mermaid',
+    '自定义示意图（几何、受力、电路）→ 原生 <svg viewBox="..."> 块',
+    '没必要硬塞图，讲义本身写清楚比放图重要',
+  ].map((x) => '- ' + x).join('\n');
 }
 
 export function exercisePrompt(subject: Subject, lessonTitle: string, count: number, difficulty: number, ctx: PromptContext): ChatMessage[] {

@@ -34,9 +34,13 @@
       highlight: (str, lang) => {
         // Mermaid 代码块特殊处理：占位 div，由 renderMermaid 阶段渲染为 SVG
         if (lang === 'mermaid') {
-          // 用 base64 隔离原始源码，避免 markdown-it 二次解析
           const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
           return `<pre class="mermaid-source"><code class="language-mermaid">${escaped}</code></pre>`;
+        }
+        // DOT/GraphViz 代码块：占位 pre，由 renderGraphviz 阶段编译成 SVG
+        if (lang === 'dot' || lang === 'graphviz') {
+          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<pre class="dot-source"><code class="language-dot">${escaped}</code></pre>`;
         }
         // 用 highlight.js 渲染代码块
         if (typeof window.hljs !== 'undefined' && window.hljs) {
@@ -172,6 +176,78 @@
     }
   }
 
+  // ===== GraphViz / DOT =====
+  /**
+   * @hpcc-js/wasm 的 Graphviz 实例懒加载 + 全局缓存。
+   * wasm 初始化只做一次（~200ms 启动），之后 gv.dot(src) 同步返回 SVG（~5-30ms / 图）。
+   */
+  let graphvizInstance = null;
+  let graphvizLoading = null;
+  async function ensureGraphviz() {
+    if (graphvizInstance) return graphvizInstance;
+    if (graphvizLoading) return graphvizLoading;
+    // UMD 暴露在 globalThis['@hpcc-js/wasm/graphviz'].Graphviz（验证过）
+    const mod = window['@hpcc-js/wasm/graphviz'];
+    if (!mod || !mod.Graphviz || typeof mod.Graphviz.load !== 'function') return null;
+    graphvizLoading = mod.Graphviz.load().then((gv) => {
+      graphvizInstance = gv;
+      graphvizLoading = null;
+      return gv;
+    }).catch((err) => {
+      graphvizLoading = null;
+      console.warn('graphviz load failed', err);
+      return null;
+    });
+    return graphvizLoading;
+  }
+
+  /**
+   * 把根节点下所有 pre.dot-source code.language-dot 编译为内联 SVG。
+   * 容错：单个图错了换降级展示，其它正常。
+   */
+  async function renderGraphviz(root) {
+    if (!root) return;
+    const blocks = root.querySelectorAll('pre.dot-source code.language-dot');
+    if (!blocks.length) return;
+    const gv = await ensureGraphviz();
+    if (!gv) {
+      console.warn('graphviz unavailable');
+      return;
+    }
+    let counter = 0;
+    for (const codeEl of blocks) {
+      const pre = codeEl.parentElement;
+      if (!pre) continue;
+      const source = codeEl.textContent || '';
+      try {
+        const svg = gv.dot(source, 'svg');
+        const wrap = document.createElement('div');
+        wrap.className = 'graphviz-rendered';
+        wrap.innerHTML = svg;
+        // 让 SVG 自适应宽度，遵循主题色（stroke/text 用 currentColor 由 CSS 注入）
+        const svgEl = wrap.querySelector('svg');
+        if (svgEl) {
+          svgEl.removeAttribute('width');
+          svgEl.removeAttribute('height');
+          svgEl.style.maxWidth = '100%';
+          svgEl.style.height = 'auto';
+        }
+        pre.replaceWith(wrap);
+      } catch (err) {
+        console.warn('graphviz render failed', err);
+        const fallback = document.createElement('div');
+        fallback.className = 'graphviz-fallback';
+        const escaped = (source || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        fallback.innerHTML = `
+          <div class="graphviz-fallback-banner">⚠ DOT 图渲染失败：${(err && err.message ? err.message : '语法错').replace(/[<&]/g, (c) => c === '<' ? '&lt;' : '&amp;')}</div>
+          <pre><code class="language-dot">${escaped}</code></pre>
+        `;
+        pre.replaceWith(fallback);
+      }
+      counter++;
+    }
+  }
+
   // ===== DOM refs =====
 
   const els = {
@@ -197,6 +273,7 @@
     els.body.innerHTML = renderMarkdown(state.content);
     renderMath(els.body);
     void renderMermaid(els.body); // 异步，不 block
+    void renderGraphviz(els.body); // 异步，不 block
   }
 
   function setHeader(args) {
@@ -619,6 +696,7 @@
     body.innerHTML = renderMarkdown(suggestion);
     renderMath(body);
     void renderMermaid(body);
+    void renderGraphviz(body);
     bubble.appendChild(body);
 
     const actions = document.createElement('div');

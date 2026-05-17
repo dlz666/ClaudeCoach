@@ -638,6 +638,9 @@ export class LectureWebviewProvider {
     const mermaidScriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'),
     );
+    const graphvizScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@hpcc-js', 'wasm', 'dist', 'graphviz.umd.js'),
+    );
 
     const csp = [
       `default-src 'none'`,
@@ -645,7 +648,8 @@ export class LectureWebviewProvider {
       // Mermaid 在渲染时会动态注入 <style>，需要 unsafe-inline；img-src 也要支持 SVG data URI
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource} data:`,
-      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
+      // wasm-unsafe-eval：@hpcc-js/wasm 的 GraphViz 需要在浏览器里加载/执行内嵌的 wasm
+      `script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'`,
     ].join('; ');
 
     const htmlPath = path.join(
@@ -679,7 +683,8 @@ export class LectureWebviewProvider {
       .replace(/{{katexAutoRenderUri}}/g, katexAutoRenderUri.toString())
       .replace(/{{hljsScriptUri}}/g, hljsScriptUri.toString())
       .replace(/{{hljsStyleUri}}/g, hljsStyleUri.toString())
-      .replace(/{{mermaidScriptUri}}/g, mermaidScriptUri.toString());
+      .replace(/{{mermaidScriptUri}}/g, mermaidScriptUri.toString())
+      .replace(/{{graphvizScriptUri}}/g, graphvizScriptUri.toString());
   }
 }
 
