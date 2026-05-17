@@ -635,3 +635,62 @@ html, body {
   font-size: 11px;
   color: var(--vscode-textLink-foreground);
 }
+
+/* ===== Q&A 折叠块（wrapAsCallout 写回讲义的格式）===== */
+.markdown-body details.cc-qa {
+  margin: 1.2em 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent);
+  border-left: 3px solid var(--vscode-textLink-foreground, #4dabf7);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-textLink-foreground) 8%);
+  overflow: hidden;
+}
+
+.markdown-body details.cc-qa > summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  font-size: 0.95em;
+  line-height: 1.5;
+  transition: background-color 120ms ease;
+}
+
+.markdown-body details.cc-qa > summary::-webkit-details-marker { display: none; }
+
+.markdown-body details.cc-qa > summary::before {
+  content: '▸';
+  font-size: 0.8em;
+  opacity: 0.55;
+  transition: transform 160ms ease;
+  flex: 0 0 auto;
+}
+
+.markdown-body details.cc-qa[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.markdown-body details.cc-qa > summary:hover {
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 6%, transparent);
+}
+
+.markdown-body details.cc-qa > summary strong {
+  flex: 0 0 auto;
+  color: var(--vscode-textLink-foreground, #4dabf7);
+}
+
+.markdown-body details.cc-qa[open] > summary {
+  border-bottom: 1px dashed color-mix(in srgb, var(--vscode-panel-border) 60%, transparent);
+}
+
+/* 折叠 body 用 first-child margin 处理：去掉顶部多余空白 */
+.markdown-body details.cc-qa > *:not(summary) {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+.markdown-body details.cc-qa > *:nth-child(2) { margin-top: 12px; }
+.markdown-body details.cc-qa > *:last-child { margin-bottom: 12px; }

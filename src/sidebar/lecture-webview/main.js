@@ -424,7 +424,7 @@
   function submitInlineIdea(info, instruction) {
     if (!vscode) return;
     const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
-    const ideaBlock = wrapAsCallout('💡 我的想法', instruction);
+    const ideaBlock = wrapAsCallout('💡 我的想法', instruction, { summary: instruction });
     vscode.postMessage({
       type: 'inlineApply',
       request: {
@@ -440,19 +440,37 @@
   }
 
   /**
-   * 把一段任意 Markdown 内容包成"分隔线 callout 块"。
+   * 把一段任意 Markdown 内容包成"可折叠的 callout 块"。
    *
-   * 旧实现是给每行加 `> ` 做 blockquote 引用，对内部代码块 / 公式 / 表格 /
-   * 列表都会破坏格式（fenced code 的结束反引号会被加上 `> ` 前缀，公式块
-   * 被切碎，等等）。新实现用顶部+底部 `---` 分隔线 + 粗体标题，把回答作为
-   * **平级 block** 嵌入，AI 原本的所有结构都完整保留，markdown-it / KaTeX
-   * / highlight.js / mermaid 都能正常渲染。
+   * 用 <details>/<summary> + 顶部 --- 分隔线，summary 行显示问题/想法的
+   * 梗概（最多 80 字），body 是完整内容。markdown-it html:true 已开，
+   * 配合 lecture-webview CSS 自带 <details> 折叠样式，默认折叠减少视觉噪音。
+   *
+   * 内部内容仍是 markdown 原文 —— <details> 块体的 markdown 解析在
+   * markdown-it 里默认是关闭的，所以需要在 <summary> 后留空行让 md 继续
+   * 解析里面的内容（这是 CommonMark 标准 HTML-in-MD 行为）。
    */
-  function wrapAsCallout(label, rawContent) {
+  function wrapAsCallout(label, rawContent, opts) {
     var body = normalizeMarkdown(rawContent);
-    // 注意首尾空行：保证和上一段 / 下一段都有空行分隔，否则 markdown-it 会把
-    // `---` 当作 setext 标题下划线，把上一行变成 H2。
-    return '\n\n---\n\n**' + label + '**\n\n' + body + '\n\n---\n';
+    opts = opts || {};
+    var summaryText = (opts.summary != null ? String(opts.summary) : '').trim();
+    if (!summaryText) {
+      // 默认用 body 第一行作为梗概
+      summaryText = body.split(/\n/)[0] || label;
+    }
+    summaryText = summaryText.replace(/^[#>*\-\s`]+/, '').trim();
+    if (summaryText.length > 80) summaryText = summaryText.slice(0, 78) + '…';
+    summaryText = escapeAttr(summaryText);
+
+    return '\n\n---\n\n<details class="cc-qa">\n<summary><strong>' + label + '</strong> · ' +
+      summaryText + '</summary>\n\n' + body + '\n\n</details>\n';
+  }
+
+  function escapeAttr(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   /**
@@ -622,7 +640,9 @@
         // 把 AI 回答作为 callout 块**追加到选区所在 block 之后**，
         // 不动选区原文，且保留 AI 输出内部所有 markdown 结构（代码块 / 公式 /
         // 表格 / 列表都不会再被 `>` 前缀破坏）。
-        const note = wrapAsCallout('🤖 AI 回答', suggestion);
+        // 去掉 instruction 里的"【模式：...】"前缀，让 summary 显示真正的问题
+        const rawQuestion = String((turn && turn.instruction) || '').replace(/^【[^】]*】/, '').trim();
+        const note = wrapAsCallout('🤖 AI 回答', suggestion, { summary: rawQuestion });
         vscode.postMessage({
           type: 'inlineApply',
           request: {
