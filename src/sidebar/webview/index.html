@@ -337,15 +337,10 @@
   </div>
 
   <div id="tab-settings" class="tab-content">
-    <div class="cc-settings-v3">
-      <!-- 左侧 icon rail：分组导航 -->
-      <aside class="cc-settings-rail" id="settings-nav" aria-label="设置分组导航"></aside>
+    <input type="text" class="settings-search" id="settings-search" placeholder="搜索设置...">
+    <nav class="cc-chip-nav bordered" id="settings-nav" aria-label="设置分组导航"></nav>
 
-      <!-- 右侧内容面板 -->
-      <main class="cc-settings-pane">
-        <input type="text" class="cc-settings-search-v3" id="settings-search" placeholder="搜索设置...">
-
-    <section class="cc-settings-section settings-group" id="group-pace" data-section="pace" data-section-title="学习节奏" data-section-icon="🎯" data-section-sub="每天投入多久、什么时段学习、难度分布" data-active="true">
+    <section class="cc-settings-section settings-group" id="group-pace" data-section="pace" data-section-title="节奏" data-section-sub="每天投入多久、什么时段学习、难度分布" data-active="true">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">学习节奏与目标</h3>
@@ -444,7 +439,7 @@
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-ai-style" data-section="aiStyle" data-section-title="AI 风格" data-section-icon="🎨" data-section-sub="讲义详尽度、反馈口吻、解释方式、语言" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-ai-style" data-section="aiStyle" data-section-title="风格" data-section-sub="讲义详尽度、反馈口吻、解释方式、语言" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">AI 风格与内容</h3>
@@ -543,7 +538,7 @@
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-retrieval" data-section="retrieval" data-section-title="资料检索" data-section-icon="🔍" data-section-sub="grounding、向量检索（Hybrid RAG）、Vision API 提取" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-retrieval" data-section="retrieval" data-section-title="检索" data-section-sub="grounding、向量检索（Hybrid RAG）、Vision API 提取" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">资料检索</h3>
@@ -657,7 +652,7 @@
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-lecture" data-section="lecture" data-section-title="讲义阅读" data-section-icon="📖" data-section-sub="阅读模式、AI 建议应用方式、改动高亮" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-lecture" data-section="lecture" data-section-title="讲义" data-section-sub="阅读模式、AI 建议应用方式、改动高亮" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">讲义阅读体验</h3>
@@ -666,85 +661,35 @@
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="lecture">恢复默认</button>
       </header>
       <div class="settings-group-body">
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">阅读模式</h4>
-              <p class="cc-setting-desc">点击讲义文件时用哪种视图打开。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-option-grid" id="lecture-reader-mode">
-              <label class="cc-option">
-                <input type="radio" name="lecture-reader-mode" value="lecture-webview" checked>
-                <span class="cc-option-title">📖 讲义 webview</span>
-                <span class="cc-option-desc">自渲染面板，蓝色按钮、嵌入数学公式（推荐）</span>
-              </label>
-              <label class="cc-option">
-                <input type="radio" name="lecture-reader-mode" value="native-preview">
-                <span class="cc-option-title">🖥️ 原生 preview</span>
-                <span class="cc-option-desc">VS Code 内建 Markdown preview</span>
-              </label>
-              <label class="cc-option">
-                <input type="radio" name="lecture-reader-mode" value="split-both">
-                <span class="cc-option-title">⫼ 分屏并排</span>
-                <span class="cc-option-desc">源码 + 渲染同时显示</span>
-              </label>
-            </div>
+        <div class="setting-row">
+          <label>阅读模式</label>
+          <div class="check-row" id="lecture-reader-mode">
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="lecture-webview" checked> 讲义 webview</label>
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="native-preview"> 原生 preview</label>
+            <label class="inline-check"><input type="radio" name="lecture-reader-mode" value="split-both"> 分屏并排</label>
           </div>
         </div>
-
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">AI 建议应用模式</h4>
-              <p class="cc-setting-desc">AI 改动落到讲义时是直接覆盖还是先预览。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-option-grid" id="lecture-apply-mode">
-              <label class="cc-option">
-                <input type="radio" name="lecture-apply-mode" value="preview-confirm" checked>
-                <span class="cc-option-title">👀 预览确认</span>
-                <span class="cc-option-desc">显示 bubble，采纳后才写入（推荐）</span>
-              </label>
-              <label class="cc-option">
-                <input type="radio" name="lecture-apply-mode" value="auto-apply">
-                <span class="cc-option-title">⚡ 自动应用</span>
-                <span class="cc-option-desc">立即写入并备份 .bak，可撤回</span>
-              </label>
-            </div>
+        <div class="setting-row">
+          <label>AI 建议应用模式</label>
+          <div class="check-row" id="lecture-apply-mode">
+            <label class="inline-check"><input type="radio" name="lecture-apply-mode" value="auto-apply"> 自动应用</label>
+            <label class="inline-check"><input type="radio" name="lecture-apply-mode" value="preview-confirm" checked> 预览确认</label>
           </div>
         </div>
-
-        <div class="cc-setting-card cc-setting-toggle">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">阅读时同步源码</h4>
-              <p class="cc-setting-desc">webview 滚动时，源码编辑器自动跟随。</p>
-            </div>
-          </div>
-          <input type="checkbox" id="lecture-sync-source" checked>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="lecture-sync-source" checked> 阅读时同步源码</label>
         </div>
-
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">改动高亮时长</h4>
-              <p class="cc-setting-desc">AI 应用后那段文字高亮多久淡出。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-slider">
-              <input type="range" id="lecture-highlight-duration" min="1" max="10" value="3">
-              <span id="lecture-highlight-duration-value" class="cc-slider-value">3 秒</span>
-            </div>
+        <div class="setting-row">
+          <label for="lecture-highlight-duration">改动高亮时长（秒）</label>
+          <div class="slider-row">
+            <input type="range" id="lecture-highlight-duration" min="1" max="10" value="3">
+            <span id="lecture-highlight-duration-value" class="hint">3 秒</span>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-ui" data-section="ui" data-section-title="界面" data-section-icon="✨" data-section-sub="字体、默认 Tab、主题、emoji 显示" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-ui" data-section="ui" data-section-title="界面" data-section-sub="字体、默认 Tab、主题、emoji 显示" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">UI 与显示</h3>
@@ -753,77 +698,40 @@
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="ui">恢复默认</button>
       </header>
       <div class="settings-group-body">
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">字体大小</h4>
-              <p class="cc-setting-desc">侧栏整体缩放，按住 Ctrl+滚轮也可调。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-slider">
-              <input type="range" id="ui-font-size" min="12" max="18" value="13">
-              <span id="ui-font-size-value" class="cc-slider-value">13 px</span>
-            </div>
+        <div class="setting-row">
+          <label for="ui-font-size">字体大小</label>
+          <div class="slider-row">
+            <input type="range" id="ui-font-size" min="12" max="18" value="13">
+            <span id="ui-font-size-value" class="hint">13 px</span>
           </div>
         </div>
-
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">默认 Tab</h4>
-              <p class="cc-setting-desc">VS Code 启动时打开哪个 tab。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-segment" id="ui-default-tab">
-              <label><input type="radio" name="ui-default-tab" value="learn" checked> 学习</label>
-              <label><input type="radio" name="ui-default-tab" value="chat"> 对话</label>
-              <label><input type="radio" name="ui-default-tab" value="materials"> 资料库</label>
-              <label><input type="radio" name="ui-default-tab" value="settings"> 设置</label>
-            </div>
+        <div class="setting-row">
+          <label>默认 Tab</label>
+          <div class="check-row" id="ui-default-tab">
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="learn" checked> 学习</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="chat"> 对话</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="materials"> 资料库</label>
+            <label class="inline-check"><input type="radio" name="ui-default-tab" value="settings"> 设置</label>
           </div>
         </div>
-
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">主题</h4>
-              <p class="cc-setting-desc">侧栏主题：跟随 VS Code 或锁定亮/暗。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div class="cc-segment" id="ui-theme">
-              <label><input type="radio" name="ui-theme" value="auto" checked> 跟随</label>
-              <label><input type="radio" name="ui-theme" value="light"> 亮</label>
-              <label><input type="radio" name="ui-theme" value="dark"> 暗</label>
-            </div>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ui-tree-default-expand" checked> 课程树默认展开</label>
+        </div>
+        <div class="setting-row">
+          <label>主题</label>
+          <div class="check-row" id="ui-theme">
+            <label class="inline-check"><input type="radio" name="ui-theme" value="auto" checked> 跟随 VS Code</label>
+            <label class="inline-check"><input type="radio" name="ui-theme" value="light"> 亮色</label>
+            <label class="inline-check"><input type="radio" name="ui-theme" value="dark"> 暗色</label>
           </div>
         </div>
-
-        <div class="cc-setting-card cc-setting-toggle">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">课程树默认展开</h4>
-              <p class="cc-setting-desc">打开课程时所有章节默认展开。</p>
-            </div>
-          </div>
-          <input type="checkbox" id="ui-tree-default-expand" checked>
-        </div>
-
-        <div class="cc-setting-card cc-setting-toggle">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">显示 emoji</h4>
-              <p class="cc-setting-desc">关闭后界面上的 emoji 一次性隐藏。</p>
-            </div>
-          </div>
-          <input type="checkbox" id="ui-show-emoji" checked>
+        <div class="setting-row">
+          <label class="inline-check"><input type="checkbox" id="ui-show-emoji" checked> 显示 emoji</label>
         </div>
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-ai-config" data-section="aiConfig" data-section-title="AI 模型" data-section-icon="🤖" data-section-sub="endpoint、模型、token、工作区覆盖" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-ai-config" data-section="aiConfig" data-section-title="AI Profile" data-section-sub="endpoint、模型、token、工作区覆盖" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">AI 配置中心</h3>
@@ -832,32 +740,27 @@
         <button class="btn ghost small" type="button" id="btn-add-ai-profile">新建 Profile</button>
       </header>
       <div class="settings-group-body">
-        <!-- ===== Hero 状态卡：当前 AI 配置一眼可见 + 主操作 ===== -->
-        <section class="cc-status-hero" id="ai-config-center" data-status="ok">
-          <div class="cc-status-hero-orb" id="resolved-config-orb">🤖</div>
-          <div class="cc-status-hero-body">
-            <h4 class="cc-status-hero-title">
-              <span id="resolved-config-name">加载中...</span>
-              <span id="resolved-warning-pills"></span>
-            </h4>
-            <div class="cc-status-hero-meta">
-              <span class="cc-status-hero-meta-item">📡 <span id="resolved-config-source">—</span></span>
-              <span class="cc-status-hero-meta-item">🔌 <span id="resolved-config-provider">—</span></span>
-              <span class="cc-status-hero-meta-item">📍 <span id="resolved-config-origin">—</span></span>
-              <span class="cc-status-hero-meta-item">🌐 <span class="mono" id="resolved-config-url">—</span></span>
-            </div>
+        <section class="resolved-card panel-flat" id="ai-config-center">
+          <div class="card-subtitle" id="resolved-config-source">加载中...</div>
+          <div class="resolved-main">
+            <div class="resolved-name" id="resolved-config-name">-</div>
           </div>
-          <div class="cc-status-hero-actions">
-            <button class="btn-cta" id="btn-test-active-profile" type="button" title="向当前激活的 AI 发一条 ping，确认连通">⚡ 测试连接</button>
-            <button class="btn-cta ghost" id="btn-change-ai-config" type="button">＋ 导入配置</button>
-            <div class="dropdown-menu hidden" id="ai-change-menu">
-              <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
-              <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
-              <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
-              <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
+          <div class="resolved-summary-grid">
+            <div class="stat-card">
+              <span class="stat-label">Provider</span>
+              <span class="stat-value" id="resolved-config-provider">-</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">来源</span>
+              <span class="stat-value" id="resolved-config-origin">-</span>
+            </div>
+            <div class="stat-card stat-card-wide">
+              <span class="stat-label">Base URL</span>
+              <span class="stat-value mono" id="resolved-config-url">-</span>
             </div>
           </div>
           <div class="hidden">
+            <span id="resolved-warning-pills"></span>
             <span id="resolved-config-meta"></span>
             <span id="resolved-config-context"></span>
             <span id="resolved-config-max-tokens"></span>
@@ -865,205 +768,126 @@
           </div>
         </section>
 
-        <!-- ===== Profile 列表 ===== -->
-        <div class="cc-setting-card">
-          <div class="cc-setting-head">
-            <div>
-              <h4 class="cc-setting-title">AI Profile</h4>
-              <p class="cc-setting-desc">在多个 endpoint / 模型间快速切换；点中即激活。</p>
-            </div>
-          </div>
-          <div class="cc-setting-control">
-            <div id="ai-profiles-list" class="ai-profiles-list">
-              <p class="muted">加载中...</p>
+        <div class="setting-row">
+          <label>从已知配置导入</label>
+          <div class="custom-dropdown ai-change-dropdown">
+            <button class="btn small" id="btn-change-ai-config" type="button">导入...</button>
+            <div class="dropdown-menu hidden" id="ai-change-menu">
+              <div class="dropdown-item" data-ai-import-source="codex">从 .codex 导入</div>
+              <div class="dropdown-item" data-ai-import-source="claude">从 .claude 导入</div>
+              <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
+              <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
             </div>
           </div>
         </div>
 
-        <!-- ===== Profile 编辑器 ===== -->
-        <div id="ai-profile-editor" class="ai-profile-editor hidden" data-provider="anthropic">
+        <div class="setting-row">
+          <label>Profile 列表</label>
+          <div id="ai-profiles-list" class="ai-profiles-list">
+            <p class="muted">加载中...</p>
+          </div>
+        </div>
+
+        <div id="ai-profile-editor" class="ai-profile-editor hidden">
           <h4 id="ai-profile-editor-title">新建 Profile</h4>
-
-          <div class="cc-setting-card">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">名称</h4>
-                <p class="cc-setting-desc">用于切换识别，可以填模型别名或场景。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <input type="text" id="ai-profile-name" placeholder="例如：Claude Sonnet">
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-name">名称</label>
+            <input type="text" id="ai-profile-name" placeholder="例如：Claude Sonnet">
           </div>
-
-          <div class="cc-setting-card">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">Provider</h4>
-                <p class="cc-setting-desc">决定调用方式 — Claude Code CLI 无需 token，复用本机登录态。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <select id="ai-profile-provider">
-                <option value="claude_code_cli">Claude Code CLI（本机子进程，无需 Token）</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="openai-compatible">OpenAI 兼容</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-provider">Provider</label>
+            <select id="ai-profile-provider">
+              <option value="claude_code_cli">Claude Code CLI（本机子进程，无需 Token）</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="custom">Custom</option>
+            </select>
           </div>
-
-          <div class="cc-setting-card" data-provider-field="model">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">模型</h4>
-                <p class="cc-setting-desc">Model 名（如 <code>claude-sonnet-4-6</code> / <code>gpt-4o</code>）。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <input type="text" id="ai-profile-model" placeholder="claude-sonnet-4-6">
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-base-url">Base URL</label>
+            <input type="text" id="ai-profile-base-url" placeholder="https://api.example.com/v1">
           </div>
-
-          <div class="cc-setting-card" data-provider-field="baseUrl">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">Base URL</h4>
-                <p class="cc-setting-desc">OpenAI 兼容端点（含 <code>/v1</code>）。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <input type="text" id="ai-profile-base-url" placeholder="https://api.example.com/v1">
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-anthropic-base-url">Anthropic Base URL（可选）</label>
+            <input type="text" id="ai-profile-anthropic-base-url">
           </div>
-
-          <div class="cc-setting-card" data-provider-field="anthropicBaseUrl">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">Anthropic Base URL</h4>
-                <p class="cc-setting-desc">仅 Anthropic 原生协议时填，可选。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <input type="text" id="ai-profile-anthropic-base-url" placeholder="https://api.anthropic.com">
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-token">API Token</label>
+            <input type="password" id="ai-profile-token" placeholder="sk-...">
           </div>
-
-          <div class="cc-setting-card" data-provider-field="apiToken">
-            <div class="cc-setting-head">
-              <div>
-                <h4 class="cc-setting-title">API Token</h4>
-                <p class="cc-setting-desc">敏感凭证，仅存本机数据目录。</p>
-              </div>
-            </div>
-            <div class="cc-setting-control">
-              <input type="password" id="ai-profile-token" placeholder="sk-...">
-            </div>
+          <div class="setting-row">
+            <label for="ai-profile-model">Model</label>
+            <input type="text" id="ai-profile-model" placeholder="claude-3-7-sonnet-20250219">
           </div>
-
-          <details class="cc-disclosure" data-provider-field="advanced">
-            <summary>高级选项</summary>
-            <div class="cc-disclosure-body">
-              <div class="cc-setting-card">
-                <div class="cc-setting-head"><h4 class="cc-setting-title">Wire API</h4></div>
-                <div class="cc-setting-control">
-                  <select id="ai-profile-wire-api">
-                    <option value="anthropic">anthropic</option>
-                    <option value="openai">openai</option>
-                    <option value="responses">responses</option>
-                  </select>
-                </div>
-              </div>
-              <div class="cc-setting-card">
-                <div class="cc-setting-head"><h4 class="cc-setting-title">Context Window</h4></div>
-                <div class="cc-setting-control">
-                  <input type="number" id="ai-profile-context-window" min="0" placeholder="200000">
-                </div>
-              </div>
-              <div class="cc-setting-card">
-                <div class="cc-setting-head"><h4 class="cc-setting-title">Max Tokens</h4></div>
-                <div class="cc-setting-control">
-                  <input type="number" id="ai-profile-max-tokens" min="0" placeholder="8192">
-                </div>
-              </div>
-              <div class="cc-setting-card">
-                <div class="cc-setting-head"><h4 class="cc-setting-title">Reasoning Effort</h4></div>
-                <div class="cc-setting-control">
-                  <select id="ai-profile-reasoning-effort">
-                    <option value="">默认</option>
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                  </select>
-                </div>
-              </div>
-              <div class="cc-setting-card">
-                <div class="cc-setting-head"><h4 class="cc-setting-title">备注</h4></div>
-                <div class="cc-setting-control">
-                  <textarea id="ai-profile-notes" rows="3" placeholder="备注..."></textarea>
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <div class="actions-row" style="margin-top: 12px;">
-            <button class="btn-cta" id="btn-save-ai-profile" type="button">💾 保存 Profile</button>
-            <button class="btn-cta ghost" id="btn-cancel-ai-profile" type="button">取消</button>
+          <div class="setting-row">
+            <label for="ai-profile-wire-api">Wire API</label>
+            <select id="ai-profile-wire-api">
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+              <option value="responses">responses</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-context-window">Context Window</label>
+            <input type="number" id="ai-profile-context-window" min="0" placeholder="200000">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-max-tokens">Max Tokens</label>
+            <input type="number" id="ai-profile-max-tokens" min="0" placeholder="8192">
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-reasoning-effort">Reasoning Effort</label>
+            <select id="ai-profile-reasoning-effort">
+              <option value="">默认</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-profile-notes">备注</label>
+            <textarea id="ai-profile-notes" rows="3" placeholder="备注..."></textarea>
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btn-save-ai-profile" type="button">保存 Profile</button>
+            <button class="btn ghost" id="btn-cancel-ai-profile" type="button">取消</button>
           </div>
         </div>
 
-        <details class="cc-disclosure">
-          <summary>工作区覆盖（仅当前项目生效）</summary>
-          <div class="cc-disclosure-body">
-            <div class="cc-setting-card cc-setting-toggle">
-              <div class="cc-setting-head">
-                <div>
-                  <h4 class="cc-setting-title">启用工作区覆盖</h4>
-                  <p class="cc-setting-desc">在当前 workspace 使用不同的 AI（如公司代理）。</p>
-                </div>
-              </div>
-              <input type="checkbox" id="ai-ws-override-enabled">
-            </div>
-            <div class="cc-setting-card">
-              <div class="cc-setting-head"><h4 class="cc-setting-title">基础 Profile</h4></div>
-              <div class="cc-setting-control">
-                <select id="ai-ws-base-profile"><option value="">使用全局激活</option></select>
-              </div>
-            </div>
-            <div class="cc-setting-card">
-              <div class="cc-setting-head"><h4 class="cc-setting-title">Provider 覆盖</h4></div>
-              <div class="cc-setting-control">
-                <input type="text" id="ai-ws-provider" placeholder="留空表示不覆盖">
-              </div>
-            </div>
-            <div class="cc-setting-card">
-              <div class="cc-setting-head"><h4 class="cc-setting-title">Base URL 覆盖</h4></div>
-              <div class="cc-setting-control">
-                <input type="text" id="ai-ws-base-url">
-              </div>
-            </div>
-            <div class="cc-setting-card">
-              <div class="cc-setting-head"><h4 class="cc-setting-title">Token 覆盖</h4></div>
-              <div class="cc-setting-control">
-                <input type="password" id="ai-ws-token">
-              </div>
-            </div>
-            <div class="cc-setting-card">
-              <div class="cc-setting-head"><h4 class="cc-setting-title">Model 覆盖</h4></div>
-              <div class="cc-setting-control">
-                <input type="text" id="ai-ws-model">
-              </div>
-            </div>
-            <div class="actions-row" style="margin-top: 12px;">
-              <button class="btn-cta" id="btn-save-ws-override" type="button">💾 保存覆盖</button>
-            </div>
+        <div class="ai-workspace-override">
+          <h4>工作区覆盖</h4>
+          <div class="setting-row">
+            <label class="inline-check"><input type="checkbox" id="ai-ws-override-enabled"> 启用工作区覆盖</label>
           </div>
-        </details>
+          <div class="setting-row">
+            <label for="ai-ws-base-profile">基础 Profile</label>
+            <select id="ai-ws-base-profile"><option value="">使用全局激活</option></select>
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-provider">Provider 覆盖</label>
+            <input type="text" id="ai-ws-provider" placeholder="留空表示不覆盖">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-base-url">Base URL 覆盖</label>
+            <input type="text" id="ai-ws-base-url">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-token">Token 覆盖</label>
+            <input type="password" id="ai-ws-token">
+          </div>
+          <div class="setting-row">
+            <label for="ai-ws-model">Model 覆盖</label>
+            <input type="text" id="ai-ws-model">
+          </div>
+          <div class="actions-row">
+            <button class="btn primary" id="btn-save-ws-override" type="button">保存覆盖</button>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-data" data-section="data" data-section-title="数据管理" data-section-icon="💾" data-section-sub="清理错题 / 诊断历史、导出导入学习数据" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-data" data-section="data" data-section-title="数据" data-section-sub="清理错题 / 诊断历史、导出导入学习数据" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">数据管理</h3>
@@ -1091,7 +915,7 @@
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-advanced" data-section="advanced" data-section-title="高级" data-section-icon="⚙️" data-section-sub="数据目录、偏好导入导出、恢复所有默认" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-advanced" data-section="advanced" data-section-title="高级" data-section-sub="数据目录、偏好导入导出、恢复所有默认" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">数据目录与高级</h3>
@@ -1116,11 +940,9 @@
       </div>
     </section>
 
-        <div class="cc-settings-savebar">
-          <span class="cc-save-hint">改动会自动保存</span>
-          <button class="btn primary" id="btn-save-prefs" title="立刻提交一次（自动保存已开启）">立即保存</button>
-        </div>
-      </main>
+    <div class="cc-settings-savebar">
+      <span class="cc-save-hint">改动会自动保存</span>
+      <button class="btn primary" id="btn-save-prefs" title="立刻提交一次（自动保存已开启）">立即保存</button>
     </div>
   </div>
 

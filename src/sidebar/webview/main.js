@@ -2127,10 +2127,10 @@
 
   // ===== AI Profile 列表渲染 =====
   /**
-   * v3 设置页：渲染左侧 icon rail + 切换激活 section
-   * - 没有 AI Profile / 没有 active profile → 默认打开 "AI 模型" section
-   * - 已配置 → 默认打开 "学习节奏" section（最常用入口）
-   * 用户手动切过 rail item 之后，state.settingsActiveSection 记忆选择，刷新不重置。
+   * v2 设置页：渲染 chip nav + 切换激活 section
+   * - 没有 AI Profile / 没有 active profile → 默认打开 "AI Profile" section
+   * - 已配置 → 默认打开 "节奏" section（最常用入口）
+   * 用户手动切过 chip 之后，state.settingsActiveSection 记忆选择，刷新不重置。
    */
   function renderSettingsNav() {
     const nav = document.getElementById('settings-nav');
@@ -2145,21 +2145,13 @@
       state.settingsActiveSection = hasActive ? 'pace' : 'aiConfig';
     }
 
-    // 渲染 rail items（图标 + 标签）
-    nav.innerHTML = `
-      <div class="cc-rail-section-label">设置</div>
-      ${sections.map((sec) => {
-        const id = sec.getAttribute('data-section');
-        const label = sec.getAttribute('data-section-title') || id;
-        const icon = sec.getAttribute('data-section-icon') || '•';
-        const sub = sec.getAttribute('data-section-sub') || '';
-        const active = id === state.settingsActiveSection;
-        return `<button class="cc-rail-item" type="button" data-settings-nav="${escapeHtml(id)}" aria-current="${active}" title="${escapeHtml(sub)}">
-          <span class="cc-rail-icon">${escapeHtml(icon)}</span>
-          <span class="cc-rail-label">${escapeHtml(label)}</span>
-        </button>`;
-      }).join('')}
-    `;
+    // 渲染 chip
+    nav.innerHTML = sections.map((sec) => {
+      const id = sec.getAttribute('data-section');
+      const label = sec.getAttribute('data-section-title') || id;
+      const active = id === state.settingsActiveSection;
+      return `<button class="cc-chip" type="button" data-settings-nav="${escapeHtml(id)}" aria-pressed="${active}" title="${escapeHtml(sec.getAttribute('data-section-sub') || '')}">${escapeHtml(label)}</button>`;
+    }).join('');
 
     // 同步 section 的 active 状态
     sections.forEach((sec) => {
@@ -2167,7 +2159,7 @@
       sec.setAttribute('data-active', id === state.settingsActiveSection ? 'true' : 'false');
     });
 
-    // 绑定 rail item click
+    // 绑定 chip click
     nav.querySelectorAll('[data-settings-nav]').forEach((btn) => {
       btn.addEventListener('click', () => {
         state.settingsActiveSection = btn.getAttribute('data-settings-nav');
@@ -2281,34 +2273,26 @@
     if (!els.aiProfilesList) return;
     const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
     if (!profiles.length) {
-      els.aiProfilesList.innerHTML = `<div class="cc-material-empty">还没有 AI Profile。<br>点击右上角 "新建 Profile" 或 hero 区"导入配置"创建一个。</div>`;
+      els.aiProfilesList.innerHTML = '<p class="muted">还没有 AI Profile，点击"新建 Profile"创建一个。</p>';
     } else {
       els.aiProfilesList.innerHTML = profiles.map((profile) => {
         const isActive = profile.id === state.activeProfileId;
-        const providerIcon = profile.provider === 'claude_code_cli' ? '💻'
-          : profile.provider === 'anthropic' ? '🧠'
-          : '🤖';
         return `
-          <div class="cc-profile-card" data-profile-id="${escapeHtml(profile.id)}" data-active="${isActive ? 'true' : 'false'}">
-            <div class="cc-profile-card-orb">${providerIcon}</div>
-            <div class="cc-profile-card-body">
-              <div class="cc-profile-card-title">
-                ${escapeHtml(profile.name || '未命名')}
-                ${isActive ? '<span class="cc-profile-active-badge">激活中</span>' : ''}
-              </div>
-              <div class="cc-profile-card-meta">
-                <span>${escapeHtml(profile.provider || '-')}</span>
-                <span>•</span>
-                <span class="mono">${escapeHtml(profile.model || '-')}</span>
-              </div>
+          <div class="ai-profile-card${isActive ? ' active' : ''}" data-profile-id="${escapeHtml(profile.id)}">
+            <div class="ai-profile-card-head">
+              <strong>${escapeHtml(profile.name || '未命名')}</strong>
+              ${isActive ? '<span class="pill ok">激活中</span>' : ''}
             </div>
-            <div class="cc-profile-card-actions">
-              ${isActive ? '' : `<button class="btn small" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}" title="设为激活配置">激活</button>`}
-              <button class="btn small ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}" title="编辑">✎</button>
-              <button class="btn small ghost" type="button" data-action="test" data-profile-id="${escapeHtml(profile.id)}" title="测试连接">⚡</button>
-              <button class="btn small ghost" type="button" data-action="duplicate" data-profile-id="${escapeHtml(profile.id)}" title="复制">⎘</button>
-              <button class="btn small ghost" type="button" data-action="export" data-profile-id="${escapeHtml(profile.id)}" title="导出">⤓</button>
-              <button class="btn small danger-btn" type="button" data-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="删除">🗑</button>
+            <div class="ai-profile-card-meta muted">
+              ${escapeHtml(profile.provider || '-')} / ${escapeHtml(profile.model || '-')}
+            </div>
+            <div class="ai-profile-card-actions">
+              <button class="btn small" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}">${isActive ? '已激活' : '激活'}</button>
+              <button class="btn small ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
+              <button class="btn small ghost" type="button" data-action="duplicate" data-profile-id="${escapeHtml(profile.id)}">复制</button>
+              <button class="btn small ghost" type="button" data-action="test" data-profile-id="${escapeHtml(profile.id)}">测试</button>
+              <button class="btn small ghost" type="button" data-action="export" data-profile-id="${escapeHtml(profile.id)}">导出</button>
+              <button class="btn small danger-btn" type="button" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">删除</button>
             </div>
           </div>
         `;
@@ -2380,47 +2364,7 @@
     if (els.aiProfileMaxTokens) els.aiProfileMaxTokens.value = profile?.maxTokens ? String(profile.maxTokens) : '';
     if (els.aiProfileReasoningEffort) els.aiProfileReasoningEffort.value = profile?.reasoningEffort || '';
     if (els.aiProfileNotes) els.aiProfileNotes.value = profile?.notes || '';
-    applyProviderAwareFields();
     requestAnimationFrame(() => els.aiProfileEditor?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
-  }
-
-  /**
-   * Provider-aware editor：按当前选择的 provider 显示/隐藏不相关字段。
-   * - claude_code_cli：只显示名称 + provider + model（baseUrl/token/anthropicBaseUrl 隐藏）
-   * - anthropic：隐藏 OpenAI 的 baseUrl，显示 anthropicBaseUrl + token
-   * - openai/openai-compatible/custom：显示 baseUrl + token，隐藏 anthropicBaseUrl
-   */
-  function applyProviderAwareFields() {
-    const provider = els.aiProfileProvider?.value || 'anthropic';
-    const editor = els.aiProfileEditor;
-    if (!editor) return;
-    editor.setAttribute('data-provider', provider);
-
-    const show = (field, on) => {
-      const card = editor.querySelector(`[data-provider-field="${field}"]`);
-      if (card) card.style.display = on ? '' : 'none';
-    };
-
-    if (provider === 'claude_code_cli') {
-      show('model', true);
-      show('baseUrl', false);
-      show('anthropicBaseUrl', false);
-      show('apiToken', false);
-      show('advanced', false);
-    } else if (provider === 'anthropic') {
-      show('model', true);
-      show('baseUrl', false);
-      show('anthropicBaseUrl', true);
-      show('apiToken', true);
-      show('advanced', true);
-    } else {
-      // openai / openai-compatible / custom
-      show('model', true);
-      show('baseUrl', true);
-      show('anthropicBaseUrl', false);
-      show('apiToken', true);
-      show('advanced', true);
-    }
   }
 
   function closeAIProfileEditor() {
@@ -2497,54 +2441,41 @@
   function renderResolvedAIConfig(config, workspaceOverride) {
     if (!els.resolvedConfigName) return;
 
-    const hero = document.getElementById('ai-config-center');
-    const orb = document.getElementById('resolved-config-orb');
-
     if (!config) {
-      if (els.resolvedConfigSource) els.resolvedConfigSource.textContent = '加载中…';
-      els.resolvedConfigName.textContent = '加载中…';
-      if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = '—';
-      if (els.resolvedConfigOrigin) els.resolvedConfigOrigin.textContent = '—';
-      els.resolvedConfigUrl.textContent = '—';
-      if (els.resolvedConfigContext) els.resolvedConfigContext.textContent = '—';
-      if (els.resolvedConfigMaxTokens) els.resolvedConfigMaxTokens.textContent = '—';
-      if (els.resolvedConfigHistoryBudget) els.resolvedConfigHistoryBudget.textContent = '—';
+      if (els.resolvedConfigSource) els.resolvedConfigSource.textContent = '加载中...';
+      els.resolvedConfigName.textContent = '-';
+      if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = '-';
+      if (els.resolvedConfigOrigin) els.resolvedConfigOrigin.textContent = '-';
+      els.resolvedConfigUrl.textContent = '-';
+      els.resolvedConfigContext.textContent = '-';
+      els.resolvedConfigMaxTokens.textContent = '-';
+      els.resolvedConfigHistoryBudget.textContent = '-';
       if (els.resolvedWarningPills) els.resolvedWarningPills.innerHTML = '';
-      if (hero) hero.setAttribute('data-status', 'ok');
       return;
     }
 
     if (els.resolvedConfigSource) {
-      els.resolvedConfigSource.textContent = config.resolvedFrom === 'workspace' ? '项目覆盖' : '全局配置';
+      els.resolvedConfigSource.textContent = config.resolvedFrom === 'workspace' ? '当前生效：项目覆盖' : '当前生效：全局配置';
     }
-    els.resolvedConfigName.textContent = config.model || config.profileName || '未命名';
+    els.resolvedConfigName.textContent = config.model || config.profileName || '-';
     const wireApi = config.wireApi ? ` / ${config.wireApi}` : '';
-    if (els.resolvedConfigMeta) els.resolvedConfigMeta.textContent = `${config.provider || '-'}${wireApi}`;
-    if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = config.provider || '—';
-    els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '—';
+    els.resolvedConfigMeta.textContent = `${config.provider || '-'}${wireApi}`;
+    els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '-';
     if (els.resolvedConfigOrigin) {
-      els.resolvedConfigOrigin.textContent = config.resolvedFrom === 'workspace' || workspaceOverride?.enabled ? '项目覆盖' : '全局';
+      els.resolvedConfigOrigin.textContent = config.resolvedFrom === 'workspace' || workspaceOverride?.enabled ? '项目覆盖' : '全局配置';
     }
-    if (els.resolvedConfigContext) els.resolvedConfigContext.textContent = String(config.contextWindow || '—');
-    if (els.resolvedConfigMaxTokens) els.resolvedConfigMaxTokens.textContent = String(config.maxTokens || '—');
-    if (els.resolvedConfigHistoryBudget) els.resolvedConfigHistoryBudget.textContent = String(config.availableHistoryTokens || '—');
-
-    const warnings = Array.isArray(config.warnings) ? config.warnings : [];
-    const hasError = warnings.some((w) => /token|无效|失败/i.test(w));
-    if (hero) {
-      hero.setAttribute('data-status', hasError ? 'error' : warnings.length ? 'warn' : 'ok');
-    }
-    if (orb) {
-      orb.textContent = hasError ? '⚠' : warnings.length ? '⚠' : (config.provider === 'claude_code_cli' ? '💻' : '🤖');
-    }
+    els.resolvedConfigContext.textContent = String(config.contextWindow || '-');
+    els.resolvedConfigMaxTokens.textContent = String(config.maxTokens || '-');
+    els.resolvedConfigHistoryBudget.textContent = String(config.availableHistoryTokens || '-');
 
     if (els.resolvedWarningPills) {
+      const warnings = Array.isArray(config.warnings) ? config.warnings : [];
       const pills = [];
       if (workspaceOverride?.enabled) {
-        pills.push('<span class="pill warn" style="font-size:9px;padding:1px 6px;margin-left:6px;">项目覆盖中</span>');
+        pills.push('<span class="pill warn">项目覆盖中</span>');
       }
       warnings.forEach((warning) => {
-        pills.push(`<span class="pill danger" style="font-size:9px;padding:1px 6px;margin-left:6px;">${escapeHtml(warning)}</span>`);
+        pills.push(`<span class="pill danger">${escapeHtml(warning)}</span>`);
       });
       els.resolvedWarningPills.innerHTML = pills.join('');
     }
@@ -3740,18 +3671,6 @@
 
   els.btnCancelAIProfile?.addEventListener('click', () => {
     closeAIProfileEditor();
-  });
-
-  // Provider 切换：动态显示/隐藏字段
-  els.aiProfileProvider?.addEventListener('change', () => {
-    applyProviderAwareFields();
-  });
-
-  // ===== Hero 大按钮：测试当前激活配置 =====
-  const btnTestActiveProfile = document.getElementById('btn-test-active-profile');
-  btnTestActiveProfile?.addEventListener('click', () => {
-    addLog('正在测试当前 AI 配置...', 'info');
-    vscode.postMessage({ type: 'testAIProfile' }); // 不传 profile = 测试已 resolve 的 active 配置
   });
 
   // ===== Workspace AI Override =====
