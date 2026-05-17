@@ -1096,26 +1096,44 @@ export class AIClient {
 
       proc.on('close', (code) => {
         settle(() => {
-          if (code !== 0) {
-            reject(new Error(`claude CLI 退出码 ${code}：${stderr.trim() || stdout.trim() || '无错误输出'}`));
-            return;
-          }
-          let result = '';
-          try {
-            const parsed = JSON.parse(stdout);
-            // claude --output-format json 返回 { type, subtype, is_error, result, ... }
-            if (parsed.is_error) {
-              const errMsg = String(parsed.result ?? parsed.error ?? '未知错误').trim();
-              if (/not logged in|please run \/login/i.test(errMsg)) {
-                reject(new Error(`Claude CLI 未登录。请在终端运行 "claude /login" 后重试。`));
-                return;
-              }
-              reject(new Error(`Claude CLI 返回错误：${errMsg}`));
+          // 先尝试解析 JSON，无论 exit code 是 0 还是 1：
+          // claude --output-format json 在 is_error=true 时（如未登录）也返回 1 +
+          // 完整 JSON，需要把 result 字段提取出来给友好错误，而不是 dump raw JSON。
+          let parsed: { is_error?: boolean; result?: unknown; message?: unknown; content?: unknown; error?: unknown } | null = null;
+          try { parsed = JSON.parse(stdout); } catch { /* not JSON */ }
+
+          if (parsed && parsed.is_error) {
+            const errMsg = String(parsed.result ?? parsed.error ?? '未知错误').trim();
+            if (/not logged in|please run \/login/i.test(errMsg)) {
+              reject(new Error(
+                `Claude CLI 未登录（子进程视角）。\n\n` +
+                `如果你的 Claude Code 在 VS Code/IDE 里能用，那是 IDE 插件模式 — ` +
+                `认证态在宿主进程内存里（CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1），` +
+                `不会持久化到磁盘，也无法共享给我们 spawn 的子进程。\n\n` +
+                `解决方法（任选一）：\n` +
+                `① 在 独立终端（PowerShell / Windows Terminal，非 VS Code 集成终端）里运行：\n` +
+                `     claude /login\n` +
+                `   走 OAuth 后凭据落盘，子进程就能复用。\n` +
+                `② 用 long-lived token：终端运行 "claude setup-token" 设一个长期 token。\n` +
+                `③ 或者切换到 Anthropic / OpenAI provider，填一个 API Key。`,
+              ));
               return;
             }
+            reject(new Error(`Claude CLI 返回错误：${errMsg}`));
+            return;
+          }
+
+          if (code !== 0) {
+            const tail = (stderr.trim() || stdout.trim()).slice(0, 300);
+            reject(new Error(`claude CLI 退出码 ${code}：${tail || '无错误输出'}`));
+            return;
+          }
+
+          let result = '';
+          if (parsed) {
             const r = parsed.result ?? parsed.message ?? parsed.content ?? '';
             result = typeof r === 'string' ? r : JSON.stringify(r);
-          } catch {
+          } else {
             result = stdout.trim();
           }
           if (typeof options?.onDelta === 'function' && result) {
