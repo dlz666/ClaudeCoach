@@ -234,35 +234,37 @@ html, body {
   background: color-mix(in srgb, var(--vscode-editor-selectionBackground, var(--accent)) 80%, transparent);
 }
 
-/* ===== chip ===== */
-
+/* ===== 蓝色按钮：固定在讲义右上角，始终可点 ===== */
+/* 旧设计是浮动 chip 跟着选区走，结果代码块 / 跨块选区 / 没选区都召不出来。
+   现在改成右上角常驻入口：有选区 → 针对选区提问；无选区 → 自动注入全文。 */
 .lecture-chip {
-  position: absolute;
+  position: fixed;
+  top: 16px;
+  right: 18px;
   z-index: 1000;
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
   background: linear-gradient(180deg, var(--accent-strong), var(--accent));
   color: var(--vscode-button-foreground);
-  font-size: 16px;
+  font-size: 17px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.30);
-  animation: chip-in 140ms ease-out;
-  transition: transform 120ms ease;
+  transition: transform 120ms ease, box-shadow 120ms ease;
   user-select: none;
 }
 
 .lecture-chip:hover {
   transform: scale(1.08);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.36);
 }
 
-@keyframes chip-in {
-  from { opacity: 0; transform: translateY(4px) scale(0.85); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+.lecture-chip:active {
+  transform: scale(0.96);
 }
 
 /* ===== popover (评论框) ===== */

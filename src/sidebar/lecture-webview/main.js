@@ -218,22 +218,27 @@
     }
   }
 
-  // ===== chip / popover =====
+  // ===== 蓝色按钮 / popover =====
+  // 按钮固定在右上角常驻，不再依赖选区显示。点击时：
+  //   - 有选区文本 → 走选区相关流程（rewrite/ask/idea），info 用 selection
+  //   - 没选区 → 用全文当 context（intent=ask 时把整篇 markdown 喂给 AI）
 
-  function hideChip() {
-    if (els.chip) els.chip.hidden = true;
-    currentSelectionInfo = null;
-  }
-
-  function showChipAt(info) {
-    if (!els.chip || !info || !info.rect) return;
-    currentSelectionInfo = info;
-    const rect = info.rect;
-    const top = window.scrollY + rect.top - 6;
-    const left = window.scrollX + rect.right + 8;
-    els.chip.style.top = `${Math.max(top, 8)}px`;
-    els.chip.style.left = `${Math.min(left, window.innerWidth - 48)}px`;
-    els.chip.hidden = false;
+  /** 收集当前选区；若没有有效选区，返回一个"全文"info 当 fallback。 */
+  function pickContextInfo() {
+    const info = helpers.getSelectionLineRange ? helpers.getSelectionLineRange(els.body) : null;
+    if (info && info.text && info.text.trim()) {
+      return info;
+    }
+    // 无选区 → 全文模式
+    const content = state.content || '';
+    const lines = content.split('\n');
+    return {
+      startLine: 0,
+      endLine: lines.length, // 半开区间，markdown-it 风格
+      text: '',               // 留空，让后端 inlineSuggest 用 cursorContext / documentContext
+      rect: null,
+      isFullDoc: true,
+    };
   }
 
   function hidePopover() {
@@ -245,29 +250,51 @@
 
   function showPopoverFor(info) {
     if (!els.popover || !info) return;
-    const rect = info.rect;
-    const top = window.scrollY + rect.bottom + 12;
-    const left = Math.max(16, Math.min(window.scrollX + rect.left, window.innerWidth - 420));
+    // 定位：如果 info 自带 rect（来自选区），popover 在选区下方；
+    // 否则（全文模式 / 没 rect）popover 锚到蓝色按钮左下方。
+    let top, left;
+    if (info.rect) {
+      top = window.scrollY + info.rect.bottom + 12;
+      left = Math.max(16, Math.min(window.scrollX + info.rect.left, window.innerWidth - 420));
+    } else {
+      const chipRect = els.chip?.getBoundingClientRect();
+      if (chipRect) {
+        top = window.scrollY + chipRect.bottom + 8;
+        // popover 往左展开，对齐 chip 右边
+        left = Math.max(16, window.scrollX + chipRect.right - 400);
+      } else {
+        top = window.scrollY + 60;
+        left = 16;
+      }
+    }
     els.popover.style.top = `${top}px`;
     els.popover.style.left = `${left}px`;
     els.popover.innerHTML = '';
 
     // 三种 mode：rewrite=改这段 / ask=提问 / idea=记一下想法（不改文件）
-    let currentMode = 'rewrite';
+    // 全文模式（无选区）下，rewrite 没意义（没东西可替换），默认走 ask。
+    let currentMode = info.isFullDoc ? 'ask' : 'rewrite';
 
     const heading = document.createElement('div');
     heading.className = 'popover-heading';
-    heading.textContent = `选中第 ${info.startLine + 1}–${info.endLine} 行`;
+    heading.textContent = info.isFullDoc
+      ? '📄 基于全文（未选中具体段落）'
+      : `选中第 ${info.startLine + 1}–${info.endLine} 行`;
     els.popover.appendChild(heading);
 
-    // mode 切换条
+    // mode 切换条。全文模式禁用 rewrite（没法替换不存在的选区）。
     const modeBar = document.createElement('div');
     modeBar.className = 'popover-mode-bar';
-    const modes = [
-      { key: 'rewrite', label: '🛠 改这段', hint: 'AI 输出会替换/插入到选区' },
-      { key: 'ask', label: '❓ 提问', hint: 'AI 会以聊天形式回答，不动讲义' },
-      { key: 'idea', label: '💡 记想法', hint: '把你的想法以脚注形式追加到这段下方，不调 AI' },
-    ];
+    const modes = info.isFullDoc
+      ? [
+          { key: 'ask', label: '❓ 提问', hint: 'AI 基于整篇讲义回答你的问题' },
+          { key: 'idea', label: '💡 记想法', hint: '把你的想法以引用块追加到讲义末尾' },
+        ]
+      : [
+          { key: 'rewrite', label: '🛠 改这段', hint: 'AI 输出会替换/插入到选区' },
+          { key: 'ask', label: '❓ 提问', hint: 'AI 会以聊天形式回答，不动讲义' },
+          { key: 'idea', label: '💡 记想法', hint: '把你的想法以脚注形式追加到这段下方，不调 AI' },
+        ];
     const modeButtons = modes.map((m) => {
       const btn = document.createElement('button');
       btn.className = 'popover-mode-btn' + (m.key === currentMode ? ' active' : '');
@@ -337,19 +364,16 @@
         submitInlineIdea(info, instruction);
       }
       hidePopover();
-      hideChip();
     }
 
     btnSubmit.addEventListener('click', submit);
     btnCancel.addEventListener('click', () => {
       hidePopover();
-      hideChip();
     });
     textarea.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         hidePopover();
-        hideChip();
         return;
       }
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -715,39 +739,13 @@
   }
 
   // ===== events =====
-
-  function onSelectionEnd() {
-    const info = helpers.getSelectionLineRange ? helpers.getSelectionLineRange(els.body) : null;
-    if (!info || !info.text || !info.text.trim()) {
-      hideChip();
-      return;
-    }
-    showChipAt(info);
-  }
-
-  document.addEventListener('mouseup', () => {
-    // 让 selection 状态稳定
-    setTimeout(onSelectionEnd, 0);
-  });
-
-  document.addEventListener('keyup', (e) => {
-    if (e.key === 'Shift' || e.key === 'ArrowLeft' || e.key === 'ArrowRight'
-        || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Home' || e.key === 'End') {
-      onSelectionEnd();
-    }
-  });
-
-  document.addEventListener('selectionchange', () => {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) {
-      // 评论框打开时不要被收起
-      if (els.popover && !els.popover.hidden) return;
-      hideChip();
-    }
-  });
+  // 旧实现用 mouseup/selectionchange/keyup 监听选区变化来 show/hide chip——
+  // 这在代码块 / 跨块选区 / 没选区时全部失败（用户能选中但 chip 召不出来）。
+  // 新实现：chip 是右上角常驻按钮，永远在那儿，不依赖任何选区事件。
+  // 点击 chip → pickContextInfo() 自己判断当前是不是有选区，渲染对应 popover。
 
   document.addEventListener('mousedown', (e) => {
-    // 点 chip 自身不收
+    // 点 chip 自身不收 popover
     if (e.target.closest && e.target.closest('#chip')) return;
     // 点评论框 / 气泡内部不收
     if (e.target.closest && (e.target.closest('#popover') || e.target.closest('.lecture-suggestion-bubble'))) return;
@@ -757,7 +755,6 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       hidePopover();
-      hideChip();
     }
   });
 
@@ -773,8 +770,11 @@
 
   if (els.chip) {
     els.chip.addEventListener('click', () => {
-      if (!currentSelectionInfo) return;
-      showPopoverFor(currentSelectionInfo);
+      // 每次点击都重新取一次 selection：用户可能在打开 popover 前选好了一段，
+      // 也可能什么都没选；pickContextInfo 处理两种情况。
+      const info = pickContextInfo();
+      currentSelectionInfo = info;
+      showPopoverFor(info);
     });
   }
 

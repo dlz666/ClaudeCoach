@@ -343,9 +343,13 @@ export class LectureWebviewProvider {
 
       if (intent === 'ask') {
         // 提问模式：用一个简短 system + 把选区 + 上下文 + 问题给 AI，要求"以聊天形式回答"
+        const isFullDoc = !request.selectionText || !request.selectionText.trim();
+        const contextDescription = isFullDoc
+          ? '学生在阅读整篇讲义后提出了问题。请基于整篇讲义内容回答，不要重写或修改原文。'
+          : '学生选中了讲义中的一段内容并提出问题。请直接回答，不要重写或修改原文。';
         const askInstruction = [
           '【任务模式：提问/解释，不修改讲义】',
-          '学生选中了讲义中的一段内容并提出问题。请直接回答，不要重写或修改原文。',
+          contextDescription,
           '回答可以是 Markdown，可以含公式 / 代码示例 / 列表。要简明、聚焦问题本身。',
           '',
           `用户问题：${request.instruction}`,
