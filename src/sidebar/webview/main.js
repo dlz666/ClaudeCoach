@@ -2962,6 +2962,12 @@
   /** 缓存所有项目元数据，rendering 时按 state.selectedSubject 过滤。 */
   state.allProjects = state.allProjects || [];
 
+  /**
+   * 扁平统一渲染：每个项目（提案 / 真项目）只显示一张卡。
+   *   - 提案未落地 → 简洁提案卡（标题 + ⭐ + 描述 + 推荐技术栈 + 落地按钮）
+   *   - 提案已落地 → 完整真项目卡（在标题旁带 ⭐ 难度徽章）
+   *   - 手动创建（无提案）→ 完整真项目卡（无 ⭐）
+   */
   function renderProjectsList() {
     const el = document.getElementById('projects-list');
     if (!el) return;
@@ -2970,75 +2976,142 @@
       el.innerHTML = '<p class="muted">请先选择课程。</p>';
       return;
     }
-    const items = (state.allProjects || []).filter((m) => m.subject === subject);
-    if (items.length === 0) {
-      el.innerHTML = '<p class="muted">还没有项目，点上方"＋ 新项目"创建一个。</p>';
+
+    const course = (state.courses || []).find((c) => c.subject === subject);
+    const proposals = Array.isArray(course?.projects) ? course.projects : [];
+    const realProjects = (state.allProjects || []).filter((m) => m.subject === subject);
+
+    // realizedAs → real project meta 快速查表
+    const realProjectById = new Map(realProjects.map((p) => [p.id, p]));
+    // 哪些 real project 来自 proposal（不在这个 set 里的就是手动创建）
+    const projectsFromProposal = new Set();
+    for (const p of proposals) {
+      if (p.realizedAs && realProjectById.has(p.realizedAs)) {
+        projectsFromProposal.add(p.realizedAs);
+      }
+    }
+
+    const cards = [];
+
+    // 1) 先渲染提案（未落地 → 简洁卡；已落地 → 完整真项目卡 + ⭐ 徽章）
+    for (const p of proposals) {
+      const real = p.realizedAs ? realProjectById.get(p.realizedAs) : null;
+      if (real) {
+        cards.push(buildRealProjectCard(real, p.difficulty));
+      } else {
+        cards.push(buildProposalCard(p, subject));
+      }
+    }
+    // 2) 再渲染手动创建的真项目（没在 proposal.realizedAs 链上）
+    for (const real of realProjects) {
+      if (projectsFromProposal.has(real.id)) continue;
+      cards.push(buildRealProjectCard(real, null));
+    }
+
+    if (cards.length === 0) {
+      el.innerHTML = '<p class="muted">还没有项目，点上方"＋ 新项目"创建，或先生成有 tag 的课程拿到 AI 推荐。</p>';
       return;
     }
     el.innerHTML = '';
-    for (const meta of items) {
-      const card = document.createElement('div');
-      card.className = 'project-card';
-      card.dataset.projectId = meta.id;
-      const completed = meta.progress?.completedTodos ?? 0;
-      const total = meta.progress?.totalTodos ?? 0;
-      const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-      const statusLabel = {
-        'spec-pending': '生成中',
-        'scaffolded': '已生成',
-        'in-progress': '进行中',
-        'completed': '已完成',
-        'archived': '已归档',
-      }[meta.status] || meta.status;
+    for (const card of cards) el.appendChild(card);
+  }
 
-      const techStackChips = (meta.techStack || [])
-        .filter((s) => typeof s === 'string' && s.trim())
-        .map((s) => `<span class="pc-stack-chip">${escapeProjHtml(s)}</span>`)
-        .join('');
-      const projectDirShort = meta.projectDir
-        ? meta.projectDir.split(/[/\\]/).slice(-2).join('/')
-        : '';
+  /** 未落地的提案 → 简洁卡（标题 + ⭐ + desc + suggestedTechStack + 落地按钮）。 */
+  function buildProposalCard(p, subject) {
+    const card = document.createElement('div');
+    card.className = 'project-card proposal-pending';
+    card.dataset.proposalId = p.id;
+    const stars = '⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)));
+    const stackChips = (p.suggestedTechStack || [])
+      .filter((s) => typeof s === 'string' && s.trim())
+      .map((s) => `<span class="pc-stack-chip">${escapeProjHtml(s)}</span>`)
+      .join('');
+    card.innerHTML = `
+      <div class="project-card-header">
+        <p class="project-card-title">${escapeProjHtml(p.title || '')}</p>
+        <span class="pc-diff" title="AI 评估的实现难度">${stars}</span>
+      </div>
+      <p class="project-card-desc">${escapeProjHtml(p.description || '')}</p>
+      ${stackChips ? `<div class="pc-stack-row">${stackChips}</div>` : ''}
+      <div class="project-card-actions">
+        <button class="btn primary small" data-act="realize-proposal">落地为项目</button>
+      </div>
+    `;
+    card.querySelector('[data-act="realize-proposal"]').addEventListener('click', () => {
+      vscode.postMessage({ type: 'realizeProjectFromProposal', subject, proposalId: p.id });
+    });
+    return card;
+  }
 
-      card.innerHTML = `
-        <div class="project-card-header">
-          <p class="project-card-title">${escapeProjHtml(meta.title)}</p>
+  /** 真项目（已落地或手动创建）→ 完整信息卡。fromProposalDifficulty 给 ⭐ 徽章用。 */
+  function buildRealProjectCard(meta, fromProposalDifficulty) {
+    const card = document.createElement('div');
+    card.className = 'project-card';
+    card.dataset.projectId = meta.id;
+    const completed = meta.progress?.completedTodos ?? 0;
+    const total = meta.progress?.totalTodos ?? 0;
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const statusLabel = {
+      'spec-pending': '生成中',
+      'scaffolded': '已生成',
+      'in-progress': '进行中',
+      'completed': '已完成',
+      'archived': '已归档',
+    }[meta.status] || meta.status;
+
+    const techStackChips = (meta.techStack || [])
+      .filter((s) => typeof s === 'string' && s.trim())
+      .map((s) => `<span class="pc-stack-chip">${escapeProjHtml(s)}</span>`)
+      .join('');
+    const projectDirShort = meta.projectDir
+      ? meta.projectDir.split(/[/\\]/).slice(-2).join('/')
+      : '';
+    const starsBadge = typeof fromProposalDifficulty === 'number'
+      ? `<span class="pc-diff" title="来自 AI 提案，难度 ${fromProposalDifficulty}/5">${'⭐'.repeat(Math.max(1, Math.min(5, fromProposalDifficulty)))}</span>`
+      : '';
+
+    card.innerHTML = `
+      <div class="project-card-header">
+        <p class="project-card-title">${escapeProjHtml(meta.title)}</p>
+        <div class="pc-header-right">
+          ${starsBadge}
           <span class="project-status-${meta.status} pc-status">● ${statusLabel}</span>
         </div>
-        <p class="project-card-desc">${escapeProjHtml(meta.description)}</p>
-        ${techStackChips ? `<div class="pc-stack-row">${techStackChips}</div>` : ''}
-        <div class="pc-info-row">
-          <span class="pc-info-item" title="测试命令"><span class="pc-info-icon">⌨</span> <code>${escapeProjHtml(meta.testCommand || 'npm test')}</code></span>
-          <span class="pc-info-item" title="任务进度"><span class="pc-info-icon">✓</span> ${completed} / ${total} todo</span>
+      </div>
+      <p class="project-card-desc">${escapeProjHtml(meta.description)}</p>
+      ${techStackChips ? `<div class="pc-stack-row">${techStackChips}</div>` : ''}
+      <div class="pc-info-row">
+        <span class="pc-info-item" title="测试命令"><span class="pc-info-icon">⌨</span> <code>${escapeProjHtml(meta.testCommand || 'npm test')}</code></span>
+        <span class="pc-info-item" title="任务进度"><span class="pc-info-icon">✓</span> ${completed} / ${total} todo</span>
+      </div>
+      ${projectDirShort ? `<div class="pc-info-row pc-dir-row" title="${escapeProjHtml(meta.projectDir)}"><span class="pc-info-icon">📁</span> <code>${escapeProjHtml(projectDirShort)}</code></div>` : ''}
+      <div class="project-card-progress">
+        <div class="project-card-progress-bar">
+          <div class="project-card-progress-fill" style="width: ${pct}%"></div>
         </div>
-        ${projectDirShort ? `<div class="pc-info-row pc-dir-row" title="${escapeProjHtml(meta.projectDir)}"><span class="pc-info-icon">📁</span> <code>${escapeProjHtml(projectDirShort)}</code></div>` : ''}
-        <div class="project-card-progress">
-          <div class="project-card-progress-bar">
-            <div class="project-card-progress-fill" style="width: ${pct}%"></div>
-          </div>
-          <span class="pc-pct">${pct}%</span>
-        </div>
-        <div class="project-card-actions">
-          <button class="btn primary small" data-act="open">在 IDE 打开</button>
-          <button class="btn ghost small" data-act="mark-done">标记完成</button>
-          <button class="btn ghost small" data-act="delete">从列表移除</button>
-        </div>
-      `;
-      card.querySelector('[data-act="open"]').addEventListener('click', () => {
-        vscode.postMessage({ type: 'openProject', projectId: meta.id });
+        <span class="pc-pct">${pct}%</span>
+      </div>
+      <div class="project-card-actions">
+        <button class="btn primary small" data-act="open">在 IDE 打开</button>
+        <button class="btn ghost small" data-act="mark-done">标记完成</button>
+        <button class="btn ghost small" data-act="delete">从列表移除</button>
+      </div>
+    `;
+    card.querySelector('[data-act="open"]').addEventListener('click', () => {
+      vscode.postMessage({ type: 'openProject', projectId: meta.id });
+    });
+    card.querySelector('[data-act="mark-done"]').addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'updateProjectProgress',
+        projectId: meta.id,
+        completedTodos: total,
+        status: 'completed',
       });
-      card.querySelector('[data-act="mark-done"]').addEventListener('click', () => {
-        vscode.postMessage({
-          type: 'updateProjectProgress',
-          projectId: meta.id,
-          completedTodos: total,
-          status: 'completed',
-        });
-      });
-      card.querySelector('[data-act="delete"]').addEventListener('click', () => {
-        vscode.postMessage({ type: 'deleteProject', projectId: meta.id, purgeFiles: false });
-      });
-      el.appendChild(card);
-    }
+    });
+    card.querySelector('[data-act="delete"]').addEventListener('click', () => {
+      vscode.postMessage({ type: 'deleteProject', projectId: meta.id, purgeFiles: false });
+    });
+    return card;
   }
 
   function escapeProjHtml(s) {
@@ -3061,7 +3134,7 @@
    */
   const PROJECT_ELIGIBLE_TAGS = new Set(['cs-skill', 'cs-theory', 'engineering']);
 
-  /** 当 selectedSubject / 课程 tags 变化时，刷新课程项目区显隐 + 两个 subsection。 */
+  /** 当 selectedSubject / 课程 tags 变化时，刷新项目区显隐 + 拉真项目列表。 */
   function refreshCourseProjectsSection() {
     const sec = document.getElementById('course-projects-section');
     if (!sec) return;
@@ -3074,56 +3147,11 @@
     const eligible = tags.some((t) => PROJECT_ELIGIBLE_TAGS.has(t));
     sec.classList.toggle('hidden', !eligible);
     if (eligible) {
-      renderCourseProjectProposals();              // 📋 推荐 subsection（同步，从 state.courses 里读）
-      vscode.postMessage({ type: 'listProjects' }); // ✓ 已创建 subsection（异步，回 'projectsList' 后 render）
+      // 拉真项目列表（异步），回 'projectsList' 后会触发 renderProjectsList 重新合并
+      vscode.postMessage({ type: 'listProjects' });
+      // 先同步根据 state.courses 里的 outline.projects 渲染一版（已落地的会等 listProjects 回来再合并）
+      renderProjectsList();
     }
-  }
-
-  /**
-   * 渲染"📋 推荐"subsection。数据源：当前 course.projects（outline 里 AI 附带的提案）。
-   * 数据天然在 state.courses 里，不需要后端请求。
-   */
-  function renderCourseProjectProposals() {
-    const wrap = document.getElementById('proj-subsection-proposals');
-    const list = document.getElementById('proposals-list');
-    if (!wrap || !list) return;
-    if (!state.selectedSubject) {
-      wrap.hidden = true;
-      return;
-    }
-    const course = (state.courses || []).find((c) => c.subject === state.selectedSubject);
-    const proposals = Array.isArray(course?.projects) ? course.projects : [];
-    if (proposals.length === 0) {
-      wrap.hidden = true;
-      return;
-    }
-    wrap.hidden = false;
-    list.innerHTML = proposals.map((p) => `
-      <div class="proposal-card" data-proposal-id="${escapeProjHtml(p.id)}">
-        <div class="proposal-card-head">
-          <span class="proposal-card-title">${escapeProjHtml(p.title || '')}</span>
-          <span class="proposal-card-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
-        </div>
-        <p class="proposal-card-desc">${escapeProjHtml(p.description || '')}</p>
-        ${(p.suggestedTechStack || []).length
-          ? `<div class="proposal-card-stack">${(p.suggestedTechStack || []).map((s) => `<span class="proposal-card-stack-pill">${escapeProjHtml(s)}</span>`).join('')}</div>`
-          : ''}
-        <div class="proposal-card-actions">
-          ${p.realizedAs
-            ? `<button class="btn small ghost" disabled>✓ 已落地</button>`
-            : `<button class="btn small primary" data-act="realize-proposal" data-subject="${escapeProjHtml(course.subject)}" data-proposal-id="${escapeProjHtml(p.id)}">落地为项目</button>`}
-        </div>
-      </div>
-    `).join('');
-    list.querySelectorAll('[data-act="realize-proposal"]').forEach((btn) => {
-      btn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const subject = btn.getAttribute('data-subject');
-        const proposalId = btn.getAttribute('data-proposal-id');
-        if (!subject || !proposalId) return;
-        vscode.postMessage({ type: 'realizeProjectFromProposal', subject, proposalId });
-      });
-    });
   }
 
   // ＋ 新项目按钮：折叠/展开创建表单
