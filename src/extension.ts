@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getAIConfig, getDataDirectory } from './config';
+import { getDataDirectory } from './config';
 import { SidebarProvider } from './sidebar/SidebarProvider';
 import { ensureDir } from './utils/fileSystem';
 import { AIProfileManager } from './ai/profileManager';
@@ -208,16 +208,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
   await refreshStatusBar();
 
-  const resolved = await getAIConfig();
-  if (!resolved.apiToken && resolved.provider !== 'claude_code_cli') {
-    const action = await vscode.window.showWarningMessage(
-      'ClaudeCoach: 当前 AI 配置缺少 API Token，请在设置页查看当前模型配置。',
-      '打开设置页',
-    );
-    if (action === '打开设置页') {
-      await revealAIConfigCard(sidebarProvider);
-    }
-  }
+  // 不在启动时弹模态警告 —— 会阻塞 activate() 直到用户点击，影响 webview 初始化。
+  // 缺 API Token / OAuth 等问题，由 sidebar 内的 hero 状态卡负责显示（橙/红 + 警告 pill）。
 }
 
 export function deactivate() {}
