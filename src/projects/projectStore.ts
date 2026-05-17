@@ -180,6 +180,39 @@ export class ProjectStore {
   }
 
   /**
+   * 清空项目目录里的代码文件，**保留** .coach-meta + .coach-spec + 列表条目。
+   *   - 用途：用户想重新生成代码（旧代码 TODO 太多、或试错搞乱了）
+   *   - 实现：rm -rf 整个目录 → 重新 ensureDir → 写回 meta（status='files-cleared'）+ spec
+   *   - 列表里这个项目卡片仍然显示，但用户能看到"已清空"状态
+   */
+  async clearProjectFiles(projectId: string): Promise<ProjectMeta | null> {
+    const loc = await this.resolveProjectLocation(projectId);
+    if (!loc) return null;
+
+    // 先把 meta + spec 读出来（rm 之后磁盘上没了）
+    const meta = await this.readMeta(loc.subject, loc.dirName);
+    if (!meta) return null;
+    const spec = await this.readSpec(loc.subject, loc.dirName);
+
+    // rm -rf 整个项目目录
+    if (await fileExists(loc.projectDir)) {
+      await fs.rm(loc.projectDir, { recursive: true, force: true });
+    }
+
+    // 重建空目录 + 写回 meta（状态改 files-cleared）+ spec
+    await this.createProjectDir(loc.subject, loc.dirName);
+    const updatedMeta: ProjectMeta = {
+      ...meta,
+      status: 'files-cleared',
+      updatedAt: new Date().toISOString(),
+    };
+    await this.writeMeta(updatedMeta);
+    if (spec) await this.writeSpec(loc.subject, loc.dirName, spec);
+
+    return updatedMeta;
+  }
+
+  /**
    * 删除项目。
    *   - `purgeFiles=false`：仅删索引 + .coach-meta.json + .coach-spec.json，
    *     user 的代码留着。

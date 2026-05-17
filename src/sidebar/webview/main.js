@@ -3043,7 +3043,8 @@
     return card;
   }
 
-  /** 真项目（已落地或手动创建）→ 完整信息卡。fromProposalDifficulty 给 ⭐ 徽章用。 */
+  /** 真项目（已落地或手动创建）→ 完整信息卡。fromProposalDifficulty 给 ⭐ 徽章用。
+   *  fromProposal=true 时显示"↩ 回退到提案"按钮（手动创建的不显示）。 */
   function buildRealProjectCard(meta, fromProposalDifficulty) {
     const card = document.createElement('div');
     card.className = 'project-card';
@@ -3056,8 +3057,10 @@
       'scaffolded': '已生成',
       'in-progress': '进行中',
       'completed': '已完成',
+      'files-cleared': '已清空',
       'archived': '已归档',
     }[meta.status] || meta.status;
+    const fromProposal = typeof fromProposalDifficulty === 'number';
 
     const techStackChips = (meta.techStack || [])
       .filter((s) => typeof s === 'string' && s.trim())
@@ -3094,6 +3097,10 @@
       <div class="project-card-actions">
         <button class="btn primary small" data-act="open">在 IDE 打开</button>
         <button class="btn ghost small" data-act="mark-done">标记完成</button>
+        <button class="btn ghost small" data-act="clear-files" title="清空代码文件，保留 meta + spec，可以重新生成">🗑 删除项目文件</button>
+        ${fromProposal
+          ? `<button class="btn ghost small" data-act="revert-proposal" title="完全删除并退回为推荐提案，可以再次落地（用最新生成 prompt）">↩ 回退到提案</button>`
+          : ''}
         <button class="btn ghost small" data-act="delete">从列表移除</button>
       </div>
     `;
@@ -3108,6 +3115,14 @@
         status: 'completed',
       });
     });
+    card.querySelector('[data-act="clear-files"]').addEventListener('click', () => {
+      vscode.postMessage({ type: 'clearProjectFiles', projectId: meta.id });
+    });
+    if (fromProposal) {
+      card.querySelector('[data-act="revert-proposal"]').addEventListener('click', () => {
+        vscode.postMessage({ type: 'revertProjectToProposal', projectId: meta.id });
+      });
+    }
     card.querySelector('[data-act="delete"]').addEventListener('click', () => {
       vscode.postMessage({ type: 'deleteProject', projectId: meta.id, purgeFiles: false });
     });

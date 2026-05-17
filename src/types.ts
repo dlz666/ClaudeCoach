@@ -1018,6 +1018,7 @@ export type ProjectStatus =
   | 'scaffolded'      // 文件已写到磁盘，user 可以打开 IDE 开干
   | 'in-progress'     // user 报告了至少一次进展
   | 'completed'       // user 标记已完成
+  | 'files-cleared'   // 项目文件已被用户清空（仅保留 .coach-meta + .coach-spec），等待重新生成
   | 'archived';       // 归档不再追踪
 
 /** 单个文件在 project 里的角色。决定 user 看到它时该怎么对待。 */
@@ -1345,7 +1346,13 @@ export type SidebarCommand =
   | { type: 'updateProjectProgress'; projectId: string; completedTodos: number; status?: ProjectStatus }
   | { type: 'getProjectSpec'; projectId: string }
   /** 把大纲里的 CourseProjectProposal 落地为真项目（auto-fill 项目生成）。 */
-  | { type: 'realizeProjectFromProposal'; subject: Subject; proposalId: string };
+  | { type: 'realizeProjectFromProposal'; subject: Subject; proposalId: string }
+  /** 清空项目目录里的所有代码文件，**保留** .coach-meta + .coach-spec + 列表条目。
+   * 用于"我想重新生成代码"场景，不删 meta 是为了保留 desc / techStack / 进度等元数据。 */
+  | { type: 'clearProjectFiles'; projectId: string }
+  /** 把一个**从提案落地而来**的真项目完全退回提案阶段：删项目目录 + 删 meta +
+   * 清掉 proposal.realizedAs，让提案卡片重新出现可供再次"落地为项目"。 */
+  | { type: 'revertProjectToProposal'; projectId: string };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }

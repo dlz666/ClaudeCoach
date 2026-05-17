@@ -3097,6 +3097,68 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'clearProjectFiles': {
+          const choice = await vscode.window.showWarningMessage(
+            '清空项目目录里的所有代码文件？元数据（.coach-meta、.coach-spec）会保留，卡片继续显示在列表里，方便之后重新生成。',
+            { modal: true },
+            '清空代码文件',
+          );
+          if (!choice) break;
+          const meta = await this.projectStore.clearProjectFiles(msg.projectId);
+          if (meta) {
+            this._post({ type: 'projectProgressUpdated', meta });
+            this._post({ type: 'log', message: `已清空项目文件：${meta.title}（保留 meta，可重新生成）`, level: 'info' });
+          } else {
+            this._post({ type: 'error', message: '找不到项目，无法清空。' });
+          }
+          break;
+        }
+
+        case 'revertProjectToProposal': {
+          // 把"已落地的项目"完全退回为提案：删项目目录 + 删 meta + 清 outline 里
+          // 对应 proposal 的 realizedAs → 提案卡片重新出现可再次"落地"。
+          const meta = await this.projectStore.readMetaByProjectId(msg.projectId);
+          if (!meta) {
+            this._post({ type: 'error', message: '找不到项目。' });
+            break;
+          }
+          const linkedSubject = meta.linkedCourse?.subject;
+          if (!linkedSubject) {
+            this._post({
+              type: 'error',
+              message: '该项目不来自大纲提案（无 linkedCourse），无法回退到提案；请改用"清空代码文件"或"从列表移除"。',
+            });
+            break;
+          }
+          const outline = await this.courseManager.getCourseOutline(linkedSubject);
+          const proposal = (outline?.projects || []).find((p) => p.realizedAs === msg.projectId);
+          if (!proposal || !outline) {
+            this._post({
+              type: 'error',
+              message: '找不到对应的提案（可能大纲被改过），无法回退。',
+            });
+            break;
+          }
+          const choice = await vscode.window.showWarningMessage(
+            `把"${meta.title}"退回为提案？项目目录会被完全删除，提案卡片"${proposal.title}"会重新出现在课程项目区，可以再次落地为项目（用最新的生成 prompt）。`,
+            { modal: true },
+            '回退到提案',
+          );
+          if (!choice) break;
+
+          // 1. 清掉 proposal.realizedAs（让 outline 知道这个提案没落地了）
+          proposal.realizedAs = undefined;
+          await this.courseManager.saveCourseOutline(linkedSubject, outline);
+
+          // 2. 删项目目录 + meta + 索引
+          await this.projectStore.deleteProject(msg.projectId, { purgeFiles: true });
+
+          this._post({ type: 'projectDeleted', projectId: msg.projectId });
+          this._post({ type: 'log', message: `项目"${meta.title}"已退回为提案`, level: 'info' });
+          await this._refreshCourses();
+          break;
+        }
+
         case 'importMaterial': {
           const entry = await this.materialManager.importMaterial(msg.subject);
           if (entry) {

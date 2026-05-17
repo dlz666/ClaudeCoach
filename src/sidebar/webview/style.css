@@ -2907,11 +2907,12 @@ pre.hljs code,
   flex-wrap: wrap;
 }
 
-.project-status-spec-pending { color: var(--vscode-descriptionForeground); }
-.project-status-scaffolded   { color: var(--vscode-charts-blue, #4099e8); }
-.project-status-in-progress  { color: var(--vscode-charts-yellow, #d4a73d); }
-.project-status-completed    { color: var(--vscode-charts-green, #4caf50); }
-.project-status-archived     { color: var(--vscode-descriptionForeground); opacity: 0.6; }
+.project-status-spec-pending  { color: var(--vscode-descriptionForeground); }
+.project-status-scaffolded    { color: var(--vscode-charts-blue, #4099e8); }
+.project-status-in-progress   { color: var(--vscode-charts-yellow, #d4a73d); }
+.project-status-completed     { color: var(--vscode-charts-green, #4caf50); }
+.project-status-files-cleared { color: var(--vscode-charts-orange, #d18d40); }
+.project-status-archived      { color: var(--vscode-descriptionForeground); opacity: 0.6; }
 
 /* ===== 🛠 项目面板：扁平统一卡片（提案 + 真项目混排） ===== */
 
