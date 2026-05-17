@@ -398,10 +398,18 @@ export class AIProfileManager {
   private normalizeProfile(input: Partial<AIProfile>, index: number): AIProfile {
     const fallback = this.createDefaultProfile();
     const now = new Date().toISOString();
+
+    // 自动迁移：旧版本"Claude Code CLI"profile 创建时 provider 类型还不存在，
+    // 落到了 anthropic（默认值）。识别 source 或 name 提示，强制改回 claude_code_cli。
+    const wantsClaudeCli =
+      (input as { source?: string }).source === 'claude-code-cli' ||
+      /claude\s*code\s*cli/i.test(input.name || '');
+
     return {
       id: input.id || `profile-${Date.now()}-${index}`,
       name: input.name?.trim() || `AI 配置 ${index + 1}`,
-      provider: input.provider === 'anthropic' ? 'anthropic'
+      provider: wantsClaudeCli ? 'claude_code_cli'
+        : input.provider === 'anthropic' ? 'anthropic'
         : input.provider === 'claude_code_cli' ? 'claude_code_cli'
         : 'openai',
       baseUrl: input.baseUrl?.trim() || fallback.baseUrl,
