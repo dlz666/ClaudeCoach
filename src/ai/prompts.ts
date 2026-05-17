@@ -238,8 +238,8 @@ export interface PromptContext {
   learningGoal?: string;
   /** 已有基础：用户表明自己已会的部分，AI 跳过/精简对应内容。 */
   existingKnowledge?: string;
-  /** 大纲规模偏好。 */
-  outlineSize?: 'concise' | 'standard' | 'detailed';
+  /** 大纲规模偏好。ai-decide = 不约束。 */
+  outlineSize?: 'ai-decide' | 'quick' | 'half-semester' | 'full-semester';
   /** 偏重风格（多选）：practice=实战 / theory=理论 / drill=题型熟练 / intuition=概念直觉。 */
   styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
 }
@@ -564,9 +564,11 @@ export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: Cou
 /** 大纲规模 → 主题数 + 课时数 hint。 */
 function outlineSizeRule(size?: PromptContext['outlineSize']): string {
   switch (size) {
-    case 'concise':  return '- 包含 3 到 5 个主题，每个主题 2 到 4 节课（精炼、聚焦核心）';
-    case 'detailed': return '- 包含 8 到 12 个主题，每个主题 4 到 6 节课（详尽、覆盖周边）';
-    default:         return '- 包含 5 到 8 个主题，每个主题 3 到 5 节课';
+    case 'quick':         return '- 短期速览：3 到 5 个主题，每个主题 2 到 3 节课（共约 10 节，聚焦核心）';
+    case 'half-semester': return '- 半学期：5 到 8 个主题，每个主题 3 到 4 节课（共约 20 节，主流路径）';
+    case 'full-semester': return '- 长学期：8 到 12 个主题，每个主题 4 到 6 节课（共约 40-70 节，详尽覆盖周边）';
+    case 'ai-decide':
+    default:              return '- 你自己根据学科广度和复杂度判断合适的主题数和课时数，不要硬凑';
   }
 }
 

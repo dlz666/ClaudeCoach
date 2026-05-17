@@ -52,8 +52,8 @@ interface GenerationContext {
   learningGoal?: string;
   /** 已有基础：用户表明自己已会的部分，AI 跳过。 */
   existingKnowledge?: string;
-  /** 大纲规模偏好：决定 topic / lesson 颗粒度。 */
-  outlineSize?: 'concise' | 'standard' | 'detailed';
+  /** 大纲规模偏好：决定 topic / lesson 颗粒度。ai-decide = 不约束。 */
+  outlineSize?: 'ai-decide' | 'quick' | 'half-semester' | 'full-semester';
   /** 偏重风格（多选）：practice / theory / drill / intuition。 */
   styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
   /**

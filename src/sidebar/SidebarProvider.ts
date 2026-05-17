@@ -91,7 +91,7 @@ interface CoursePreviewCacheEntry {
     difficulty?: 'beginner' | 'basic' | 'intermediate' | 'challenge';
     learningGoal?: string;
     existingKnowledge?: string;
-    outlineSize?: 'concise' | 'standard' | 'detailed';
+    outlineSize?: 'ai-decide' | 'quick' | 'half-semester' | 'full-semester';
     styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
     instruction?: string;
   };

@@ -1094,7 +1094,7 @@ export type SidebarCommand =
       /** 已有基础：用户表明的"我已经会的部分"，AI 会跳过。 */
       existingKnowledge?: string;
       /** 大纲规模偏好：决定 topic / lesson 颗粒度。 */
-      outlineSize?: 'concise' | 'standard' | 'detailed';
+      outlineSize?: 'ai-decide' | 'quick' | 'half-semester' | 'full-semester';
       /** 偏重风格（可多选）：影响讲义结构、出题分布、复习节奏。 */
       styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
       /** 兜底：自然语言额外说明 / 限制。 */
