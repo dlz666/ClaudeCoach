@@ -2823,9 +2823,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'error', message: '找不到该项目，可能已被删除。' });
             break;
           }
-          // 在新 VS Code 窗口里打开项目目录（不替换当前 ClaudeCoach 工作区）
           const uri = vscode.Uri.file(meta.projectDir);
-          await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+          const folders = vscode.workspace.workspaceFolders || [];
+          const already = folders.findIndex((f) => f.uri.fsPath === uri.fsPath);
+          if (already < 0) {
+            // 加入当前工作区（单根 → 自动升级为 multi-root，ClaudeCoach 侧边栏不丢）
+            const ok = vscode.workspace.updateWorkspaceFolders(folders.length, 0, { uri, name: meta.title || undefined });
+            if (!ok) {
+              this._post({ type: 'error', message: '无法把项目加进当前工作区，已回退到新窗口打开。' });
+              await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+              this._post({ type: 'projectOpened', projectId: msg.projectId, projectDir: meta.projectDir });
+              break;
+            }
+          }
+          // 在 Explorer 里展开/聚焦到这个 folder
+          await vscode.commands.executeCommand('revealInExplorer', uri);
           this._post({ type: 'projectOpened', projectId: msg.projectId, projectDir: meta.projectDir });
           break;
         }
