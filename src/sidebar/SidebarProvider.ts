@@ -227,9 +227,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _refreshCourses() {
-    await this.courseManager.syncLessonStatuses();
+    // FAST PATH: 先把 outline 列表立刻推给 webview。
+    // syncLessonStatuses 涉及 N×M×L 次 fs.access（每个 lesson 3-5 次），
+    // 串行跑起来 30s+ 卡 webview "课程" 显示。把它移到后台 + 并行，跑完
+    // 只有真的有状态变化才二次推送。
     const courses = await this.courseManager.getAllCourses();
     this._post({ type: 'courses', data: courses });
+
+    void this.courseManager.syncLessonStatuses(undefined, courses).then(async (changed) => {
+      if (!changed) return;
+      const updated = await this.courseManager.getAllCourses();
+      this._post({ type: 'courses', data: updated });
+    }).catch((err) => {
+      console.warn('[SidebarProvider] background syncLessonStatuses failed:', err);
+    });
   }
 
   private async _refreshWrongQuestions(subject: Subject) {

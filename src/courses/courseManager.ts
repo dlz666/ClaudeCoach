@@ -346,16 +346,20 @@ export class CourseManager {
   async getAllCourses(): Promise<CourseOutline[]> {
     const subjects = new Set<string>();
 
-    for (const subject of await this.listDirectoryNames(this.paths.workspaceCoursesDir)) {
-      subjects.add(subject);
-    }
-    for (const subject of await this.listDirectoryNames(this.paths.legacyDataRoot)) {
-      subjects.add(subject);
-    }
+    // 两个目录扫描可并行
+    const [workspaceDirs, legacyDirs] = await Promise.all([
+      this.listDirectoryNames(this.paths.workspaceCoursesDir),
+      this.listDirectoryNames(this.paths.legacyDataRoot),
+    ]);
+    for (const subject of workspaceDirs) subjects.add(subject);
+    for (const subject of legacyDirs) subjects.add(subject);
 
+    // 并行读各 subject 的 outline（之前串行 await 每个，课多了线性叠加）
+    const results = await Promise.all(
+      Array.from(subjects).map((subject) => this.getCourseOutline(subject))
+    );
     const courses: CourseOutline[] = [];
-    for (const subject of subjects) {
-      const outline = await this.getCourseOutline(subject);
+    for (const outline of results) {
       if (outline) {
         courses.push(outline);
       }
@@ -657,32 +661,62 @@ export class CourseManager {
     return nextStatus;
   }
 
-  async syncLessonStatuses(subject?: Subject): Promise<void> {
-    const outlines = subject
-      ? [await this.getCourseOutline(subject)]
-      : await this.getAllCourses();
+  /**
+   * 同步所有课时 status（in-progress / completed / not-started）跟磁盘实物对齐。
+   *
+   * 这是个**重 IO** 操作：每个 lesson 跑 `resolveLessonStatus`，含 3-5 次 fs.access
+   * + 可能的 markdown 解析。课多了串行跑会 30s+。
+   *
+   * 优化：
+   *   - 接受 preloadedOutlines 避免重复 getAllCourses 扫盘
+   *   - 同一 outline 内的所有 lesson 用 Promise.all 并行 resolve
+   *   - 跨 outline 也并行
+   * 返回 true 表示**有任何课时状态变化**（写盘了），调用方可据此决定是否再发 'courses' 推送。
+   */
+  async syncLessonStatuses(subject?: Subject, preloadedOutlines?: CourseOutline[]): Promise<boolean> {
+    let outlines: (CourseOutline | null)[];
+    if (preloadedOutlines) {
+      outlines = subject
+        ? preloadedOutlines.filter((o) => o?.subject === subject)
+        : preloadedOutlines;
+    } else {
+      outlines = subject
+        ? [await this.getCourseOutline(subject)]
+        : await this.getAllCourses();
+    }
 
-    for (const outline of outlines) {
-      if (!outline) {
-        continue;
-      }
+    const results = await Promise.all(outlines.map(async (outline) => {
+      if (!outline) return false;
 
-      let changed = false;
-
+      // 把所有 lesson 摊平成一维列表，并行 resolve
+      const flat: Array<{ topicId: string; lesson: typeof outline.topics[number]['lessons'][number] }> = [];
       for (const topic of outline.topics) {
         for (const lesson of topic.lessons) {
-          const nextStatus = await this.resolveLessonStatus(outline.subject, topic.id, lesson.id, lesson.status);
-          if (lesson.status !== nextStatus) {
-            lesson.status = nextStatus;
-            changed = true;
-          }
+          flat.push({ topicId: topic.id, lesson });
         }
       }
+
+      const nextStatuses = await Promise.all(
+        flat.map(({ topicId, lesson }) =>
+          this.resolveLessonStatus(outline.subject, topicId, lesson.id, lesson.status)
+        )
+      );
+
+      let changed = false;
+      flat.forEach(({ lesson }, i) => {
+        if (lesson.status !== nextStatuses[i]) {
+          lesson.status = nextStatuses[i];
+          changed = true;
+        }
+      });
 
       if (changed) {
         await this.saveCourseOutline(outline.subject, outline);
       }
-    }
+      return changed;
+    }));
+
+    return results.some((c) => c === true);
   }
 
   async lessonExists(subject: Subject, topicId: string, lessonId: string): Promise<boolean> {
