@@ -774,12 +774,21 @@
 
     els.newCoursePanel?.classList.toggle('hidden', !showCreatePanel);
 
-    const items = state.courses.map((course) => `
-      <div class="dropdown-item${course.subject === state.selectedSubject ? ' selected' : ''}" data-subject="${escapeHtml(course.subject)}">
-        <span>${escapeHtml(course.title || subjectLabel(course.subject))} ${renderCourseTagBadges(course.tags)}</span>
-        <span class="muted">${escapeHtml(subjectLabel(course.subject))}</span>
-      </div>
-    `);
+    const items = state.courses.map((course) => {
+      const title = course.title || subjectLabel(course.subject);
+      const subject = subjectLabel(course.subject);
+      // title 与 subject 几乎重复时，只显示 title（去掉右侧冗余）
+      const showSubject = title.trim() !== subject.trim() && !title.includes(subject) && !subject.includes(title);
+      return `
+        <div class="dropdown-item${course.subject === state.selectedSubject ? ' selected' : ''}" data-subject="${escapeHtml(course.subject)}">
+          <span class="dropdown-item-main">
+            <span class="dropdown-item-title">${escapeHtml(title)}</span>
+            ${renderCourseTagBadges(course.tags)}
+          </span>
+          ${showSubject ? `<span class="muted dropdown-item-aux">${escapeHtml(subject)}</span>` : ''}
+        </div>
+      `;
+    });
 
     items.push(`
       <div class="dropdown-item${showCreatePanel ? ' selected' : ''}" data-action="create-course">

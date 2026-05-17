@@ -461,6 +461,25 @@ textarea:focus,
   cursor: pointer;
 }
 
+.dropdown-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.dropdown-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-item-aux {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 .dropdown-item:hover,
 .material-item.clickable:hover,
 .tree-lesson:hover {
