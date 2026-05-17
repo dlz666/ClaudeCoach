@@ -2908,16 +2908,32 @@
       .replace(/"/g, '&quot;');
   }
 
-  /** 当 selectedSubject 变化 / 课程加载完成时，刷新课程项目区显隐。 */
+  /**
+   * 哪些课程类型有"项目"功能？
+   * 设计决议：只有"动手做"性质的课程才需要项目训练。
+   *   ✓ cs-skill        编程语言 / 框架 / 工具——必然写代码
+   *   ✓ cs-theory       算法 / 系统课——可以做实现型项目
+   *   ✓ engineering     工程方法 / 系统设计——必须实践
+   *   ✗ math-foundation 微积分 / 线代——纸笔为主
+   *   ✗ math-advanced   实分析 / 拓扑——纸笔为主
+   *   ✗ physics / language / exam-prep / humanities / research — 同理
+   */
+  const PROJECT_ELIGIBLE_TAGS = new Set(['cs-skill', 'cs-theory', 'engineering']);
+
+  /** 当 selectedSubject / 课程 tags 变化时，刷新课程项目区显隐。 */
   function refreshCourseProjectsSection() {
     const sec = document.getElementById('course-projects-section');
     if (!sec) return;
-    if (state.selectedSubject) {
-      sec.classList.remove('hidden');
-      // 拉一次列表（后端按 subject 过滤会更省，但先全量 + 前端过滤简单可靠）
-      vscode.postMessage({ type: 'listProjects' });
-    } else {
+    if (!state.selectedSubject) {
       sec.classList.add('hidden');
+      return;
+    }
+    const course = (state.courses || []).find((c) => c.subject === state.selectedSubject);
+    const tags = Array.isArray(course?.tags) ? course.tags : [];
+    const eligible = tags.some((t) => PROJECT_ELIGIBLE_TAGS.has(t));
+    sec.classList.toggle('hidden', !eligible);
+    if (eligible) {
+      vscode.postMessage({ type: 'listProjects' });
     }
   }
 
