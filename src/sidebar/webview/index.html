@@ -256,33 +256,40 @@
       <div class="panel-header">
         <div>
           <h3>导入资料</h3>
-          <p class="section-subtitle">支持 PDF、TXT、Markdown。</p>
+          <p class="section-subtitle">支持 PDF、TXT、Markdown</p>
         </div>
       </div>
-      <select id="material-subject"></select>
-      <button class="btn primary" id="btn-import">导入文件</button>
+      <div class="cc-import-row">
+        <select id="material-subject"></select>
+        <button class="btn primary" id="btn-import">导入文件</button>
+      </div>
     </section>
     <section class="panel">
       <div class="panel-header">
         <div>
           <h3>已导入资料</h3>
-          <p class="section-subtitle">点击资料可直接跳回对应课程并预览。</p>
+          <p class="section-subtitle">点击卡片回到课程预览；右上「⋯」展开次要操作</p>
         </div>
       </div>
+      <div class="cc-chip-nav bordered" id="materials-filter-bar"></div>
       <div id="materials-list">
-        <p class="muted">暂无资料</p>
+        <p class="cc-material-empty">暂无资料</p>
       </div>
     </section>
   </div>
 
   <div id="tab-settings" class="tab-content">
     <input type="text" class="settings-search" id="settings-search" placeholder="搜索设置...">
+    <nav class="cc-chip-nav bordered" id="settings-nav" aria-label="设置分组导航"></nav>
 
-    <details class="settings-group" id="group-pace">
-      <summary>
-        <span>学习节奏与目标</span>
+    <section class="cc-settings-section settings-group" id="group-pace" data-section="pace" data-section-title="节奏" data-section-sub="每天投入多久、什么时段学习、难度分布" data-active="true">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">学习节奏与目标</h3>
+          <p class="cc-settings-section-sub">每天投入多久、什么时段学习、难度分布</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="pace">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label for="pref-difficulty">整体难度</label>
@@ -372,13 +379,16 @@
           </div>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-ai-style">
-      <summary>
-        <span>AI 风格与内容</span>
+    <section class="cc-settings-section settings-group" id="group-ai-style" data-section="aiStyle" data-section-title="风格" data-section-sub="讲义详尽度、反馈口吻、解释方式、语言" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">AI 风格与内容</h3>
+          <p class="cc-settings-section-sub">讲义详尽度、反馈口吻、解释方式、语言</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="aiStyle">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label>讲义详尽度</label>
@@ -468,13 +478,16 @@
           </select>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-coach">
-      <summary>
-        <span>主动 Coach</span>
+    <section class="cc-settings-section settings-group" id="group-coach" data-section="coach" data-section-title="Coach" data-section-sub="主动学习行为：简报、闲置提醒、间隔重复、勿扰" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">主动 Coach</h3>
+          <p class="cc-settings-section-sub">主动学习行为：简报、闲置提醒、间隔重复、勿扰</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="coach">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label class="inline-check"><input type="checkbox" id="coach-enabled" checked> 启用主动 Coach</label>
@@ -546,13 +559,16 @@
           </div>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-retrieval">
-      <summary>
-        <span>资料检索</span>
+    <section class="cc-settings-section settings-group" id="group-retrieval" data-section="retrieval" data-section-title="检索" data-section-sub="grounding、向量检索（Hybrid RAG）、Vision API 提取" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">资料检索</h3>
+          <p class="cc-settings-section-sub">grounding、向量检索（Hybrid RAG）、Vision API 提取</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="retrieval">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label class="inline-check"><input type="checkbox" id="retrieval-grounding-default"> 默认启用 grounding</label>
@@ -657,13 +673,16 @@
           <input type="number" id="vision-dpi" min="100" max="400" step="50" value="200" class="num-input">
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-lecture">
-      <summary>
-        <span>讲义阅读体验</span>
+    <section class="cc-settings-section settings-group" id="group-lecture" data-section="lecture" data-section-title="讲义" data-section-sub="阅读模式、AI 建议应用方式、改动高亮" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">讲义阅读体验</h3>
+          <p class="cc-settings-section-sub">阅读模式、AI 建议应用方式、改动高亮</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="lecture">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label>阅读模式</label>
@@ -691,13 +710,16 @@
           </div>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-ui">
-      <summary>
-        <span>UI 与显示</span>
+    <section class="cc-settings-section settings-group" id="group-ui" data-section="ui" data-section-title="界面" data-section-sub="字体、默认 Tab、主题、emoji 显示" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">UI 与显示</h3>
+          <p class="cc-settings-section-sub">字体、默认 Tab、主题、emoji 显示</p>
+        </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="ui">恢复默认</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label for="ui-font-size">字体大小</label>
@@ -730,13 +752,16 @@
           <label class="inline-check"><input type="checkbox" id="ui-show-emoji" checked> 显示 emoji</label>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-ai-config">
-      <summary>
-        <span>AI 配置中心</span>
+    <section class="cc-settings-section settings-group" id="group-ai-config" data-section="aiConfig" data-section-title="AI Profile" data-section-sub="endpoint、模型、token、工作区覆盖" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">AI 配置中心</h3>
+          <p class="cc-settings-section-sub">endpoint、模型、token、工作区覆盖</p>
+        </div>
         <button class="btn ghost small" type="button" id="btn-add-ai-profile">新建 Profile</button>
-      </summary>
+      </header>
       <div class="settings-group-body">
         <section class="resolved-card panel-flat" id="ai-config-center">
           <div class="card-subtitle" id="resolved-config-source">加载中...</div>
@@ -882,12 +907,15 @@
           </div>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-data">
-      <summary>
-        <span>数据管理</span>
-      </summary>
+    <section class="cc-settings-section settings-group" id="group-data" data-section="data" data-section-title="数据" data-section-sub="清理错题 / 诊断历史、导出导入学习数据" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">数据管理</h3>
+          <p class="cc-settings-section-sub">清理错题 / 诊断历史、导出导入学习数据</p>
+        </div>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label for="data-subject-select">当前学科</label>
@@ -907,12 +935,15 @@
           </div>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details class="settings-group" id="group-advanced">
-      <summary>
-        <span>数据目录与高级</span>
-      </summary>
+    <section class="cc-settings-section settings-group" id="group-advanced" data-section="advanced" data-section-title="高级" data-section-sub="数据目录、偏好导入导出、恢复所有默认" data-active="false">
+      <header class="cc-settings-section-header">
+        <div>
+          <h3 class="cc-settings-section-title">数据目录与高级</h3>
+          <p class="cc-settings-section-sub">数据目录、偏好导入导出、恢复所有默认</p>
+        </div>
+      </header>
       <div class="settings-group-body">
         <div class="setting-row">
           <label>数据目录路径</label>
@@ -929,10 +960,11 @@
           <button class="btn danger-btn" id="btn-reset-all-prefs" type="button">恢复所有默认设置</button>
         </div>
       </div>
-    </details>
+    </section>
 
-    <div class="actions-row settings-save-row">
-      <button class="btn primary" id="btn-save-prefs">保存学习偏好</button>
+    <div class="cc-settings-savebar">
+      <span class="cc-save-hint">改动会自动保存</span>
+      <button class="btn primary" id="btn-save-prefs" title="立刻提交一次（自动保存已开启）">立即保存</button>
     </div>
   </div>
 

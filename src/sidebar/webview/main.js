@@ -141,7 +141,9 @@
     coachSuggestions: [],
     dailyBrief: null,
     doNotDisturbUntil: null,
-    settingsCollapsedGroups: saved.settingsCollapsedGroups || {},
+    settingsCollapsedGroups: saved.settingsCollapsedGroups || {}, // v1 legacy（不再使用，保留向后兼容）
+    settingsActiveSection: saved.settingsActiveSection || null,    // v2：当前激活的 settings section ('pace' / 'aiStyle' / ...)
+    materialsFilter: saved.materialsFilter || 'all',               // v2：资料库 filter chip 选择
     editingProfileId: null,
     rebuildModal: {
       open: false,
@@ -580,7 +582,9 @@
       chatGroundingMode: state.chatGroundingMode,
       chatMessages: state.chatMessages,
       lastOpenedLesson: state.lastOpenedLesson,
-      settingsCollapsedGroups: state.settingsCollapsedGroups,
+      settingsCollapsedGroups: state.settingsCollapsedGroups, // legacy
+      settingsActiveSection: state.settingsActiveSection,
+      materialsFilter: state.materialsFilter,
     });
   }
 
@@ -1121,64 +1125,24 @@
     const materials = (state.materials.materials || []).filter((item) => item.subject === state.selectedSubject);
 
     if (!materials.length) {
-      els.courseMaterialsList.innerHTML = '<p class="muted">暂无资料，可导入 PDF、TXT、Markdown。</p>';
+      els.courseMaterialsList.className = '';
+      els.courseMaterialsList.innerHTML = '<p class="cc-material-empty">本课程暂无资料，可在「资料库」标签导入</p>';
       els.courseMaterialPreview.classList.add('hidden');
       return;
     }
 
-    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
-    const typeOptions = MATERIAL_TYPES.map((t) => `<option value="${t.value}">${escapeHtml(t.label)}</option>`).join('');
-    els.courseMaterialsList.innerHTML = materials.map((item) => {
-      const currentType = item.materialType || 'other';
-      return `
-      <div class="material-item clickable course-material-item${item.id === state.selectedCourseMaterialId ? ' active' : ''}" data-id="${escapeHtml(item.id)}">
-        <span class="material-name">${escapeHtml(item.fileName)}</span>
-        <span class="material-right">
-          <select class="material-type-select" data-id="${escapeHtml(item.id)}" title="资料类型（影响 AI 检索时的优先级）">
-            ${MATERIAL_TYPES.map((t) => `<option value="${t.value}"${t.value === currentType ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('')}
-          </select>
-          <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
-          ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
-          <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
-        </span>
-      </div>`;
-    }).join('');
+    const vectorStats = state.materials.vectorStats || {};
+    els.courseMaterialsList.className = 'cc-material-list';
+    // 用统一卡片组件 + active 高亮当前预览中的那一项
+    els.courseMaterialsList.innerHTML = materials.map((item) =>
+      _renderMaterialCard(item, vectorStats, { activeId: state.selectedCourseMaterialId })
+    ).join('');
 
-    // type 选择变化 → 立即保存
-    els.courseMaterialsList.querySelectorAll('.material-type-select').forEach((sel) => {
-      sel.addEventListener('click', (e) => e.stopPropagation());
-      sel.addEventListener('change', (e) => {
-        e.stopPropagation();
-        vscode.postMessage({
-          type: 'setMaterialType',
-          materialId: sel.getAttribute('data-id'),
-          materialType: sel.value,
-        });
-      });
-    });
-
-    els.courseMaterialsList.querySelectorAll('.course-material-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        vscode.postMessage({ type: 'previewMaterial', materialId: item.getAttribute('data-id') });
-      });
-    });
-
-    els.courseMaterialsList.querySelectorAll('.material-retry-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        vscode.postMessage({ type: 'retryMaterial', materialId: button.getAttribute('data-id') });
-      });
-    });
-
-    els.courseMaterialsList.querySelectorAll('.material-delete-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        vscode.postMessage({
-          type: 'requestDeleteMaterial',
-          materialId: button.getAttribute('data-id'),
-          fileName: button.getAttribute('data-name'),
-        });
-      });
+    // 卡片点击 → 在本面板内预览（不切 tab）
+    _bindMaterialCardEvents(els.courseMaterialsList, {
+      onCardClick: (id) => {
+        vscode.postMessage({ type: 'previewMaterial', materialId: id });
+      },
     });
 
     if (state.currentCourseMaterialPreview && state.selectedCourseMaterialId) {
@@ -1193,128 +1157,255 @@
     }
   }
 
+  // ===== Materials v2 渲染 =====
+  // 单个资料 = 一张 cc-material-card：
+  //   主行：图标 + 文件名 + 状态 chip + 主操作按钮 + ⋯ 菜单
+  //   meta 行：类型 · v1/v2+块数+章节 · 维度 · 提取方式
+  // 状态分 4 个 filter chip：全部 / 待处理 / 已索引 / 失败
+  const MATERIAL_STATUS_LABELS = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
+  function _fileIconFor(name) {
+    const ext = (name || '').split('.').pop().toLowerCase();
+    if (ext === 'pdf') return '📕';
+    if (ext === 'md' || ext === 'markdown') return '📝';
+    if (ext === 'txt') return '📄';
+    return '📁';
+  }
+  function _materialMetaLine(item, stats) {
+    const parts = [];
+    const typeLabel = (MATERIAL_TYPES.find((t) => t.value === (item.materialType || 'other')) || {}).label;
+    if (typeLabel) parts.push(escapeHtml(typeLabel));
+    if (stats && stats.exists && stats.chunks) {
+      const chapterCount = stats.chapters ?? 0;
+      parts.push(chapterCount > 0
+        ? `<span class="cc-meta-strong">v2</span> · ${stats.chunks} 块 · ${chapterCount} 章`
+        : `<span class="cc-meta-strong">v1</span> · ${stats.chunks} 块`);
+      if (stats.dimension) parts.push(`${stats.dimension}维`);
+    } else {
+      parts.push('<span class="cc-meta-strong" style="color:#fca5a5">未向量化</span>');
+    }
+    if (item.extractMethod) {
+      const m = { 'vision': 'Vision', 'pdf-parse': 'pdf-parse', 'windows-ocr': 'OCR' }[item.extractMethod] || item.extractMethod;
+      parts.push(`📥 ${escapeHtml(m)}`);
+    }
+    return parts.join('<span class="cc-meta-sep">·</span>');
+  }
+  // 按状态决定主操作 — 只显示最可能要做的那一个
+  function _primaryActionFor(item, stats) {
+    if (item.status === 'failed')  return { label: '重试',   action: 'retry',   variant: 'warn' };
+    if (item.status === 'pending') return { label: '重试',   action: 'retry',   variant: 'warn' };
+    if (!stats || !stats.exists || !stats.chunks)
+                                   return { label: '建索引', action: 'rebuild', variant: ''     };
+    return { label: '预览', action: 'preview', variant: '' };
+  }
+  // ⋯ 菜单的所有可选动作（去掉跟主操作重复的）
+  function _menuActionsFor(item, stats, primaryAction) {
+    const all = [
+      { id: 'preview',  icon: '👁', label: '预览资料' },
+      { id: 'rebuild',  icon: '⚙',  label: '重建向量索引' },
+      { id: 'vision',   icon: '✨', label: 'Vision API 提取' },
+      { id: 'reparse',  icon: '🔄', label: '重新解析章节' },
+      { id: 'retry',    icon: '↻',  label: '重试' },
+      { id: 'divider1', divider: true },
+      { id: 'delete',   icon: '🗑', label: '删除资料', danger: true },
+    ];
+    return all.filter((m) => {
+      if (m.divider) return true;
+      if (m.id === primaryAction) return false;
+      if (m.id === 'reparse') {
+        return stats && stats.exists && stats.chunks && (stats.chapters ?? 0) < 3 && stats.chunks > 200;
+      }
+      if (m.id === 'retry') return item.status === 'failed' || item.status === 'pending';
+      return true;
+    });
+  }
+  function _renderMaterialCard(item, vectorStats, opts) {
+    opts = opts || {};
+    const stats = vectorStats[item.id];
+    const status = item.status || 'pending';
+    const statusLabel = MATERIAL_STATUS_LABELS[status] || status;
+    const primary = _primaryActionFor(item, stats);
+    const menuActions = _menuActionsFor(item, stats, primary.action);
+    const isActive = opts.activeId === item.id;
+    return `
+      <div class="cc-material-card${isActive ? ' active' : ''}"
+           data-id="${escapeHtml(item.id)}"
+           data-subject="${escapeHtml(item.subject)}"
+           data-status="${escapeHtml(status)}">
+        <div class="cc-material-row">
+          <span class="cc-material-icon" aria-hidden="true">${_fileIconFor(item.fileName)}</span>
+          <span class="cc-material-name" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
+          <span class="cc-material-actions">
+            <span class="cc-chip cc-status-chip ${status}"><span class="cc-chip-dot"></span>${statusLabel}</span>
+            <button class="cc-primary-action ${primary.variant}"
+                    type="button"
+                    data-cc-action="${primary.action}"
+                    title="${escapeHtml(primary.label)}">${primary.label}</button>
+            <span class="cc-menu-wrap">
+              <button class="cc-icon-btn cc-menu-toggle" type="button" aria-haspopup="true" aria-expanded="false" title="更多操作">⋯</button>
+              <div class="cc-menu" role="menu">
+                ${menuActions.map((m) => m.divider
+                  ? `<div class="cc-menu-divider"></div>`
+                  : `<button class="cc-menu-item${m.danger ? ' danger' : ''}" role="menuitem" type="button" data-cc-action="${m.id}">
+                       <span class="cc-menu-item-icon">${m.icon}</span><span>${m.label}</span>
+                     </button>`).join('')}
+              </div>
+            </span>
+          </span>
+        </div>
+        <div class="cc-material-meta">${_materialMetaLine(item, stats)}</div>
+      </div>`;
+  }
+  // 统一的卡片事件代理 — 主操作 / 菜单切换 / 菜单项 / 卡片点击预览
+  function _bindMaterialCardEvents(container, ctx) {
+    container.querySelectorAll('.cc-material-card').forEach((card) => {
+      card.addEventListener('click', (event) => {
+        if (event.target.closest('.cc-material-actions')) return;
+        const id = card.getAttribute('data-id');
+        const subject = card.getAttribute('data-subject');
+        if (ctx.onCardClick) ctx.onCardClick(id, subject, card);
+      });
+    });
+    container.querySelectorAll('[data-cc-action]').forEach((btn) => {
+      if (btn.classList.contains('cc-menu-toggle')) return;
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const card = btn.closest('.cc-material-card');
+        if (!card) return;
+        const id = card.getAttribute('data-id');
+        const subject = card.getAttribute('data-subject');
+        const action = btn.getAttribute('data-cc-action');
+        _closeAllMaterialMenus();
+        _dispatchMaterialAction(action, id, subject, card);
+      });
+    });
+    container.querySelectorAll('.cc-menu-toggle').forEach((toggle) => {
+      toggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const menu = toggle.parentElement.querySelector('.cc-menu');
+        if (!menu) return;
+        const isOpen = menu.getAttribute('data-open') === 'true';
+        _closeAllMaterialMenus();
+        if (!isOpen) {
+          menu.setAttribute('data-open', 'true');
+          toggle.setAttribute('aria-expanded', 'true');
+        }
+      });
+    });
+  }
+  function _closeAllMaterialMenus() {
+    document.querySelectorAll('.cc-menu[data-open="true"]').forEach((m) => m.setAttribute('data-open', 'false'));
+    document.querySelectorAll('.cc-menu-toggle[aria-expanded="true"]').forEach((t) => t.setAttribute('aria-expanded', 'false'));
+  }
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.cc-menu-wrap')) _closeAllMaterialMenus();
+  });
+  function _dispatchMaterialAction(action, id, subject, card) {
+    const fileName = card.querySelector('.cc-material-name')?.getAttribute('title') || '';
+    switch (action) {
+      case 'preview':
+        state.selectedSubject = subject || state.selectedSubject;
+        onCourseSelected();
+        activateTab('learn');
+        vscode.postMessage({ type: 'previewMaterial', materialId: id });
+        break;
+      case 'rebuild':
+        vscode.postMessage({ type: 'reindexSingleMaterial', materialId: id, subject });
+        addLog(`已开始向量化资料 (${subject})`, 'info');
+        break;
+      case 'reparse':
+        vscode.postMessage({ type: 'reparseMaterialSummary', materialId: id, subject });
+        addLog(`已开始重新解析章节 (${subject})`, 'info');
+        break;
+      case 'vision':
+        vscode.postMessage({ type: 'reextractMaterialVision', materialId: id, subject });
+        addLog(`已开始 Vision API 提取 (${subject})—— 5 并发约 6s/页，等几分钟`, 'info');
+        break;
+      case 'retry':
+        vscode.postMessage({ type: 'retryMaterial', materialId: id });
+        break;
+      case 'delete':
+        vscode.postMessage({ type: 'requestDeleteMaterial', materialId: id, fileName });
+        break;
+    }
+  }
+
   function renderMaterials() {
     if (!els.materialsList) return;
     const materials = state.materials.materials || [];
+    const filterBar = document.getElementById('materials-filter-bar');
+
+    // 状态计数：pending/extracted 都归"待处理"
+    const counts = { all: materials.length, pending: 0, indexed: 0, failed: 0 };
+    materials.forEach((m) => {
+      if (m.status === 'pending' || m.status === 'extracted') counts.pending++;
+      else if (m.status === 'indexed') counts.indexed++;
+      else if (m.status === 'failed') counts.failed++;
+    });
+
+    const activeFilter = state.materialsFilter || 'all';
+    if (filterBar) {
+      filterBar.innerHTML = [
+        { id: 'all',     label: '全部' },
+        { id: 'pending', label: '待处理' },
+        { id: 'indexed', label: '已索引' },
+        { id: 'failed',  label: '失败' },
+      ].map((f) => {
+        const n = counts[f.id] ?? 0;
+        const active = activeFilter === f.id;
+        return `<button class="cc-chip" type="button" data-filter="${f.id}" aria-pressed="${active}">${f.label}<span class="cc-chip-count">${n}</span></button>`;
+      }).join('');
+      filterBar.querySelectorAll('[data-filter]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.materialsFilter = btn.getAttribute('data-filter') || 'all';
+          renderMaterials();
+          persist();
+        });
+      });
+    }
 
     if (!materials.length) {
-      els.materialsList.innerHTML = '<p class="muted">暂无资料</p>';
+      els.materialsList.className = '';
+      els.materialsList.innerHTML = '<p class="cc-material-empty">还没有资料 —— 在上方导入 PDF / TXT / Markdown 试试</p>';
       return;
     }
 
+    // 按 filter 过滤
+    const filtered = materials.filter((item) => {
+      if (activeFilter === 'all') return true;
+      if (activeFilter === 'pending') return item.status === 'pending' || item.status === 'extracted';
+      return item.status === activeFilter;
+    });
+
+    if (!filtered.length) {
+      els.materialsList.className = '';
+      const label = activeFilter === 'pending' ? '待处理' : activeFilter === 'indexed' ? '已索引' : '失败';
+      els.materialsList.innerHTML = `<p class="cc-material-empty">没有"${label}"状态的资料</p>`;
+      return;
+    }
+
+    // 按 subject 分组
     const grouped = {};
-    materials.forEach((item) => {
+    filtered.forEach((item) => {
       grouped[item.subject] = grouped[item.subject] || [];
       grouped[item.subject].push(item);
     });
 
-    const labels = { pending: '待处理', extracted: '已提取', indexed: '已索引', failed: '失败' };
     const vectorStats = state.materials.vectorStats || {};
-    /**
-     * 三态徽章（全部可点击，触发重建/升级）：
-     * - 红色 "未向量化"  → 点击建索引
-     * - 黄色 "v1 N 块"   → 点击升级 v2
-     * - 绿色 "v2 N+M 章" → 点击触发重建（章节数变了 / 强制刷新）
-     * 章节数过少（< 3）时额外显示"重新解析"按钮，会"先 reparse 再自动 rebuild"
-     */
-    const renderVectorBadge = (item) => {
-      const stats = vectorStats[item.id];
-      if (!stats || !stats.exists || !stats.chunks) {
-        return `<button class="material-vector-badge unvectorized" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="未向量化 · 点击建索引（免费 / 几十秒）" type="button">●&nbsp;未向量化</button>`;
-      }
-      const chapterCount = stats.chapters ?? 0;
-      const hasChapters = chapterCount > 0;
-      const dimText = stats.dimension ? `${stats.dimension}维` : '';
-      const modelText = stats.model || '';
-      // Vision API 按钮（云端 LLM 把 PDF 转 markdown，含 LaTeX 公式 + 章节标题）
-      const visionBtn = `<button class="material-vision-btn" data-vec-action="vision" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="Vision API 深度提取（云端 LLM，公式 LaTeX 完美 + 5 并发 ≈ 6s/页）" type="button">✨</button>`;
-
-      if (hasChapters) {
-        // 章节过少（< 3）暗示 textbookParser 没识全 → 给个修复入口
-        // 重新解析按钮：会触发 reparseMaterialSummary，后端跑完会自动触发 rebuild
-        const reparseHint = chapterCount < 3 && stats.chunks > 200
-          ? `<button class="material-reparse-btn" data-vec-action="reparse" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="只识别出 ${chapterCount} 章（可能解析失败）· 点击重新解析+重建" type="button">⚠ 重新解析</button>`
-          : '';
-        return `<button class="material-vector-badge v2" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v2 ✓ 章节索引启用 · ${stats.chunks} 块 + ${chapterCount} 章 · ${modelText} ${dimText} · 点击强制重建" type="button">▣ v2 · ${stats.chunks}+${chapterCount}章</button>${reparseHint}${visionBtn}`;
-      }
-      return `<button class="material-vector-badge v1" data-vec-action="rebuild" data-material-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}" title="v1 · ${stats.chunks} 块（无章节索引）· 点击升级 v2" type="button">▣ v1 · ${stats.chunks} ↑</button>${visionBtn}`;
-    };
+    els.materialsList.className = 'cc-material-list';
     els.materialsList.innerHTML = Object.entries(grouped).map(([subject, items]) => `
-      <div class="material-group">
-        <div class="material-group-title">${escapeHtml(subjectLabel(subject))}</div>
-        ${items.map((item) => `
-          <div class="material-item clickable library-material-item" data-id="${escapeHtml(item.id)}" data-subject="${escapeHtml(item.subject)}">
-            <span class="material-name">${escapeHtml(item.fileName)}</span>
-            <span class="material-right">
-              ${renderVectorBadge(item)}
-              <span class="material-status ${item.status}">${labels[item.status] || item.status}</span>
-              ${(item.status === 'failed' || item.status === 'pending') ? `<button class="material-retry-btn" type="button" data-id="${escapeHtml(item.id)}" title="重试索引">重试</button>` : ''}
-              <button class="material-delete-btn" type="button" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(item.fileName)}" title="删除资料" aria-label="删除资料 ${escapeHtml(item.fileName)}">删除</button>
-            </span>
-          </div>
-        `).join('')}
+      <div class="cc-material-group">
+        <div class="cc-material-group-title">${escapeHtml(subjectLabel(subject))}</div>
+        ${items.map((item) => _renderMaterialCard(item, vectorStats)).join('')}
       </div>
     `).join('');
 
-    els.materialsList.querySelectorAll('.library-material-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        state.selectedSubject = item.getAttribute('data-subject') || state.selectedSubject;
+    _bindMaterialCardEvents(els.materialsList, {
+      onCardClick: (id, subject) => {
+        state.selectedSubject = subject || state.selectedSubject;
         onCourseSelected();
         activateTab('learn');
-        vscode.postMessage({ type: 'previewMaterial', materialId: item.getAttribute('data-id') });
-      });
-    });
-
-    els.materialsList.querySelectorAll('.material-retry-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        vscode.postMessage({ type: 'retryMaterial', materialId: button.getAttribute('data-id') });
-      });
-    });
-
-    els.materialsList.querySelectorAll('.material-delete-btn').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        vscode.postMessage({
-          type: 'requestDeleteMaterial',
-          materialId: button.getAttribute('data-id'),
-          fileName: button.getAttribute('data-name'),
-        });
-      });
-    });
-
-    // 向量徽章点击：触发该资料单独 reindex（升级 v1→v2 或建首次）
-    els.materialsList.querySelectorAll('[data-vec-action="rebuild"]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const materialId = button.getAttribute('data-material-id');
-        const subject = button.getAttribute('data-subject');
-        if (!materialId || !subject) return;
-        vscode.postMessage({ type: 'reindexSingleMaterial', materialId, subject });
-        addLog(`已开始向量化资料 (${subject})`, 'info');
-      });
-    });
-    // 重新解析章节 — 适用于 chapter 识别不全的资料（如苏德矿微积分）
-    els.materialsList.querySelectorAll('[data-vec-action="reparse"]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const materialId = button.getAttribute('data-material-id');
-        const subject = button.getAttribute('data-subject');
-        if (!materialId || !subject) return;
-        vscode.postMessage({ type: 'reparseMaterialSummary', materialId, subject });
-        addLog(`已开始重新解析章节 (${subject})`, 'info');
-      });
-    });
-    // Vision API 提取（云端 LLM）
-    els.materialsList.querySelectorAll('[data-vec-action="vision"]').forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        const materialId = button.getAttribute('data-material-id');
-        const subject = button.getAttribute('data-subject');
-        if (!materialId || !subject) return;
-        vscode.postMessage({ type: 'reextractMaterialVision', materialId, subject });
-        addLog(`已开始 Vision API 提取 (${subject})—— 5 并发约 6s/页，等几分钟`, 'info');
-      });
+        vscode.postMessage({ type: 'previewMaterial', materialId: id });
+      },
     });
   }
 
@@ -2129,22 +2220,58 @@
 
   // ===== AI Profile 列表渲染 =====
   /**
-   * P0-5: 设置页"默认打开"哪个组的策略：
-   * - 没有 AI Profile / 没有 active profile → 打开 "AI 配置中心" (group-ai-config)
-   * - 已配置 → 打开 "学习节奏与目标" (group-pace)，作为常用入口
-   * 仅在用户没有手动展开任何组时生效（避免覆盖用户当前操作）。
+   * v2 设置页：渲染 chip nav + 切换激活 section
+   * - 没有 AI Profile / 没有 active profile → 默认打开 "AI Profile" section
+   * - 已配置 → 默认打开 "节奏" section（最常用入口）
+   * 用户手动切过 chip 之后，state.settingsActiveSection 记忆选择，刷新不重置。
    */
-  function applyDefaultSettingsOpen() {
-    const allGroups = document.querySelectorAll('details.settings-group');
-    const anyOpen = Array.from(allGroups).some((d) => d.open);
-    if (anyOpen) return;
-    const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
-    const hasActive = profiles.length > 0 && state.activeProfileId;
-    const targetId = hasActive ? 'group-pace' : 'group-ai-config';
-    const target = document.getElementById(targetId);
-    if (target && 'open' in target) {
-      target.open = true;
+  function renderSettingsNav() {
+    const nav = document.getElementById('settings-nav');
+    if (!nav) return;
+    const sections = Array.from(document.querySelectorAll('.cc-settings-section'));
+    if (!sections.length) return;
+
+    // 决定默认 active section
+    if (!state.settingsActiveSection) {
+      const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+      const hasActive = profiles.length > 0 && state.activeProfileId;
+      state.settingsActiveSection = hasActive ? 'pace' : 'aiConfig';
     }
+
+    // 渲染 chip
+    nav.innerHTML = sections.map((sec) => {
+      const id = sec.getAttribute('data-section');
+      const label = sec.getAttribute('data-section-title') || id;
+      const active = id === state.settingsActiveSection;
+      return `<button class="cc-chip" type="button" data-settings-nav="${escapeHtml(id)}" aria-pressed="${active}" title="${escapeHtml(sec.getAttribute('data-section-sub') || '')}">${escapeHtml(label)}</button>`;
+    }).join('');
+
+    // 同步 section 的 active 状态
+    sections.forEach((sec) => {
+      const id = sec.getAttribute('data-section');
+      sec.setAttribute('data-active', id === state.settingsActiveSection ? 'true' : 'false');
+    });
+
+    // 绑定 chip click
+    nav.querySelectorAll('[data-settings-nav]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.settingsActiveSection = btn.getAttribute('data-settings-nav');
+        renderSettingsNav();
+        persist();
+        // 切 section 后清空搜索（语义重置 + 避免 "搜出空" 的迷惑）
+        if (els.settingsSearch && els.settingsSearch.value) {
+          els.settingsSearch.value = '';
+          document.querySelectorAll('.setting-row').forEach((row) => {
+            row.classList.remove('hidden');
+            row.classList.remove('hl');
+          });
+        }
+      });
+    });
+  }
+  // 兼容旧调用点
+  function applyDefaultSettingsOpen() {
+    renderSettingsNav();
   }
 
   /**
@@ -2980,12 +3107,11 @@
   });
   els.btnOnboardingGoAi?.addEventListener('click', () => {
     activateTab('settings');
-    // 滚到 AI 配置中心 + 展开
+    // 切到 AI 配置中心 section + 滚动到位
+    state.settingsActiveSection = 'aiConfig';
+    renderSettingsNav();
     const target = document.getElementById('group-ai-config');
-    if (target) {
-      target.open = true;
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   els.ddTrigger?.addEventListener('click', (event) => {
@@ -3315,24 +3441,11 @@
     addLog('学习偏好已提交保存。', 'info');
   });
 
-  // ===== 设置页折叠状态持久化 + Accordion 互斥（同时只能开一个） =====
-  // 标志位提前声明，防搜索 listener TDZ
-  let _accordionMutating = false;
+  // ===== 设置页 v2：chip nav 切换 + 搜索 =====
+  // 初始渲染（profile 状态加载后会再调一次保证默认 active 选对）
+  renderSettingsNav();
 
-  // 启动时：保留上次记忆，但若有多组同时为 open，仅保留第一个
-  let _accordionFirstOpenSeen = false;
-  els.settingsGroups?.forEach((group) => {
-    const groupId = group.id || group.getAttribute('data-group') || '';
-    if (!groupId) return;
-    if (state.settingsCollapsedGroups[groupId] === false && !_accordionFirstOpenSeen) {
-      group.setAttribute('open', '');
-      _accordionFirstOpenSeen = true;
-    } else {
-      group.removeAttribute('open');
-    }
-  });
-
-  // ===== 设置页搜索 =====
+  // 搜索：若有结果，临时把所有 section 都设 active，让用户能扫到全部命中
   els.settingsSearch?.addEventListener('input', () => {
     const q = (els.settingsSearch.value || '').trim().toLowerCase();
     document.querySelectorAll('.setting-row').forEach((row) => {
@@ -3341,46 +3454,13 @@
       row.classList.toggle('hidden', !match);
       row.classList.toggle('hl', !!q && match);
     });
-    if (q) {
-      // 搜索时绕过 accordion 互斥，全部展开方便扫
-      _accordionMutating = true;
-      try {
-        document.querySelectorAll('.settings-group').forEach((g) => g.setAttribute('open', ''));
-      } finally {
-        _accordionMutating = false;
-      }
-    }
-  });
-  els.settingsGroups?.forEach((group) => {
-    const groupId = group.id || group.getAttribute('data-group') || '';
-    if (!groupId) return;
-
-    group.addEventListener('toggle', () => {
-      if (_accordionMutating) return;
-      // 用户刚把这一组打开 → 关闭其他所有
-      if (group.open) {
-        _accordionMutating = true;
-        try {
-          els.settingsGroups.forEach((other) => {
-            if (other !== group && other.open) other.removeAttribute('open');
-          });
-        } finally {
-          _accordionMutating = false;
-        }
-        // 持久化：只记当前打开的那一组
-        const newState = {};
-        els.settingsGroups.forEach((g) => {
-          const id = g.id || g.getAttribute('data-group') || '';
-          if (!id) return;
-          newState[id] = !g.open; // collapsed = !open
-        });
-        state.settingsCollapsedGroups = newState;
+    document.querySelectorAll('.cc-settings-section').forEach((sec) => {
+      if (q) {
+        // 搜索期间全部 section 都展开（让用户能跨 section 扫匹配项）
+        sec.setAttribute('data-active', 'true');
       } else {
-        // 用户主动关掉 → 全部 collapsed
-        const id = group.id || group.getAttribute('data-group') || '';
-        if (id) state.settingsCollapsedGroups[id] = true;
+        sec.setAttribute('data-active', sec.getAttribute('data-section') === state.settingsActiveSection ? 'true' : 'false');
       }
-      persist();
     });
   });
 
@@ -3967,8 +4047,13 @@
         if (msg.tab) {
           activateTab(msg.tab);
         }
-        if (msg.focus === 'ai' && els.aiConfigCenter) {
-          els.aiConfigCenter.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        if (msg.focus === 'ai') {
+          // 切到 AI Profile section + 滚动
+          state.settingsActiveSection = 'aiConfig';
+          renderSettingsNav();
+          if (els.aiConfigCenter) {
+            els.aiConfigCenter.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          }
         }
         break;
       }
