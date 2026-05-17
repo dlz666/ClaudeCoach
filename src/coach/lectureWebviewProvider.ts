@@ -7,6 +7,7 @@ import { AIClient } from '../ai/client';
 import {
   inlineInsertPrompt,
   inlineRewritePrompt,
+  reviseMarkdownPrompt,
 } from '../ai/prompts';
 import {
   applyInlineWriteback,
@@ -330,7 +331,14 @@ export class LectureWebviewProvider {
 
     const intent = request.intent ?? 'rewrite';
     // ask 模式：强制 preview，且用专门的"问答"system，不让 AI 输出修改片段
-    const effectiveApplyMode: LectureApplyMode = intent === 'ask' ? 'preview-confirm' : request.applyMode;
+    // 强制走 preview-confirm 的两种情况：
+    //   - intent='ask'：自然不修改文件，preview 用来展示气泡
+    //   - intent='rewrite' + 无选区（全文重写）：风险大，不允许 auto-apply 一键覆盖整篇
+    const isFullDocRewrite = intent === 'rewrite'
+      && (!request.selectionText || !request.selectionText.trim());
+    const effectiveApplyMode: LectureApplyMode = (intent === 'ask' || isFullDocRewrite)
+      ? 'preview-confirm'
+      : request.applyMode;
 
     let messages;
     try {
@@ -360,6 +368,15 @@ export class LectureWebviewProvider {
           instruction: askInstruction,
           ctx: promptCtx,
         });
+      } else if (intent === 'rewrite' && isEmptySelection) {
+        // 全文 rewrite：用户没选区但要 AI 重写整篇讲义。用 reviseMarkdownPrompt
+        // 让 AI 输出完整修订后的 markdown，应用阶段走 replaceWholeDocument 整篇覆盖。
+        messages = reviseMarkdownPrompt(
+          request.instruction,
+          fileContent,
+          ctx.args.lessonTitle || '当前讲义',
+          promptCtx,
+        );
       } else {
         messages = isEmptySelection
           ? inlineInsertPrompt({
@@ -464,14 +481,17 @@ export class LectureWebviewProvider {
     const hasSelection = !!(request.selectionText && request.selectionText.trim());
 
     // 写回模式由意图决定，而不是由"有没有选区"决定：
+    //   - rewrite + 无选区 → replaceWholeDocument（整篇覆盖，先 .bak 备份）
     //   - rewrite + 有选区 → replace（严格精确匹配，匹配不上 fail，不再静默覆盖）
-    //   - ask / idea / 无选区 → appendBelowBlock（永远不动选区原文，追加到所选 block 之后）
+    //   - ask / idea → appendBelowBlock（永远不动选区原文，追加到所选 block 之后）
     //   - 没传 intent + 无选区 → appendBelowBlock（兼容旧前端"无选区即插入"的语义）
     //   - 没传 intent + 有选区 → replace（兼容旧前端"有选区即替换"的语义）
     const intent = request.intent;
+    const isFullDocRewrite = intent === 'rewrite' && !hasSelection;
     const safeAppend = intent === 'ask' || intent === 'idea';
     const mode: WritebackInput['mode'] =
-      safeAppend ? 'appendBelowBlock'
+      isFullDocRewrite ? 'replaceWholeDocument'
+      : safeAppend ? 'appendBelowBlock'
       : (!hasSelection ? 'appendBelowBlock' : 'replace');
 
     const writeInput: WritebackInput = {

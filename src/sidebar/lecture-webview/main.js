@@ -271,9 +271,9 @@
     els.popover.style.left = `${left}px`;
     els.popover.innerHTML = '';
 
-    // 三种 mode：rewrite=改这段 / ask=提问 / idea=记一下想法（不改文件）
-    // 全文模式（无选区）下，rewrite 没意义（没东西可替换），默认走 ask。
-    let currentMode = info.isFullDoc ? 'ask' : 'rewrite';
+    // 三种 mode：rewrite=改这段/整篇 / ask=提问 / idea=记一下想法（不改文件）
+    // 全文模式下 rewrite = 整篇 AI 重写（reviseMarkdownPrompt + replaceWholeDocument 写回）
+    let currentMode = 'rewrite';
 
     const heading = document.createElement('div');
     heading.className = 'popover-heading';
@@ -282,11 +282,11 @@
       : `选中第 ${info.startLine + 1}–${info.endLine} 行`;
     els.popover.appendChild(heading);
 
-    // mode 切换条。全文模式禁用 rewrite（没法替换不存在的选区）。
     const modeBar = document.createElement('div');
     modeBar.className = 'popover-mode-bar';
     const modes = info.isFullDoc
       ? [
+          { key: 'rewrite', label: '🛠 重写整篇', hint: 'AI 输出完整新版讲义并整篇覆盖（强制走预览 + 自动 .bak 备份，可撤回）' },
           { key: 'ask', label: '❓ 提问', hint: 'AI 基于整篇讲义回答你的问题' },
           { key: 'idea', label: '💡 记想法', hint: '把你的想法以引用块追加到讲义末尾' },
         ]
@@ -305,12 +305,20 @@
         modeButtons.forEach((b) => b.classList.toggle('active', b === btn));
         // 切换 placeholder + 提交按钮文案
         textarea.placeholder = m.key === 'rewrite'
-          ? '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…'
+          ? (info.isFullDoc
+              ? '告诉 AI 怎么改整篇：「补更多例题」「改成更严谨的证明风格」「补一个总结表」…'
+              : '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…')
           : m.key === 'ask'
-            ? '关于这段你想问什么：「这步为什么成立」「能换种方式解释吗」…'
-            : '记下你自己的想法/疑问，会作为引用块追加到这段下方。';
+            ? (info.isFullDoc
+                ? '关于整篇讲义你想问什么：「主要思想是什么」「跟 X 概念有什么联系」…'
+                : '关于这段你想问什么：「这步为什么成立」「能换种方式解释吗」…')
+            : (info.isFullDoc
+                ? '记下你自己的想法/疑问，会作为引用块追加到讲义末尾。'
+                : '记下你自己的想法/疑问，会作为引用块追加到这段下方。');
         btnSubmit.textContent = m.key === 'rewrite'
-          ? (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI')
+          ? (info.isFullDoc
+              ? '重写整篇讲义'
+              : (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI'))
           : m.key === 'ask' ? '问 AI'
           : '保存想法';
       });
@@ -329,7 +337,9 @@
 
     const textarea = document.createElement('textarea');
     textarea.className = 'popover-textarea';
-    textarea.placeholder = '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…';
+    textarea.placeholder = info.isFullDoc
+      ? '告诉 AI 怎么改整篇：「补更多例题」「改成更严谨的证明风格」「补一个总结表」…'
+      : '告诉 AI 怎么改：「补一个例子」「化简这段」「加公式推导」…';
     textarea.rows = 3;
     els.popover.appendChild(textarea);
 
@@ -337,7 +347,9 @@
     actions.className = 'popover-actions';
     const btnSubmit = document.createElement('button');
     btnSubmit.className = 'btn-primary';
-    btnSubmit.textContent = state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI';
+    btnSubmit.textContent = info.isFullDoc
+      ? '重写整篇讲义'
+      : (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI');
     const btnCancel = document.createElement('button');
     btnCancel.className = 'btn-ghost';
     btnCancel.textContent = '取消';

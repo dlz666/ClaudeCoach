@@ -37,7 +37,13 @@ export interface WritebackInput {
    *   这是"提问 → 把回答存到讲义"/"记想法"等 non-destructive 操作的唯一安全
    *   写法。selectionText 在此模式下仅作元信息记录，可空。
    */
-  mode: 'replace' | 'insertAfter' | 'appendBelowBlock';
+  /**
+   * - `replace` / `insertAfter` / `appendBelowBlock`：选区范围内的写回（见下）
+   * - `replaceWholeDocument`：**整篇覆盖**写回。忽略 sourceLineStart / sourceLineEnd /
+   *   selectionText，把 newContent 当作完整新文件内容写盘。**必须**先备份到 .bak。
+   *   用于"全文 rewrite"场景（如"补更多例题"、"改成更严谨风格"等用户对整篇讲义的整体重塑）。
+   */
+  mode: 'replace' | 'insertAfter' | 'appendBelowBlock' | 'replaceWholeDocument';
   /**
    * 仅 `mode: 'replace'` 时生效。默认 false：找不到选区文本时 fail。
    * true：找不到时降级为 `appendBelowBlock`，并设置 warning。
@@ -137,6 +143,26 @@ export async function applyInlineWriteback(input: WritebackInput): Promise<Write
     return {
       ok: false,
       errorMessage: `读取讲义文件失败：${(error as Error).message}`,
+    };
+  }
+
+  // ===== replaceWholeDocument：整篇覆盖（早返回，跳过 slice/match 逻辑）=====
+  if (input.mode === 'replaceWholeDocument') {
+    const backupPath = await writeBackup(input.filePath, raw);
+    try {
+      await writeMarkdown(input.filePath, input.newContent);
+    } catch (error) {
+      return {
+        ok: false,
+        errorMessage: `整篇写回失败：${(error as Error).message}`,
+        backupPath,
+      };
+    }
+    const newLineCount = input.newContent.split('\n').length;
+    return {
+      ok: true,
+      appliedRange: { startLine: 0, endLine: Math.max(0, newLineCount - 1) },
+      backupPath,
     };
   }
 
