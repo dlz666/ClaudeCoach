@@ -234,6 +234,14 @@ export interface PromptContext {
    * 注入到 outline 生成 prompt 末尾作为用户原话）。
    */
   creationInstruction?: string;
+  /** 学习目标：完成课程后想能做到什么。 */
+  learningGoal?: string;
+  /** 已有基础：用户表明自己已会的部分，AI 跳过/精简对应内容。 */
+  existingKnowledge?: string;
+  /** 大纲规模偏好。 */
+  outlineSize?: 'concise' | 'standard' | 'detailed';
+  /** 偏重风格（多选）：practice=实战 / theory=理论 / drill=题型熟练 / intuition=概念直觉。 */
+  styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
 }
 
 type PromptInjectField =
@@ -553,9 +561,61 @@ export function rebuildCourseOutlinePrompt(subject: Subject, currentOutline: Cou
   ];
 }
 
+/** 大纲规模 → 主题数 + 课时数 hint。 */
+function outlineSizeRule(size?: PromptContext['outlineSize']): string {
+  switch (size) {
+    case 'concise':  return '- 包含 3 到 5 个主题，每个主题 2 到 4 节课（精炼、聚焦核心）';
+    case 'detailed': return '- 包含 8 到 12 个主题，每个主题 4 到 6 节课（详尽、覆盖周边）';
+    default:         return '- 包含 5 到 8 个主题，每个主题 3 到 5 节课';
+  }
+}
+
+/** 偏重风格 → 写到 prompt 里的指令片段。 */
+function styleEmphasisRule(emphases?: PromptContext['styleEmphasis']): string {
+  if (!emphases || emphases.length === 0) return '';
+  const map: Record<string, string> = {
+    practice: '**实战项目导向**：课时安排倾向"做完才学会"，每个主题至少有一节面向具体场景的应用',
+    theory: '**理论严谨**：定义→定理→证明大纲的链条要清晰，不省略关键推导',
+    drill: '**题型熟练度**：每个核心概念配套常见题型组，强调反复刷题中固化模式',
+    intuition: '**概念直觉**：先用类比 / 图示 / 极端情况建立直觉，再上形式定义',
+  };
+  return emphases.map((e) => `- 偏重风格：${map[e] || e}`).join('\n');
+}
+
+/** 当 tags 含 cs-skill / cs-theory / engineering 时，让 AI 额外输出 projects 字段。 */
+function shouldRequestProjects(tags?: CourseTag[]): boolean {
+  if (!tags || tags.length === 0) return false;
+  return tags.some((t) => t === 'cs-skill' || t === 'cs-theory' || t === 'engineering');
+}
+
 export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext): ChatMessage[] {
   const subjectName = subjectLabel(subject);
   const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
+  const includeProjects = shouldRequestProjects(ctx.courseTags);
+
+  const projectsSchemaFragment = includeProjects ? `,
+  "projects": [
+    {
+      "id": "proposal-01",
+      "title": "项目名称",
+      "description": "1-2 句话：要做什么 + 学完能产出什么",
+      "learningGoals": ["完成后能 X", "完成后能 Y"],
+      "difficulty": 3,
+      "suggestedTechStack": ["TypeScript", "Vitest"]
+    }
+  ]` : '';
+  const projectsRequirements = includeProjects
+    ? `- **必须**输出 1 到 3 个 projects 提案。每个提案是一个可以让学生**亲手做**的项目（写代码 / 搭系统 / 实现算法 / 复现论文），不是"读完然后写感想"那种。
+- projects 难度梯度：第 1 个 easy（贯穿前期课时），最后一个 medium-hard（综合多个主题）。
+- projects 不要拘泥于课程已有 topic，可以引入跨主题综合。
+- suggestedTechStack 选项要符合现代主流（2026 年）。`
+    : '';
+
+  const userExtras: string[] = [];
+  if (ctx.learningGoal) userExtras.push(`学习目标（用户希望完成课程后能做到什么）：${ctx.learningGoal}`);
+  if (ctx.existingKnowledge) userExtras.push(`已有基础（**请精简 / 跳过**这些内容）：${ctx.existingKnowledge}`);
+  if (ctx.creationInstruction) userExtras.push(`额外要求：${ctx.creationInstruction}`);
+
   return [
     {
       role: 'system',
@@ -570,27 +630,70 @@ export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext):
         { "id": "lesson-01", "title": "课时名称", "difficulty": 1 }
       ]
     }
-  ]
+  ]${projectsSchemaFragment}
 }
 要求：
-- 包含 5 到 8 个主题
-- 每个主题 3 到 5 节课
+${outlineSizeRule(ctx.outlineSize)}
+${styleEmphasisRule(ctx.styleEmphasis)}
 - 课程标题、主题标题、课时标题以中文为主，但编程语言名、技术框架名（如 React、Python、SQL、HTTP）允许保留英文
 - 大纲标题只能写一个短句
-- 不要出现公式
-- 不要出现 LaTeX
-- 尽量避免阿拉伯数字编号，主题与课时之间用空格或“与”连接
-- 标点尽量精简，避免长句
-- 标题只表达一个核心概念 保持干练
-- 大纲只负责列课程结构 不要在标题里展开解释
+- 不要出现公式，不要出现 LaTeX
+- 尽量避免阿拉伯数字编号，主题与课时之间用空格或"与"连接
+- 标点精简，避免长句
+- 标题只表达一个核心概念，保持干练
+- 大纲只负责列课程结构，不要在标题里展开解释
 - difficulty 使用 1 到 5 逐步递进
-- 只输出 JSON 不要额外解释`,
+${projectsRequirements}
+- 只输出 JSON，不要额外解释，不要 markdown 围栏`,
     },
     {
       role: 'user',
-      content: ctx.creationInstruction
-        ? `请为“${subjectName}”生成课程大纲。\n\n用户的额外要求（请认真遵循）：${ctx.creationInstruction}`
+      content: userExtras.length
+        ? `请为“${subjectName}”生成课程大纲。\n\n${userExtras.join('\n\n')}`
         : `请为“${subjectName}”生成课程大纲`,
+    },
+  ];
+}
+
+/**
+ * 基于已生成的 outline 预览 + 用户的自然语言修改建议，重新生成 outline。
+ * 用在 preview→refine→confirm 流程：用户对当前 outline 不满意，
+ * 给一句话指令（"把第 3 章拆成两章"、"加一节关于 X 的内容"），
+ * AI 输出修订后的完整 outline JSON。
+ */
+export function refineCoursePreviewPrompt(args: {
+  subject: Subject;
+  currentPreview: CourseOutline;
+  refineInstruction: string;
+  ctx: PromptContext;
+}): ChatMessage[] {
+  const { subject, currentPreview, refineInstruction, ctx } = args;
+  const subjectName = subjectLabel(subject);
+  const scopedCtx: PromptContext = { ...ctx, scope: 'outline-gen' };
+  const includeProjects = shouldRequestProjects(ctx.courseTags ?? currentPreview.tags);
+
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你正在帮学生迭代修改一份**预览课程大纲**。学生给出修改指令，请输出修订后的完整 outline JSON。
+
+【硬约束】
+- 只输出 JSON，没有围栏，没有解释。
+- JSON 结构与初次生成一致：title / topics（含 lessons）${includeProjects ? ' / projects' : ''}。
+- **保留学生没要求修改的部分原样**（topic / lesson 标题不要无故重写）。
+- 修改指令是局部 / 全局视情况而定，请仔细识别。
+- difficulty 范围 1-5；id 字段可以保留原 id 或重新分配 topic-NN / lesson-NN。
+${includeProjects ? '- projects 数组：若学生没说要改 projects，原样保留；说要加 / 删 / 改，再调。' : ''}`,
+    },
+    {
+      role: 'user',
+      content: `当前预览大纲（${subjectName}）：
+\`\`\`json
+${JSON.stringify(currentPreview, null, 2)}
+\`\`\`
+
+请按以下修改指令重新生成完整 outline JSON：
+${refineInstruction}`,
     },
   ];
 }

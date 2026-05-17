@@ -4,6 +4,7 @@ import {
   strictFullRebuildCourseOutlinePrompt,
   strictPartialRebuildCourseOutlinePrompt,
   strictRebuildCourseOutlinePrompt,
+  refineCoursePreviewPrompt,
   lessonPrompt,
   exercisePrompt,
 } from '../ai/prompts';
@@ -47,6 +48,14 @@ interface GenerationContext {
    * "跳过历史背景"）。仅 generateCourse 用，注入到 outline 生成 prompt 末尾。
    */
   creationInstruction?: string;
+  /** 学习目标（key field）：完成课程后想能做到什么。 */
+  learningGoal?: string;
+  /** 已有基础：用户表明自己已会的部分，AI 跳过。 */
+  existingKnowledge?: string;
+  /** 大纲规模偏好：决定 topic / lesson 颗粒度。 */
+  outlineSize?: 'concise' | 'standard' | 'detailed';
+  /** 偏重风格（多选）：practice / theory / drill / intuition。 */
+  styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
   /**
    * 连胜/连败信号：从 AdaptiveTriggerState 来，让难度调节立刻反应近期表现。
    * 比 masteryPercent 更灵敏（≥1 grade 就有信号，无需等 ≥2）。
@@ -73,16 +82,84 @@ export class ContentGenerator {
 
   async generateCourse(subject: Subject, ctx: GenerationContext): Promise<CourseOutline> {
     const messages = strictCourseOutlinePrompt(subject, ctx);
-    const data = await this.ai.chatJson<{ title: string; topics: CourseOutline['topics'] }>(messages);
+    const data = await this.ai.chatJson<{
+      title: string;
+      topics: CourseOutline['topics'];
+      projects?: import('../types').CourseProjectProposal[];
+    }>(messages);
     this.assertOutlinePayload(data, '课程大纲');
 
-    return this.persistOutline(subject, {
+    // 注意：preview/refine 流程**不**走 persistOutline。我们这里依然返回完整 outline
+    // 但调用方（SidebarProvider._generateCoursePreview）会在 preview cache 里持有，
+    // 只有用户点 apply 才落盘。为了兼容老流程（如果还有直接调 generateCourse 的，
+    // 必须保留 persistOutline 行为）—— 但目前已经没有了，所有路径都走 preview。
+    // 这里改成 not persist，让 preview 流程不会污染磁盘。
+    return {
       id: `course-${subject}-${Date.now()}`,
       subject,
       title: data.title,
-      topics: data.topics,
+      topics: this.normalizeTopicIds(data.topics),
       createdAt: new Date().toISOString(),
+      projects: Array.isArray(data.projects) ? this.normalizeProjects(data.projects) : undefined,
+    };
+  }
+
+  /**
+   * 基于一份预览 outline + 用户修改指令，重新生成 outline（不写盘）。
+   * 给 SidebarProvider 的 preview/refine 流程用。
+   */
+  async refineCoursePreview(
+    subject: Subject,
+    currentPreview: CourseOutline,
+    refineInstruction: string,
+    ctx: GenerationContext,
+  ): Promise<CourseOutline> {
+    const messages = refineCoursePreviewPrompt({
+      subject,
+      currentPreview,
+      refineInstruction,
+      ctx,
     });
+    const data = await this.ai.chatJson<{
+      title: string;
+      topics: CourseOutline['topics'];
+      projects?: import('../types').CourseProjectProposal[];
+    }>(messages);
+    this.assertOutlinePayload(data, '修订大纲');
+    return {
+      id: currentPreview.id,
+      subject,
+      title: data.title,
+      topics: this.normalizeTopicIds(data.topics),
+      createdAt: currentPreview.createdAt,
+      tags: currentPreview.tags,
+      projects: Array.isArray(data.projects) ? this.normalizeProjects(data.projects) : undefined,
+    };
+  }
+
+  /** AI 给的 topic id 可能不规则，确保是 stable string；不动 lesson id（lesson 会在 persist 时打 code）。 */
+  private normalizeTopicIds(topics: any[]): CourseOutline['topics'] {
+    return (topics || []).map((t, i) => ({
+      ...t,
+      id: typeof t?.id === 'string' && t.id ? t.id : `topic-${String(i + 1).padStart(2, '0')}`,
+      lessons: Array.isArray(t?.lessons) ? t.lessons : [],
+    }));
+  }
+
+  /** 校验并规整 projects 数组：补 id、限定 difficulty 范围、过滤空标题。 */
+  private normalizeProjects(projects: any[]): import('../types').CourseProjectProposal[] {
+    return (projects || [])
+      .map((p, i) => ({
+        id: typeof p?.id === 'string' && p.id ? p.id : `proposal-${String(i + 1).padStart(2, '0')}`,
+        title: typeof p?.title === 'string' ? p.title : '',
+        description: typeof p?.description === 'string' ? p.description : '',
+        learningGoals: Array.isArray(p?.learningGoals) ? p.learningGoals.filter((g: any) => typeof g === 'string') : [],
+        difficulty: typeof p?.difficulty === 'number' ? Math.max(1, Math.min(5, Math.floor(p.difficulty))) : 3,
+        suggestedTechStack: Array.isArray(p?.suggestedTechStack)
+          ? p.suggestedTechStack.filter((s: any) => typeof s === 'string')
+          : [],
+      }))
+      .filter((p) => p.title.trim().length > 0);
   }
 
   async rebuildCourse(

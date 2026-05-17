@@ -93,6 +93,11 @@
       <div id="new-course-panel" class="new-course-panel hidden">
         <input type="text" id="subject-input" class="new-course-name" placeholder="课程名称（如：算法导论 / React 19 实战 / Mamba 架构）">
 
+        <label class="new-course-goal-row">
+          <span class="new-course-row-title">学习目标</span>
+          <textarea id="new-course-learning-goal" rows="2" placeholder="完成这门课后我想能做到 ⋯（最有效的一栏，AI 会按这个反推课程结构）"></textarea>
+        </label>
+
         <div class="new-course-tags-wrap">
           <div class="new-course-row-head">
             <span class="new-course-row-title">教学法 Tag</span>
@@ -105,23 +110,74 @@
           <summary>更多设置</summary>
           <div class="new-course-extra-grid">
             <label class="form-row">
-              <span class="form-label">初始难度</span>
-              <select id="new-course-difficulty">
-                <option value="">全局默认</option>
-                <option value="beginner">入门</option>
-                <option value="basic">基础</option>
-                <option value="intermediate">进阶</option>
-                <option value="challenge">挑战</option>
-              </select>
+              <span class="form-label">已有基础（AI 会跳过这些）</span>
+              <textarea id="new-course-existing-knowledge" rows="2" placeholder="如：会基础 hooks 和 TypeScript / 高中数学 / 了解 Transformer 但没自己写过"></textarea>
             </label>
+
+            <div class="new-course-extra-two-col">
+              <label class="form-row">
+                <span class="form-label">大纲规模</span>
+                <select id="new-course-outline-size">
+                  <option value="">适中（5-8 主题）</option>
+                  <option value="concise">精炼（3-5 主题）</option>
+                  <option value="standard">适中（5-8 主题）</option>
+                  <option value="detailed">详尽（8-12 主题）</option>
+                </select>
+              </label>
+              <label class="form-row">
+                <span class="form-label">初始难度</span>
+                <select id="new-course-difficulty">
+                  <option value="">全局默认</option>
+                  <option value="beginner">入门</option>
+                  <option value="basic">基础</option>
+                  <option value="intermediate">进阶</option>
+                  <option value="challenge">挑战</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="new-course-emphasis-wrap">
+              <span class="form-label">偏重风格（可多选）</span>
+              <div id="new-course-emphasis-chips" class="tag-chip-list">
+                <span class="tag-chip" role="button" tabindex="0" data-emphasis="practice" title="课时偏向实战项目，每个主题至少一节面向场景的应用">🛠 实战项目</span>
+                <span class="tag-chip" role="button" tabindex="0" data-emphasis="theory" title="定义 → 定理 → 证明大纲，强调推导严谨">📐 理论严谨</span>
+                <span class="tag-chip" role="button" tabindex="0" data-emphasis="drill" title="每个概念配套常见题型组，强调反复刷题">🎯 题型熟练</span>
+                <span class="tag-chip" role="button" tabindex="0" data-emphasis="intuition" title="先类比 / 图示 / 极端情况建直觉，再上形式定义">💡 概念直觉</span>
+              </div>
+            </div>
+
             <label class="form-row">
               <span class="form-label">额外说明 / 重点</span>
-              <textarea id="new-course-instruction" rows="2" placeholder="如：偏重实战项目 / 跳过历史背景 / 按 OpenAI Cookbook 顺序"></textarea>
+              <textarea id="new-course-instruction" rows="2" placeholder="如：按 OpenAI Cookbook 顺序 / 不要历史背景 / 用 PyTorch 不要 TF"></textarea>
             </label>
           </div>
         </details>
 
-        <button class="btn primary new-course-submit" id="btn-generate-course">生成课程大纲</button>
+        <button class="btn primary new-course-submit" id="btn-generate-course">生成大纲预览</button>
+      </div>
+
+      <!-- 大纲预览面板：generateCourse 不再立刻写盘，先在这里出预览，可以 refine -->
+      <div id="course-preview-panel" class="course-preview-panel hidden">
+        <div class="course-preview-header">
+          <div>
+            <h4 id="course-preview-title">大纲预览</h4>
+            <p class="section-subtitle" id="course-preview-meta">未生成</p>
+          </div>
+        </div>
+        <div id="course-preview-tree" class="course-preview-tree"></div>
+        <div id="course-preview-projects" class="course-preview-projects"></div>
+
+        <div class="course-preview-refine">
+          <label class="form-row">
+            <span class="form-label">不满意？告诉 AI 怎么改</span>
+            <textarea id="course-preview-refine-input" rows="2" placeholder="如：把"第3章"拆成两章 / 加一节关于 SSR 的 / 把后半段难度调到 challenge / 用 Vitest 替换 Jest"></textarea>
+          </label>
+          <div class="course-preview-actions">
+            <button class="btn primary" id="btn-refine-course-preview">AI 修订一版</button>
+            <button class="btn primary success-tone" id="btn-apply-course-preview">✓ 应用大纲</button>
+            <button class="btn ghost" id="btn-discard-course-preview">丢弃</button>
+          </div>
+        </div>
       </div>
     </section>
 

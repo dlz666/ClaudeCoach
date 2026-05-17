@@ -282,6 +282,26 @@ export interface CourseOutline {
   createdAt: string;
   /** 教学法分类 tag。一门课可挂多个（如 cs-theory + math-foundation）。 */
   tags?: CourseTag[];
+  /**
+   * AI 生成大纲时附带的项目提案。仅对动手类课程（cs-skill / cs-theory /
+   * engineering）有意义，其他 tag 类型不要求 AI 输出。用户可在 UI 上点击
+   * "落地为项目"把提案转成一个真正的 ProjectSpec。
+   */
+  projects?: CourseProjectProposal[];
+}
+
+export interface CourseProjectProposal {
+  /** 课程内稳定 id（如 'proposal-01'），不是 ProjectMeta.id —— 转成真项目时
+   * 才会有 ProjectMeta.id；这只是大纲内的占位锚点。 */
+  id: string;
+  title: string;
+  description: string;
+  learningGoals: string[];
+  /** 1-5。 */
+  difficulty: number;
+  suggestedTechStack: string[];
+  /** 标记是否已经被用户落地为真正的项目（meta.id）；落地后这里写真 id 防重复创建。 */
+  realizedAs?: string;
 }
 
 export interface TopicOutline {
@@ -1208,15 +1228,29 @@ export type PromptContextScope =
 // ===== Sidebar Messages =====
 export type SidebarCommand =
   | {
+      /** 生成课程**预览**（不写盘）。返回 'coursePreview' 响应。用户可以继续 refine
+       * 或 apply。这条 message 名沿用，但语义从"立即生成并保存"变成"先出预览"。 */
       type: 'generateCourse';
       subject: Subject;
-      /** 创建时一并设的教学法 tag。空数组 / undefined = 不设。 */
       tags?: CourseTag[];
-      /** 创建时一并指定的初始难度（覆盖 prefs.difficulty.global）。 */
       difficulty?: 'beginner' | 'basic' | 'intermediate' | 'challenge';
-      /** 用户给 AI 的额外说明 / 重点 / 限制（如"按 OpenAI Cookbook 顺序"）。 */
+      /** 学习目标：完成课程后想能做到什么（key field）。 */
+      learningGoal?: string;
+      /** 已有基础：用户表明的"我已经会的部分"，AI 会跳过。 */
+      existingKnowledge?: string;
+      /** 大纲规模偏好：决定 topic / lesson 颗粒度。 */
+      outlineSize?: 'concise' | 'standard' | 'detailed';
+      /** 偏重风格（可多选）：影响讲义结构、出题分布、复习节奏。 */
+      styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
+      /** 兜底：自然语言额外说明 / 限制。 */
       instruction?: string;
     }
+  /** 基于上一份预览 + 用户的自然语言修改建议，重新生成预览。 */
+  | { type: 'refineCoursePreview'; previewId: string; instruction: string }
+  /** 把缓存的预览写盘成正式课程大纲。 */
+  | { type: 'applyCoursePreview'; previewId: string }
+  /** 丢弃缓存的预览（用户关掉 UI / 取消生成）。 */
+  | { type: 'discardCoursePreview'; previewId: string }
   | { type: 'rebuildCourseOutline'; subject: Subject; materialId?: string }
   | { type: 'previewRebuildCourseOutline'; request: OutlineRebuildPreviewRequest }
   | { type: 'applyRebuildCourseOutline'; request: OutlineRebuildApplyRequest }
@@ -1309,13 +1343,26 @@ export type SidebarCommand =
   | { type: 'openProject'; projectId: string }
   | { type: 'deleteProject'; projectId: string; purgeFiles?: boolean }
   | { type: 'updateProjectProgress'; projectId: string; completedTodos: number; status?: ProjectStatus }
-  | { type: 'getProjectSpec'; projectId: string };
+  | { type: 'getProjectSpec'; projectId: string }
+  /** 把大纲里的 CourseProjectProposal 落地为真项目（auto-fill 项目生成）。 */
+  | { type: 'realizeProjectFromProposal'; subject: Subject; proposalId: string };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
   | { type: 'outlineRebuildPreview'; data: OutlineRebuildPreviewResult }
   | { type: 'outlineRebuildApplied'; previewId: string; mode: OutlineRebuildMode; outline: CourseOutline }
   | { type: 'courseGenerated'; outline: CourseOutline }
+  /** 预览版课程大纲（未写盘）。带 previewId 供后续 refine / apply / discard。 */
+  | {
+      type: 'coursePreview';
+      previewId: string;
+      subject: Subject;
+      outline: CourseOutline;
+      /** 给前端：上一次用户给的修改指令（如果是 refine 产物）。 */
+      lastRefineInstruction?: string;
+      warnings?: string[];
+    }
+  | { type: 'coursePreviewDiscarded'; previewId: string }
   | { type: 'gradeResult'; result: GradeResult }
   | { type: 'diagnosis'; data: LatestDiagnosis | null }
   | { type: 'preferences'; data: LearningPreferences }

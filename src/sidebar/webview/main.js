@@ -888,7 +888,8 @@
     els.courseTitleText.innerHTML = `${escapeHtml(course.title)}${tagsHtml ? ' ' + tagsHtml : ''}`;
     els.courseTree.classList.remove('hidden');
 
-    els.courseTree.innerHTML = course.topics.map((topic, topicIndex) => `
+    // 主题/课时 + 课程附带项目提案（outline.projects）
+    const topicsHtml = course.topics.map((topic, topicIndex) => `
       <div class="tree-node">
         <div class="tree-topic open">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
         <div class="tree-children">
@@ -933,6 +934,39 @@
         </div>
       </div>
     `).join('');
+
+    // outline.projects 推荐项目（仅对动手类课程）
+    const proposals = Array.isArray(course.projects) ? course.projects : [];
+    const proposalsHtml = proposals.length > 0 ? `
+      <div class="tree-proposals">
+        <div class="tree-proposals-title">🛠 推荐项目</div>
+        ${proposals.map((p) => `
+          <div class="tree-proposal" data-proposal-id="${escapeHtml(p.id)}">
+            <div class="tree-proposal-head">
+              <span class="tree-proposal-title">${escapeHtml(p.title || '')}</span>
+              <span class="tree-proposal-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
+            </div>
+            <p class="tree-proposal-desc">${escapeHtml(p.description || '')}</p>
+            ${p.realizedAs
+              ? `<button class="btn small ghost" disabled>已落地</button>`
+              : `<button class="btn small primary" data-act="realize-proposal" data-subject="${escapeHtml(course.subject)}" data-proposal-id="${escapeHtml(p.id)}">落地为项目</button>`}
+          </div>
+        `).join('')}
+      </div>
+    ` : '';
+
+    els.courseTree.innerHTML = topicsHtml + proposalsHtml;
+
+    // 推荐项目 "落地为项目" 按钮
+    els.courseTree.querySelectorAll('[data-act="realize-proposal"]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const subject = btn.getAttribute('data-subject');
+        const proposalId = btn.getAttribute('data-proposal-id');
+        if (!subject || !proposalId) return;
+        vscode.postMessage({ type: 'realizeProjectFromProposal', subject, proposalId });
+      });
+    });
 
     els.courseTree.querySelectorAll('.tree-topic').forEach((topicEl) => {
       topicEl.addEventListener('click', () => {
@@ -3078,8 +3112,16 @@
     const tags = Array.from(tagsEl?.querySelectorAll('.tag-chip.checked') || [])
       .map((chip) => chip.getAttribute('data-course-tag'))
       .filter(Boolean);
-    // 收集课程设置（可选）
+    // 收集偏重风格 chips
+    const emphasisEl = document.getElementById('new-course-emphasis-chips');
+    const styleEmphasis = Array.from(emphasisEl?.querySelectorAll('.tag-chip.checked') || [])
+      .map((chip) => chip.getAttribute('data-emphasis'))
+      .filter(Boolean);
+    // 收集课程设置
     const difficulty = (document.getElementById('new-course-difficulty')?.value || '').trim() || undefined;
+    const learningGoal = (document.getElementById('new-course-learning-goal')?.value || '').trim() || undefined;
+    const existingKnowledge = (document.getElementById('new-course-existing-knowledge')?.value || '').trim() || undefined;
+    const outlineSize = (document.getElementById('new-course-outline-size')?.value || '').trim() || undefined;
     const instruction = (document.getElementById('new-course-instruction')?.value || '').trim() || undefined;
 
     vscode.postMessage({
@@ -3087,8 +3129,142 @@
       subject,
       tags: tags.length ? tags : undefined,
       difficulty,
+      learningGoal,
+      existingKnowledge,
+      outlineSize: outlineSize || undefined,
+      styleEmphasis: styleEmphasis.length ? styleEmphasis : undefined,
       instruction,
     });
+  });
+
+  // 偏重风格 chip 切换
+  (function setupEmphasisChips() {
+    const el = document.getElementById('new-course-emphasis-chips');
+    if (!el) return;
+    el.querySelectorAll('.tag-chip').forEach((chip) => {
+      const toggle = () => chip.classList.toggle('checked');
+      chip.addEventListener('click', toggle);
+      chip.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(); }
+      });
+    });
+  })();
+
+  // ===== 课程大纲 preview / refine / apply / discard 流程 =====
+  state.coursePreview = state.coursePreview || null; // { previewId, subject, outline, lastRefineInstruction? }
+
+  function renderCoursePreviewPanel() {
+    const panel = document.getElementById('course-preview-panel');
+    if (!panel) return;
+    const cp = state.coursePreview;
+    if (!cp) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.remove('hidden');
+
+    const titleEl = document.getElementById('course-preview-title');
+    const metaEl = document.getElementById('course-preview-meta');
+    if (titleEl) titleEl.textContent = `预览：${cp.outline.title || '（未命名）'}`;
+    if (metaEl) {
+      const topicCount = (cp.outline.topics || []).length;
+      const lessonCount = (cp.outline.topics || []).reduce((s, t) => s + (t.lessons?.length || 0), 0);
+      const projCount = (cp.outline.projects || []).length;
+      const projStr = projCount ? ` · 项目 ${projCount}` : '';
+      const refineStr = cp.lastRefineInstruction ? ` · 上次修订："${cp.lastRefineInstruction}"` : '';
+      metaEl.textContent = `主题 ${topicCount} · 课时 ${lessonCount}${projStr}${refineStr}`;
+    }
+
+    // 渲染主题/课时树
+    const treeEl = document.getElementById('course-preview-tree');
+    if (treeEl) {
+      treeEl.innerHTML = (cp.outline.topics || []).map((t, ti) => {
+        const lessons = (t.lessons || []).map((l, li) => `
+          <li class="cpt-lesson">
+            <span class="cpt-lesson-num">${ti + 1}.${li + 1}</span>
+            <span class="cpt-lesson-title">${escapeHtml(l.title || '')}</span>
+            <span class="cpt-lesson-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(l.difficulty) || 1)))}</span>
+          </li>
+        `).join('');
+        return `
+          <div class="cpt-topic">
+            <div class="cpt-topic-head">
+              <span class="cpt-topic-num">${ti + 1}.</span>
+              <span class="cpt-topic-title">${escapeHtml(t.title || '')}</span>
+            </div>
+            <ul class="cpt-lessons">${lessons}</ul>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 渲染项目提案
+    const projEl = document.getElementById('course-preview-projects');
+    if (projEl) {
+      const projects = cp.outline.projects || [];
+      if (projects.length === 0) {
+        projEl.innerHTML = '';
+        projEl.classList.add('hidden');
+      } else {
+        projEl.classList.remove('hidden');
+        projEl.innerHTML = `
+          <div class="cpp-section-title">🛠 推荐项目（应用大纲后可一键落地）</div>
+          ${projects.map((p) => `
+            <div class="cpp-card">
+              <div class="cpp-card-head">
+                <div class="cpp-card-title">${escapeHtml(p.title || '')}</div>
+                <span class="cpp-card-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
+              </div>
+              <p class="cpp-card-desc">${escapeHtml(p.description || '')}</p>
+              ${(p.suggestedTechStack || []).length ? `<div class="cpp-card-stack">${(p.suggestedTechStack || []).map((s) => `<span class="cpp-card-stack-pill">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
+            </div>
+          `).join('')}
+        `;
+      }
+    }
+  }
+
+  function clearCoursePreview() {
+    state.coursePreview = null;
+    const refineInput = document.getElementById('course-preview-refine-input');
+    if (refineInput) refineInput.value = '';
+    renderCoursePreviewPanel();
+  }
+
+  // refine 按钮
+  document.getElementById('btn-refine-course-preview')?.addEventListener('click', () => {
+    if (!state.coursePreview) return;
+    const refineInput = document.getElementById('course-preview-refine-input');
+    const instruction = (refineInput?.value || '').trim();
+    if (!instruction) {
+      showToast('请填写修改建议', 'warn');
+      refineInput?.focus();
+      return;
+    }
+    vscode.postMessage({
+      type: 'refineCoursePreview',
+      previewId: state.coursePreview.previewId,
+      instruction,
+    });
+  });
+
+  // apply 按钮
+  document.getElementById('btn-apply-course-preview')?.addEventListener('click', () => {
+    if (!state.coursePreview) return;
+    vscode.postMessage({
+      type: 'applyCoursePreview',
+      previewId: state.coursePreview.previewId,
+    });
+  });
+
+  // discard 按钮
+  document.getElementById('btn-discard-course-preview')?.addEventListener('click', () => {
+    if (!state.coursePreview) return;
+    vscode.postMessage({
+      type: 'discardCoursePreview',
+      previewId: state.coursePreview.previewId,
+    });
+    clearCoursePreview();
   });
 
   els.btnRefreshCourses?.addEventListener('click', () => {
@@ -3910,7 +4086,33 @@
           state.courses = next;
           state.selectedSubject = msg.outline.subject;
         }
+        // apply 完成 → 清掉预览面板，回到正常 onCourseSelected 视图
+        clearCoursePreview();
         onCourseSelected();
+        showToast('课程大纲已应用 ✓', 'success');
+        break;
+      }
+      case 'coursePreview': {
+        // AI 生成 / refine 后的预览：缓存到 state，渲染预览面板
+        state.coursePreview = {
+          previewId: msg.previewId,
+          subject: msg.subject,
+          outline: msg.outline,
+          lastRefineInstruction: msg.lastRefineInstruction,
+        };
+        renderCoursePreviewPanel();
+        // 清空 refine textarea（refine 成功后），让用户可以继续下一轮
+        const refineInput = document.getElementById('course-preview-refine-input');
+        if (refineInput) refineInput.value = '';
+        // 滚到预览面板
+        document.getElementById('course-preview-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        break;
+      }
+      case 'coursePreviewDiscarded': {
+        // 后端确认已 drop（前端已经先 clearCoursePreview，这里幂等）
+        if (state.coursePreview?.previewId === msg.previewId) {
+          clearCoursePreview();
+        }
         break;
       }
       case 'materials': {

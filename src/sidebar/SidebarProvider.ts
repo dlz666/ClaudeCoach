@@ -13,6 +13,7 @@ import { PreferencesStore } from '../progress/preferencesStore';
 import { AdaptiveEngine } from '../progress/adaptiveEngine';
 import { CourseProfileStore, inferRevisionPreferenceTags } from '../progress/courseProfileStore';
 import {
+  SidebarCommand,
   SidebarResponse,
   ChatMessage,
   MaterialEntry,
@@ -82,6 +83,23 @@ interface OutlineRebuildPreviewCacheEntry {
   impact: OutlineRebuildImpactSummary;
 }
 
+interface CoursePreviewCacheEntry {
+  previewId: string;
+  subject: Subject;
+  /** 初次 generate 时用户填的所有设置；refine 时复用作 ctx 基底。 */
+  initialRequest: {
+    tags?: import('../types').CourseTag[];
+    difficulty?: 'beginner' | 'basic' | 'intermediate' | 'challenge';
+    learningGoal?: string;
+    existingKnowledge?: string;
+    outlineSize?: 'concise' | 'standard' | 'detailed';
+    styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
+    instruction?: string;
+  };
+  outline: CourseOutline;
+  createdAt: number;
+}
+
 /** 由 extension.ts 注入的 Coach 框架共享实例。 */
 export interface SidebarCoachDeps {
   coachEventBus: import('../coach/coachEventBus').CoachEventBus;
@@ -117,6 +135,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private lastOpenedLessonFile?: ChatEditTarget;
   private selectedMaterialId?: string;
   private readonly outlineRebuildPreviews = new Map<string, OutlineRebuildPreviewCacheEntry>();
+  /**
+   * Cache: 创建课程 preview/refine 流程的 in-memory 缓存。
+   * Key = previewId (uuid)。每 entry 保存生成时的设置（用于 refine 时复用）+
+   * 当前 outline。apply 时持久化并清理；discard / 超时自动清理。
+   */
+  private readonly coursePreviews = new Map<string, CoursePreviewCacheEntry>();
   private coachAgent?: import('../coach/coachAgent').CoachAgent;
 
   constructor(
@@ -578,6 +602,65 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       materialIds.map(async (materialId) => (await this.materialManager.getMaterialById(materialId))?.fileName ?? null)
     );
     return titles.filter((title): title is string => !!title);
+  }
+
+  /** 用 msg 中所有创建设置 + 共享 prefs/profile 等，调 AI 生成一份**预览** outline（不写盘）。 */
+  private async _generateCoursePreview(msg: Extract<SidebarCommand, { type: 'generateCourse' }>): Promise<CourseOutline> {
+    const [prefs, diag, profile] = await Promise.all([
+      this.prefsStore.get(),
+      this.adaptiveEngine.getLatestDiagnosis(msg.subject),
+      this.progressStore.getProfile(),
+    ]);
+    const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
+    const materialSummary = await this.materialManager.getRelevantSummary(msg.subject, '');
+    const effectivePrefs = msg.difficulty
+      ? { ...prefs, difficulty: { ...prefs.difficulty, global: msg.difficulty } }
+      : prefs;
+    const outline = await this.contentGen.generateCourse(msg.subject, {
+      profile,
+      preferences: effectivePrefs,
+      diagnosis: diag,
+      materialSummary,
+      ...courseProfileContext,
+      courseTags: msg.tags,
+      creationInstruction: msg.instruction?.trim() || undefined,
+      learningGoal: msg.learningGoal?.trim() || undefined,
+      existingKnowledge: msg.existingKnowledge?.trim() || undefined,
+      outlineSize: msg.outlineSize,
+      styleEmphasis: msg.styleEmphasis,
+    });
+    // 给 outline 打上 tags（contentGen 已经写盘了，但 preview 流程会替换它）
+    if (msg.tags?.length) {
+      outline.tags = msg.tags;
+    }
+    return outline;
+  }
+
+  /** 基于缓存的预览 + 用户修改建议，重新生成 outline。 */
+  private async _refineCoursePreview(entry: CoursePreviewCacheEntry, instruction: string): Promise<CourseOutline> {
+    const [prefs, diag, profile] = await Promise.all([
+      this.prefsStore.get(),
+      this.adaptiveEngine.getLatestDiagnosis(entry.subject),
+      this.progressStore.getProfile(),
+    ]);
+    const courseProfileContext = await this._buildCourseProfileContext(entry.subject);
+    const effectivePrefs = entry.initialRequest.difficulty
+      ? { ...prefs, difficulty: { ...prefs.difficulty, global: entry.initialRequest.difficulty } }
+      : prefs;
+    const refined = await this.contentGen.refineCoursePreview(entry.subject, entry.outline, instruction, {
+      profile,
+      preferences: effectivePrefs,
+      diagnosis: diag,
+      ...courseProfileContext,
+      courseTags: entry.initialRequest.tags,
+      creationInstruction: entry.initialRequest.instruction,
+      learningGoal: entry.initialRequest.learningGoal,
+      existingKnowledge: entry.initialRequest.existingKnowledge,
+      outlineSize: entry.initialRequest.outlineSize,
+      styleEmphasis: entry.initialRequest.styleEmphasis,
+    });
+    if (entry.initialRequest.tags?.length) refined.tags = entry.initialRequest.tags;
+    return refined;
   }
 
   private async _previewCourseOutlineRebuild(request: OutlineRebuildPreviewRequest): Promise<void> {
@@ -1386,51 +1469,153 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         case 'generateCourse': {
+          // 新流程：生成**预览**（不写盘）。用户在 UI 上可以继续 refine / apply / discard。
           const existingOutline = await this.courseManager.getCourseOutline(msg.subject);
           if (existingOutline) {
             const choice = await vscode.window.showWarningMessage(
-              `学科 "${existingOutline.title}" 已有课程大纲，是否重新生成？`,
-              '重新生成', '取消'
+              `学科 "${existingOutline.title}" 已有课程大纲。生成预览不会立刻覆盖；只有"应用"才会替换。继续？`,
+              '生成预览', '取消'
             );
-            if (choice !== '重新生成') {
-              this._post({ type: 'log', message: '已取消生成课程大纲', level: 'info' });
+            if (choice !== '生成预览') {
+              this._post({ type: 'log', message: '已取消生成', level: 'info' });
               break;
             }
           }
-          this._startTask(msg.subject + ' 课程大纲', async () => {
-            const [prefs, diag, profile] = await Promise.all([
-              this.prefsStore.get(),
-              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
-              this.progressStore.getProfile(),
-            ]);
-            const courseProfileContext = await this._buildCourseProfileContext(msg.subject);
-            const materialSummary = await this.materialManager.getRelevantSummary(msg.subject, '');
-            // 创建时一并指定的设置：tags / 初始难度 / 额外说明
-            const createTags = Array.isArray(msg.tags) ? msg.tags : undefined;
-            const createInstruction = typeof msg.instruction === 'string' && msg.instruction.trim()
-              ? msg.instruction.trim()
-              : undefined;
-            // 初始难度覆盖：在 prefs 上做局部 clone，不污染全局
-            const effectivePrefs = msg.difficulty
-              ? { ...prefs, difficulty: { ...prefs.difficulty, global: msg.difficulty } }
-              : prefs;
-            const outline = await this.contentGen.generateCourse(msg.subject, {
-              profile,
-              preferences: effectivePrefs,
-              diagnosis: diag,
-              materialSummary,
-              ...courseProfileContext,
-              courseTags: createTags,
-              creationInstruction: createInstruction,
+          this._startTask(msg.subject + ' 大纲预览', async () => {
+            const previewOutline = await this._generateCoursePreview(msg);
+            const previewId = `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const cacheEntry: CoursePreviewCacheEntry = {
+              previewId,
+              subject: msg.subject,
+              initialRequest: {
+                tags: msg.tags,
+                difficulty: msg.difficulty,
+                learningGoal: msg.learningGoal,
+                existingKnowledge: msg.existingKnowledge,
+                outlineSize: msg.outlineSize,
+                styleEmphasis: msg.styleEmphasis,
+                instruction: msg.instruction,
+              },
+              outline: previewOutline,
+              createdAt: Date.now(),
+            };
+            this.coursePreviews.set(previewId, cacheEntry);
+            this._post({
+              type: 'coursePreview',
+              previewId,
+              subject: msg.subject,
+              outline: previewOutline,
             });
-            // 把 tags 持久化到 outline（contentGen 不一定会自动写）
-            if (createTags && createTags.length) {
-              await this.courseManager.setCourseTags(msg.subject, createTags);
+            this._post({ type: 'log', message: `预览已生成：${previewOutline.title}（待确认）`, level: 'info' });
+          });
+          break;
+        }
+
+        case 'refineCoursePreview': {
+          const entry = this.coursePreviews.get(msg.previewId);
+          if (!entry) {
+            this._post({ type: 'error', message: '预览已过期或丢失，请重新生成。' });
+            break;
+          }
+          if (!msg.instruction?.trim()) {
+            this._post({ type: 'error', message: '请填写修改建议。' });
+            break;
+          }
+          this._startTask(entry.subject + ' 大纲修订', async () => {
+            const refined = await this._refineCoursePreview(entry, msg.instruction.trim());
+            entry.outline = refined;
+            this._post({
+              type: 'coursePreview',
+              previewId: entry.previewId,
+              subject: entry.subject,
+              outline: refined,
+              lastRefineInstruction: msg.instruction.trim(),
+            });
+            this._post({ type: 'log', message: `已按指令修订：${msg.instruction.trim()}`, level: 'info' });
+          });
+          break;
+        }
+
+        case 'applyCoursePreview': {
+          const entry = this.coursePreviews.get(msg.previewId);
+          if (!entry) {
+            this._post({ type: 'error', message: '预览已过期或丢失，请重新生成。' });
+            break;
+          }
+          // 真正写盘
+          const outlineToSave: CourseOutline = {
+            ...entry.outline,
+            id: entry.outline.id || `course-${entry.subject}-${Date.now()}`,
+            createdAt: entry.outline.createdAt || new Date().toISOString(),
+            tags: entry.initialRequest.tags,
+          };
+          await this.courseManager.saveCourseOutline(entry.subject, outlineToSave);
+          // tags 也确保写到 outline（persistOutline 已包含 tags 字段，这里冗余但安全）
+          if (entry.initialRequest.tags?.length) {
+            await this.courseManager.setCourseTags(entry.subject, entry.initialRequest.tags);
+          }
+          this.coursePreviews.delete(msg.previewId);
+          await this._refreshCourses();
+          this._post({ type: 'courseGenerated', outline: outlineToSave });
+          this._post({ type: 'log', message: `课程已应用：${outlineToSave.title}`, level: 'info' });
+          break;
+        }
+
+        case 'discardCoursePreview': {
+          const had = this.coursePreviews.delete(msg.previewId);
+          this._post({ type: 'coursePreviewDiscarded', previewId: msg.previewId });
+          if (had) {
+            this._post({ type: 'log', message: '预览已丢弃', level: 'info' });
+          }
+          break;
+        }
+
+        case 'realizeProjectFromProposal': {
+          const outline = await this.courseManager.getCourseOutline(msg.subject);
+          if (!outline) {
+            this._post({ type: 'error', message: '找不到该课程。' });
+            break;
+          }
+          const proposal = (outline.projects || []).find((p) => p.id === msg.proposalId);
+          if (!proposal) {
+            this._post({ type: 'error', message: '找不到该项目提案。' });
+            break;
+          }
+          if (proposal.realizedAs) {
+            this._post({ type: 'log', message: '该提案已经落地为项目，跳过。', level: 'info' });
+            break;
+          }
+          this._startTask('项目落地：' + proposal.title, async () => {
+            try {
+              const profile = await this.progressStore.getProfile().catch(() => null);
+              const preferences = await this.prefsStore.get().catch(() => null);
+              const promptText = [
+                proposal.description,
+                '',
+                '学习目标：' + (proposal.learningGoals || []).join('；'),
+                '',
+                '（这是来自课程大纲"' + outline.title + '"的项目提案，请基于此生成完整 TDD 项目骨架。）',
+              ].join('\n');
+              const techStackHint = (proposal.suggestedTechStack || []).join(', ');
+              const result = await this.projectGenerator.createProject({
+                subject: msg.subject,
+                prompt: promptText,
+                techStackHint: techStackHint || undefined,
+                linkedCourse: { subject: msg.subject },
+              }, { profile, preferences });
+              if (result.ok && result.meta && result.spec) {
+                // mark proposal as realized
+                proposal.realizedAs = result.meta.id;
+                await this.courseManager.saveCourseOutline(msg.subject, outline);
+                this._post({ type: 'projectCreated', meta: result.meta, spec: result.spec, warnings: result.warnings });
+                this._post({ type: 'log', message: `提案"${proposal.title}"已落地为项目`, level: 'info' });
+                await this._refreshCourses();
+              } else {
+                this._post({ type: 'projectScaffoldFailed', errorMessage: result.errorMessage ?? '未知错误' });
+              }
+            } catch (error) {
+              this._post({ type: 'projectScaffoldFailed', errorMessage: (error as Error).message });
             }
-            await this._refreshCourses();
-            this._post({ type: 'courseGenerated', outline });
-            const tagLabel = createTags && createTags.length ? `，tags: ${createTags.join(' / ')}` : '';
-            this._post({ type: 'log', message: `课程已生成：${outline.title}${tagLabel}`, level: 'info' });
           });
           break;
         }

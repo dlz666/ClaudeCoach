@@ -2466,6 +2466,239 @@ pre.hljs code,
   font-weight: 500;
 }
 
+/* ===== 创建课程：学习目标 + 偏重风格 + 双列设置 ===== */
+
+.new-course-goal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.new-course-goal-row textarea {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 50px;
+}
+.new-course-goal-row textarea:focus {
+  outline: none;
+  border-color: var(--accent, var(--vscode-button-background));
+}
+
+.new-course-extra-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 380px) {
+  .new-course-extra-two-col { grid-template-columns: 1fr; }
+}
+
+.new-course-emphasis-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ===== 课程大纲预览面板 ===== */
+
+.course-preview-panel {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--vscode-button-background)) 50%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 5%, transparent);
+}
+
+.course-preview-header {
+  margin-bottom: 10px;
+}
+.course-preview-header h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.course-preview-header .section-subtitle {
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.course-preview-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+.cpt-topic {
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.cpt-topic:last-child { border-bottom: none; }
+.cpt-topic-head {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  gap: 6px;
+}
+.cpt-topic-num {
+  color: var(--vscode-descriptionForeground);
+  min-width: 22px;
+}
+.cpt-lessons {
+  list-style: none;
+  margin: 4px 0 0 28px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cpt-lesson {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.cpt-lesson-num {
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+.cpt-lesson-diff {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: -2px;
+  opacity: 0.7;
+}
+
+/* 项目提案区（预览面板里 + 课程树里复用） */
+.course-preview-projects {
+  margin: 12px 0 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.cpp-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 6px;
+}
+.cpp-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--vscode-input-background);
+}
+.cpp-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cpp-card-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+.cpp-card-diff {
+  font-size: 9px;
+  letter-spacing: -2px;
+  opacity: 0.7;
+}
+.cpp-card-desc {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin: 3px 0 5px;
+  line-height: 1.4;
+}
+.cpp-card-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cpp-card-stack-pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 12%, transparent);
+  color: var(--vscode-foreground);
+}
+
+.course-preview-refine {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.course-preview-refine textarea {
+  width: 100%;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.course-preview-refine textarea:focus {
+  outline: none;
+  border-color: var(--accent, var(--vscode-button-background));
+}
+
+.course-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.course-preview-actions .btn.success-tone {
+  background: var(--vscode-charts-green, #2da64f);
+  color: white;
+  border: none;
+}
+.course-preview-actions .btn.success-tone:hover {
+  background: color-mix(in srgb, var(--vscode-charts-green, #2da64f) 88%, white 12%);
+}
+
+/* 课程树内推荐项目区（已应用的 outline.projects） */
+.tree-proposals {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.tree-proposals-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 6px;
+}
+.tree-proposal {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+}
+.tree-proposal-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tree-proposal-diff {
+  font-size: 9px;
+  letter-spacing: -2px;
+  opacity: 0.7;
+}
+.tree-proposal-desc {
+  font-size: 11px;
+  margin: 4px 0 6px;
+  line-height: 1.4;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* ===== Projects tab ===== */
 
 .project-create-form {
