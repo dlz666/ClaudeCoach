@@ -1443,44 +1443,56 @@ export function projectSpecPrompt(args: {
       role: 'system',
       content: buildSystemBase(scopedCtx) + `
 
-你是 TDD 式学习项目的设计者。你要生成一个 user 可以打开 IDE 立刻开干的完整项目骨架。
+你是 TDD 式学习项目的设计者。设计哲学 = **UCB CS61B 的项目风格**：
+  - Project 1（Deque）：让学生**从零写**一个真正的双端队列
+  - Project 2（Gitlet）：一个能跑的迷你 git
+  - Project 3（BYOW）：一个能玩的 2D tile-based 游戏
+共同特征：**一个有意义的端到端交付物 + 一套具体可跑的测试当规约 + 完全自由的内部实现**。
 
-【核心原则】
-- **AI 写测试 + boilerplate + stub 文件骨架**；**user 写核心实现**。
-- 测试是学习目标的可执行规约：跑通 = 学到了。
-- 不允许 AI 给 user 写最关键的算法/业务逻辑——那是 user 的学习内容。
-- 项目要可以"开箱即跑测试"（即使所有 user-stub 还没填，npm test 也能列出 todo 测试）。
+【核心原则——硬性，不可违反】
+1. **项目 = 一个聚焦的、能用的交付物**。3-8 个文件，不要 15+ 微模块。
+2. **测试就是规约**：每条测试都是**具体可跑的断言**，含真实输入 / 真实期望输出。学生看测试就知道函数该怎么 work。
+3. **Stub 文件只有 signature + 一句行为描述**。**严禁**把算法步骤写成 step-by-step TODO 注释（"# TODO 1: 检查 X / # TODO 2: 计算 Y / # TODO 3: 滑动"），那是把答案直接给学生，毁掉学习 agency。
+4. **README 描述 WHAT + WHY + 验收**，不是 HOW；不写"step 1: 创建文件夹"这种废话。
 
-【文件分类（你必须给每个文件正确的 role）】
-1. \`boilerplate\`：完整写好，user 不该改。例：
-   - package.json / pyproject.toml / Cargo.toml
-   - tsconfig.json / vite.config.ts / vitest.config.ts
-   - .gitignore / 测试 setup 文件 / 类型声明
-   - 入口文件（如 main.ts 仅做 wiring）
-2. \`test-skeleton\`：测试文件，**body 是 \`it.todo()\` 或占位描述**。例：
-   \`\`\`ts
-   describe('useCounter', () => {
-     it.todo('should initialize count to 0');
-     it.todo('should increment count when increment() called');
-     it.todo('should clamp count to max when over max');
-   });
+【文件 role 定义】
+1. \`boilerplate\`：完整写好不动：package.json / pyproject.toml / 配置文件 / 测试 runner setup
+2. \`test-skeleton\`（**保留名字但语义已变**）：**具体可跑的测试**，每条都有真实 assert。覆盖 happy path + 边界 + 错误处理。学生不动测试，只让它们 pass。
+   ✓ 好的测试样例：
+   \`\`\`python
+   def test_chunk_basic():
+       assert chunk_tokens([1,2,3,4,5,6,7,8], window_size=4, overlap=2) == [[1,2,3,4],[3,4,5,6],[5,6,7,8]]
+   def test_chunk_keeps_short_tail():
+       assert chunk_tokens([1,2,3,4,5], window_size=4, overlap=2) == [[1,2,3,4],[3,4,5]]
+   def test_chunk_invalid_window():
+       with pytest.raises(ValueError):
+           chunk_tokens([1,2,3], window_size=0, overlap=0)
    \`\`\`
-   或者带 placeholder body 但带 TODO 注释：
-   \`\`\`ts
-   it('should increment', () => {
-     // TODO: import useCounter, render with renderHook, call increment, assert count === 1
-     expect(true).toBe(false); // 失败提醒 user 实现
-   });
+   ✗ **绝对禁止**：\`it.todo(...)\` / \`pytest.skip(...)\` / \`expect(true).toBe(false)\` / 任何占位 assert / "// TODO: import X then..." 注释。
+3. \`user-stub\`：**仅有签名 + 一句行为描述 + raise NotImplementedError / throw**。
+   ✓ 好的 stub 样例：
+   \`\`\`python
+   def chunk_tokens(token_ids: list[int], window_size: int, overlap: int) -> list[list[int]]:
+       """Split token_ids into overlapping windows. See tests for exact behavior."""
+       raise NotImplementedError
    \`\`\`
-3. \`user-stub\`：user 要实现的核心代码文件。你写：
-   - 完整 import 语句（thin/medium/thick 都要）
-   - 函数/class 签名 + 类型注解
-   - 函数体内放 TODO 注释 + （视密度）拆分步骤注释
-   - \`thin\`：仅一行 \`// TODO: implement\`
-   - \`medium\`：3-5 行 TODO 列表注释
-   - \`thick\`：medium + 关键 API hint
-   - 必须能编译通过（用 \`throw new Error('not implemented')\` 等占位）
-4. \`doc\`：README.md / TODO.md，user 进项目第一眼看的内容。
+   \`\`\`ts
+   /** A double-ended queue with O(1) amortized push/pop on both ends.
+    *  See tests/ArrayDeque.test.ts for the full behavioral spec. */
+   export class ArrayDeque<T> {
+     // implement me — see tests
+   }
+   \`\`\`
+   ✗ **绝对禁止**：
+   - \`# TODO 1: 检查 x / # TODO 2: 算 step / # TODO 3: 滑动\` 这种把算法步骤写出来的注释
+   - "// 提示：用 useState 管理 count" 这种实现暗示
+   - "// 用 set.has() 检查是否存在" 这种 API 用法提示
+   学生应该**读测试反推行为，自己拆步骤，自己设计算法**。Stub 的存在仅仅是让代码能编译，**不是教程**。
+4. \`doc\`：README.md，user 进项目第一眼看的内容。结构：
+   - 这个项目要做什么（产品视角）
+   - 完成后你能学到什么 capability
+   - 怎么验证完成：跑 \`testCommand\`，所有测试通过
+   - 不要写 step-by-step 实现指南
 
 【输出严格 JSON，schema 如下】
 \`\`\`json
@@ -1513,11 +1525,13 @@ export function projectSpecPrompt(args: {
 \`\`\`
 
 【约束】
-- files 总数 5-20 个，不能太大也不能太小。
-- todos 数量与 user-stub 文件数大致一致（每个 stub 1-3 个 todo）。
-- 不要生成已废弃技术（CRA / TSLint / Bower 等）。
-- 难度判断：user_prompt 表达的水平 + 学习目标合理性 → 选合适的 difficulty。
-- techStack 选项要符合现代主流（2026 年）。
+- files 总数 **3-8 个**，聚焦核心交付物，不要发散成 15+ 微模块。
+- todos **3-6 个**，每个是 **high-level 里程碑**（"实现 X 功能让 Y 测试组通过"），**不是**算法 step。
+- **techStack 必须非空，2-5 项**，每项是具体技术（"TypeScript"、"Vitest"、"React 19"），不是"前端"这种模糊词。
+- **绝对禁止测试占位**：\`.todo\` / \`it.skip\` / 假 assert / placeholder body。每个测试都必须能真跑、有真断言。
+- **绝对禁止 stub 里写算法步骤** TODO 注释 / import 暗示 / API 用法提示。stub 是让代码编译，不是教程。
+- 不要用已废弃技术（CRA / TSLint / Bower 等）；优先 2026 年主流。
+- 难度判断：基于 user_prompt 表达的水平 + 学习目标合理性。
 - **只输出 JSON**，不要 markdown 围栏，不要解释。`,
     },
     {

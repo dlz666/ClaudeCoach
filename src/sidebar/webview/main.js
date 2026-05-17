@@ -3019,23 +3019,31 @@
         'archived': '已归档',
       }[meta.status] || meta.status;
 
+      const techStackChips = (meta.techStack || [])
+        .filter((s) => typeof s === 'string' && s.trim())
+        .map((s) => `<span class="pc-stack-chip">${escapeProjHtml(s)}</span>`)
+        .join('');
+      const projectDirShort = meta.projectDir
+        ? meta.projectDir.split(/[/\\]/).slice(-2).join('/')
+        : '';
+
       card.innerHTML = `
         <div class="project-card-header">
-          <div>
-            <p class="project-card-title">${escapeProjHtml(meta.title)}</p>
-            <div class="project-card-meta">
-              <span class="project-status-${meta.status}">● ${statusLabel}</span>
-              <span>${escapeProjHtml(meta.techStack?.join(', ') || '')}</span>
-            </div>
-          </div>
+          <p class="project-card-title">${escapeProjHtml(meta.title)}</p>
+          <span class="project-status-${meta.status} pc-status">● ${statusLabel}</span>
         </div>
         <p class="project-card-desc">${escapeProjHtml(meta.description)}</p>
+        ${techStackChips ? `<div class="pc-stack-row">${techStackChips}</div>` : ''}
+        <div class="pc-info-row">
+          <span class="pc-info-item" title="测试命令"><span class="pc-info-icon">⌨</span> <code>${escapeProjHtml(meta.testCommand || 'npm test')}</code></span>
+          <span class="pc-info-item" title="任务进度"><span class="pc-info-icon">✓</span> ${completed} / ${total} todo</span>
+        </div>
+        ${projectDirShort ? `<div class="pc-info-row pc-dir-row" title="${escapeProjHtml(meta.projectDir)}"><span class="pc-info-icon">📁</span> <code>${escapeProjHtml(projectDirShort)}</code></div>` : ''}
         <div class="project-card-progress">
-          <span>${completed} / ${total} todo</span>
           <div class="project-card-progress-bar">
             <div class="project-card-progress-fill" style="width: ${pct}%"></div>
           </div>
-          <span>${pct}%</span>
+          <span class="pc-pct">${pct}%</span>
         </div>
         <div class="project-card-actions">
           <button class="btn primary small" data-act="open">在 IDE 打开</button>

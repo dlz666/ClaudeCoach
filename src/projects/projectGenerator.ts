@@ -152,8 +152,8 @@ export class ProjectGenerator {
     if (!Array.isArray(spec.files) || spec.files.length === 0) {
       return { ok: false, message: 'spec.files 必须是非空数组。' };
     }
-    if (spec.files.length > 30) {
-      return { ok: false, message: `spec.files 过多（${spec.files.length}），超过上限 30。` };
+    if (spec.files.length > 15) {
+      return { ok: false, message: `spec.files 过多（${spec.files.length}），CS61B 风格要求 3-8 文件聚焦核心，超过 15 拒绝。` };
     }
     if (!Array.isArray(spec.todos)) {
       return { ok: false, message: 'spec.todos 缺失。' };
@@ -161,8 +161,31 @@ export class ProjectGenerator {
     if (typeof spec.testCommand !== 'string') {
       return { ok: false, message: 'spec.testCommand 缺失。' };
     }
+    if (!Array.isArray(spec.techStack) || spec.techStack.filter((s: any) => typeof s === 'string' && s.trim()).length === 0) {
+      return { ok: false, message: 'spec.techStack 必须非空（2-5 项具体技术名）。' };
+    }
 
     const warnings: string[] = [];
+
+    // CS61B 红线检测：
+    //   - test-skeleton 含占位测试（it.todo / pytest.skip / 假 assert）
+    //   - user-stub 含 step-by-step TODO 注释（"TODO 1:" / "// step 1:" / "第 1 步"）
+    const TEST_PLACEHOLDER_PATTERNS: RegExp[] = [
+      /\bit\.todo\(/,
+      /\btest\.todo\(/,
+      /\bit\.skip\(/,
+      /\btest\.skip\(/,
+      /pytest\.skip\(/,
+      /@pytest\.mark\.skip/,
+      /expect\(\s*true\s*\)\.toBe\(\s*false\s*\)/,
+      /assert\s+False\b/i,
+    ];
+    const STUB_STEP_TODO_PATTERNS: RegExp[] = [
+      /\bTODO\s*\d+\s*[:：]/,
+      /#\s*步骤\s*\d+/,
+      /\/\/\s*step\s*\d+/i,
+      /\/\/\s*第\s*\d+\s*步/,
+    ];
 
     // 检查每个文件
     const seenPaths = new Set<string>();
@@ -191,13 +214,38 @@ export class ProjectGenerator {
       }
       if (f.role === 'user-stub') hasUserStub = true;
       if (f.role === 'test-skeleton') hasTestSkeleton = true;
+
+      // CS61B 红线
+      if (f.role === 'test-skeleton') {
+        for (const pat of TEST_PLACEHOLDER_PATTERNS) {
+          if (pat.test(f.content)) {
+            return {
+              ok: false,
+              message: `测试文件 ${normalizedPath} 含占位测试（匹配 ${pat.source}）。CS61B 风格要求测试是具体可跑的断言，不能用 .todo/.skip/假 assert 占位。`,
+            };
+          }
+        }
+      }
+      if (f.role === 'user-stub') {
+        for (const pat of STUB_STEP_TODO_PATTERNS) {
+          if (pat.test(f.content)) {
+            return {
+              ok: false,
+              message: `Stub 文件 ${normalizedPath} 含算法步骤 TODO 注释（匹配 ${pat.source}）。把答案直接喂给学生会毁掉学习 agency，stub 只能有签名 + 一句行为描述。`,
+            };
+          }
+        }
+      }
     }
 
     if (!hasUserStub) {
-      warnings.push('spec 里没有 user-stub 文件——这意味着 user 没东西可写，AI 应至少给一个。');
+      warnings.push('spec 里没有 user-stub 文件——意味着 user 没东西可写。');
     }
     if (!hasTestSkeleton) {
-      warnings.push('spec 里没有 test-skeleton 文件——TDD 流程需要测试。');
+      warnings.push('spec 里没有 test-skeleton 文件——TDD 流程需要测试当规约。');
+    }
+    if (spec.files.length > 10) {
+      warnings.push(`spec.files = ${spec.files.length} 偏多，建议合并到 ≤ 8 个文件，聚焦核心交付物。`);
     }
 
     return { ok: true, warnings };
