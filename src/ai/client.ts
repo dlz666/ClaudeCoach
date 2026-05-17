@@ -137,6 +137,11 @@ export class AIClient {
 
   async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
     const config = await this.getConfig();
+
+    if (config.provider === 'claude_code_cli') {
+      return this.claudeCodeCliChat(config, messages, options);
+    }
+
     if (!config.apiToken) {
       throw new Error('未配置 API Token，请先在设置中完善 AI 配置。');
     }
@@ -161,6 +166,11 @@ export class AIClient {
     options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     const config = await this.getConfig();
+
+    if (config.provider === 'claude_code_cli') {
+      throw new Error('Claude CLI provider 暂不支持图片输入，请切换到 OpenAI 或 Anthropic profile。');
+    }
+
     if (!config.apiToken) {
       throw new Error('未配置 API Token，请先在设置中完善 AI 配置。');
     }
@@ -1013,6 +1023,122 @@ export class AIClient {
     }
 
     return raw.replace(/\s+/g, ' ').slice(0, 180);
+  }
+
+  /**
+   * Claude Code CLI 提供商：spawn `claude --print` 子进程，复用本机 Claude Code 的
+   * OAuth/API key 登录态。零额外配置——只要本机能跑 `claude` 命令就能工作。
+   *
+   * - 多条 messages 会被扁平成 transcript（"User: ..." / "Assistant: ..."），
+   *   system 角色拼到 --append-system-prompt
+   * - 通过 stdin 传 prompt 避免命令行参数长度和 escape 问题
+   * - --output-format json 输出单个 JSON 对象 { result, ... }，比 stream-json 解析简单
+   * - onDelta 不真正流式（CLI 子进程也支持 stream-json，但本期先确保正确性），
+   *   有 onDelta 时在最终一次性回调一段（兼容上游 streaming UI 协议）
+   */
+  private async claudeCodeCliChat(
+    config: ResolvedAIConfig | AIConfig,
+    messages: ChatMessage[],
+    options?: ChatOptions,
+  ): Promise<string> {
+    const { spawn } = await import('child_process');
+
+    const systemPrompt = messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n\n');
+
+    const turns = messages.filter((m) => m.role !== 'system');
+    let promptText: string;
+    if (turns.length === 1 && turns[0].role === 'user') {
+      promptText = turns[0].content;
+    } else if (turns.length === 0) {
+      promptText = '(empty)';
+    } else {
+      promptText = turns
+        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+        .join('\n\n');
+    }
+
+    const args = ['--print', '--output-format', 'json'];
+    if (config.model && config.model.trim()) {
+      args.push('--model', config.model.trim());
+    }
+    if (systemPrompt) {
+      args.push('--append-system-prompt', systemPrompt);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const proc = spawn('claude', args, {
+        shell: process.platform === 'win32',
+        windowsHide: true,
+        env: process.env,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
+
+      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString('utf-8'); });
+      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString('utf-8'); });
+
+      proc.on('error', (err) => {
+        settle(() => reject(new Error(
+          `无法启动 claude CLI：${err.message}。请确认已安装 Claude Code 并在 PATH 中（终端能直接运行 "claude --version"）。`,
+        )));
+      });
+
+      proc.on('close', (code) => {
+        settle(() => {
+          if (code !== 0) {
+            reject(new Error(`claude CLI 退出码 ${code}：${stderr.trim() || stdout.trim() || '无错误输出'}`));
+            return;
+          }
+          let result = '';
+          try {
+            const parsed = JSON.parse(stdout);
+            // claude --output-format json 返回 { type, subtype, is_error, result, ... }
+            if (parsed.is_error) {
+              const errMsg = String(parsed.result ?? parsed.error ?? '未知错误').trim();
+              if (/not logged in|please run \/login/i.test(errMsg)) {
+                reject(new Error(`Claude CLI 未登录。请在终端运行 "claude /login" 后重试。`));
+                return;
+              }
+              reject(new Error(`Claude CLI 返回错误：${errMsg}`));
+              return;
+            }
+            const r = parsed.result ?? parsed.message ?? parsed.content ?? '';
+            result = typeof r === 'string' ? r : JSON.stringify(r);
+          } catch {
+            result = stdout.trim();
+          }
+          if (typeof options?.onDelta === 'function' && result) {
+            try { options.onDelta(result); } catch { /* swallow */ }
+          }
+          resolve(result);
+        });
+      });
+
+      if (options?.signal) {
+        options.signal.addEventListener('abort', () => {
+          try { proc.kill('SIGTERM'); } catch { /* swallow */ }
+          settle(() => reject(new Error('已取消')));
+        });
+      }
+
+      try {
+        proc.stdin.write(promptText, 'utf-8');
+        proc.stdin.end();
+      } catch (e: any) {
+        settle(() => reject(new Error(`向 claude CLI 写入 prompt 失败：${e?.message || e}`)));
+      }
+    });
   }
 
   private isRetryableFetchError(error: unknown): boolean {

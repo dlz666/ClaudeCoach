@@ -1,5 +1,5 @@
 // ===== AI Layer =====
-export type APIProvider = 'openai' | 'anthropic';
+export type APIProvider = 'openai' | 'anthropic' | 'claude_code_cli';
 export type AIImportSource = 'manual' | 'claude' | 'codex' | 'package';
 export type AIWireApi = 'chat_completions' | 'responses';
 

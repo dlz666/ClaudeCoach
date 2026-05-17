@@ -209,7 +209,7 @@ export async function activate(context: vscode.ExtensionContext) {
   await refreshStatusBar();
 
   const resolved = await getAIConfig();
-  if (!resolved.apiToken) {
+  if (!resolved.apiToken && resolved.provider !== 'claude_code_cli') {
     const action = await vscode.window.showWarningMessage(
       'ClaudeCoach: 当前 AI 配置缺少 API Token，请在设置页查看当前模型配置。',
       '打开设置页',

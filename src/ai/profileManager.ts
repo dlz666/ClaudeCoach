@@ -232,9 +232,11 @@ export class AIProfileManager {
       updatedAt: baseProfile.updatedAt,
     }, 0);
 
-    const effectiveBaseUrl = resolvedProfile.provider === 'anthropic'
-      ? resolvedProfile.anthropicBaseUrl
-      : resolvedProfile.baseUrl;
+    const effectiveBaseUrl = resolvedProfile.provider === 'claude_code_cli'
+      ? '(本机 Claude CLI)'
+      : resolvedProfile.provider === 'anthropic'
+        ? resolvedProfile.anthropicBaseUrl
+        : resolvedProfile.baseUrl;
     const warnings = this.collectWarnings(resolvedProfile, effectiveBaseUrl);
     const budget = createBudget(resolvedProfile.contextWindow, '');
 
@@ -333,12 +335,14 @@ export class AIProfileManager {
       ? this.resolveCandidateProfile(profile)
       : await this.resolveConfig();
 
-    const effectiveBaseUrl = resolved.provider === 'anthropic' ? resolved.anthropicBaseUrl : resolved.baseUrl;
-    if (!resolved.apiToken) {
-      throw new Error('当前配置缺少 API Token。');
-    }
-    if (!/^https?:\/\//.test(effectiveBaseUrl)) {
-      throw new Error('当前配置的 Base URL 无效。');
+    if (resolved.provider !== 'claude_code_cli') {
+      const effectiveBaseUrl = resolved.provider === 'anthropic' ? resolved.anthropicBaseUrl : resolved.baseUrl;
+      if (!resolved.apiToken) {
+        throw new Error('当前配置缺少 API Token。');
+      }
+      if (!/^https?:\/\//.test(effectiveBaseUrl)) {
+        throw new Error('当前配置的 Base URL 无效。');
+      }
     }
 
     const client = new AIClient({
@@ -397,7 +401,9 @@ export class AIProfileManager {
     return {
       id: input.id || `profile-${Date.now()}-${index}`,
       name: input.name?.trim() || `AI 配置 ${index + 1}`,
-      provider: input.provider === 'anthropic' ? 'anthropic' : 'openai',
+      provider: input.provider === 'anthropic' ? 'anthropic'
+        : input.provider === 'claude_code_cli' ? 'claude_code_cli'
+        : 'openai',
       baseUrl: input.baseUrl?.trim() || fallback.baseUrl,
       anthropicBaseUrl: input.anthropicBaseUrl?.trim() || fallback.anthropicBaseUrl,
       apiToken: input.apiToken ?? '',
@@ -418,7 +424,9 @@ export class AIProfileManager {
       enabled: !!input?.enabled,
       baseProfileId: input?.baseProfileId || undefined,
       overrides: {
-        provider: input?.overrides?.provider === 'anthropic' ? 'anthropic' : input?.overrides?.provider,
+        provider: input?.overrides?.provider === 'anthropic' ? 'anthropic'
+          : input?.overrides?.provider === 'claude_code_cli' ? 'claude_code_cli'
+          : input?.overrides?.provider,
         baseUrl: input?.overrides?.baseUrl?.trim() || undefined,
         anthropicBaseUrl: input?.overrides?.anthropicBaseUrl?.trim() || undefined,
         apiToken: input?.overrides?.apiToken ?? undefined,
@@ -434,6 +442,16 @@ export class AIProfileManager {
 
   private collectWarnings(profile: AIProfile, effectiveBaseUrl: string): string[] {
     const warnings: string[] = [];
+    // claude_code_cli 走本机子进程，不需要 API Token 与 Base URL
+    if (profile.provider === 'claude_code_cli') {
+      const budget = createBudget(profile.contextWindow, '');
+      if (budget.availableForHistory <= 0) {
+        warnings.push('历史上下文预算过低');
+      } else if (budget.availableForHistory < 4000) {
+        warnings.push('历史上下文预算受限');
+      }
+      return warnings;
+    }
     if (!profile.apiToken) {
       warnings.push('缺少 API Token');
     }
@@ -454,7 +472,11 @@ export class AIProfileManager {
       ...this.createDefaultProfile(),
       ...profile,
     }, 0);
-    const effectiveBaseUrl = normalized.provider === 'anthropic' ? normalized.anthropicBaseUrl : normalized.baseUrl;
+    const effectiveBaseUrl = normalized.provider === 'claude_code_cli'
+      ? '(本机 Claude CLI)'
+      : normalized.provider === 'anthropic'
+        ? normalized.anthropicBaseUrl
+        : normalized.baseUrl;
     const budget = createBudget(normalized.contextWindow, '');
     return {
       provider: normalized.provider,
@@ -478,12 +500,32 @@ export class AIProfileManager {
 
   private async importFromClaude(): Promise<AIProfile> {
     const configPath = this.expandTilde('~/.claude/settings.json');
-    if (!fs.existsSync(configPath)) {
-      throw new Error('未找到 ~/.claude/settings.json');
+    const settings: ClaudeSettings = fs.existsSync(configPath)
+      ? JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      : {};
+    const env = settings.env ?? {};
+    const token = env.ANTHROPIC_AUTH_TOKEN || '';
+
+    // 没有明文 token（Claude Code OAuth 用户的典型场景）→ 创建 claude_code_cli profile，
+    // 复用本机 Claude CLI 的登录态，零 token 配置。
+    if (!token) {
+      const model = env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+      return this.saveProfile({
+        name: `Claude Code CLI (${model})`,
+        provider: 'claude_code_cli',
+        baseUrl: '',
+        anthropicBaseUrl: '',
+        apiToken: '',
+        model,
+        wireApi: 'chat_completions',
+        contextWindow: 200000,
+        maxTokens: 8192,
+        notes: '通过本机 claude CLI 子进程调用，无需 API Token。',
+        source: 'claude',
+      });
     }
 
-    const settings: ClaudeSettings = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const env = settings.env ?? {};
+    // 有 token：走 OpenAI 兼容 / Anthropic API
     const baseUrl = env.ANTHROPIC_BASE_URL
       ? env.ANTHROPIC_BASE_URL.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1'
       : 'https://api.openai.com/v1';
@@ -493,7 +535,7 @@ export class AIProfileManager {
       provider: 'openai',
       baseUrl,
       anthropicBaseUrl: env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-      apiToken: env.ANTHROPIC_AUTH_TOKEN || '',
+      apiToken: token,
       model: env.ANTHROPIC_MODEL || 'gpt-4o',
       wireApi: 'chat_completions',
       contextWindow: 128000,
