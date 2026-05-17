@@ -42,6 +42,11 @@
           const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
           return `<pre class="dot-source"><code class="language-dot">${escaped}</code></pre>`;
         }
+        // ```widget 块：完整 HTML+JS+CSS 的交互式演示，由 renderWidgets 用 iframe 渲染
+        if (lang === 'widget' || lang === 'interactive' || lang === 'demo') {
+          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return `<pre class="widget-source"><code class="language-widget">${escaped}</code></pre>`;
+        }
         // 用 highlight.js 渲染代码块
         if (typeof window.hljs !== 'undefined' && window.hljs) {
           try {
@@ -388,6 +393,238 @@
     }
   }
 
+  // ===== Interactive Widget (iframe sandbox) =====
+  /**
+   * ```widget 代码块渲染：AI 输出完整 HTML+JS+CSS，我们包到 iframe srcdoc 里
+   * 用 sandbox="allow-scripts"（无 allow-same-origin → unique 不可信源），加严
+   * 格 CSP 阻止网络 / 父页访问。bridge 脚本负责高度自适应 + 错误回传。
+   *
+   * 安全模型：
+   *   - sandbox=allow-scripts 但 NO allow-same-origin → 子页访问不到父 window
+   *   - meta CSP connect-src 'none' → fetch/XHR/WebSocket 全部 die
+   *   - meta CSP frame-src 'none' → 防嵌套 iframe 越狱
+   *   - meta CSP form-action 'none' → form submit 不能外发
+   *   - 任何 script 死循环只死自己这个 iframe，不影响主 webview
+   */
+  function renderWidgets(root) {
+    if (!root) return;
+    const blocks = root.querySelectorAll('pre.widget-source code.language-widget');
+    let counter = 0;
+    for (const codeEl of blocks) {
+      const pre = codeEl.parentElement;
+      if (!pre) continue;
+      const userSrc = codeEl.textContent || '';
+      const id = 'cc-widget-' + Date.now().toString(36) + '-' + (counter++);
+      const container = makeWidgetContainer(userSrc, id);
+      pre.replaceWith(container);
+    }
+  }
+
+  function makeWidgetContainer(userSrc, id) {
+    const container = document.createElement('div');
+    container.className = 'cc-widget-container';
+    container.dataset.widgetId = id;
+
+    // 主题色从父 webview 抽出来注入 iframe
+    const themeVars = getThemeVarsForWidget();
+    const srcdoc = buildWidgetSrcdoc(userSrc, id, themeVars);
+
+    const iframe = document.createElement('iframe');
+    iframe.className = 'cc-widget-iframe';
+    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.setAttribute('srcdoc', srcdoc);
+    iframe.dataset.widgetId = id;
+    iframe.style.width = '100%';
+    iframe.style.height = '120px';
+    iframe.style.border = '0';
+    iframe.style.display = 'block';
+    iframe.setAttribute('title', '互动演示');
+    iframe.setAttribute('loading', 'lazy');
+    container.appendChild(iframe);
+
+    // 错误提示横条（默认隐藏）
+    const errBanner = document.createElement('div');
+    errBanner.className = 'cc-widget-error hidden';
+    container.appendChild(errBanner);
+
+    return container;
+  }
+
+  function getThemeVarsForWidget() {
+    const cs = getComputedStyle(document.body);
+    const get = (name, fb) => (cs.getPropertyValue(name) || '').trim() || fb;
+    return {
+      bg: get('--vscode-editor-background', '#1e1e1e'),
+      fg: get('--vscode-foreground', '#e6e6e6'),
+      muted: get('--vscode-descriptionForeground', '#9aa0a6'),
+      accent: get('--vscode-button-background', '#0e7490'),
+      accentFg: get('--vscode-button-foreground', '#ffffff'),
+      border: get('--vscode-panel-border', '#3c3c3c'),
+      inputBg: get('--vscode-input-background', '#252526'),
+      inputFg: get('--vscode-input-foreground', '#cccccc'),
+      panelBg: get('--vscode-sideBar-background', '#252526'),
+    };
+  }
+
+  function buildWidgetSrcdoc(userSrc, id, t) {
+    const trimmed = String(userSrc || '').trim();
+    const isFullDoc = /^<!doctype\s+html|^<html\b/i.test(trimmed);
+    // CSP 是 widget iframe 自己的；和外面 webview CSP 是两套不同的策略层
+    const cspMeta =
+      `<meta http-equiv="Content-Security-Policy" content="` +
+      `default-src 'none';` +
+      `script-src 'unsafe-inline' 'unsafe-eval';` +
+      `style-src 'unsafe-inline';` +
+      `img-src data: blob:;` +
+      `font-src data:;` +
+      `media-src data:;` +
+      `connect-src 'none';` +
+      `frame-src 'none';` +
+      `form-action 'none';` +
+      `base-uri 'none';` +
+      `">`;
+
+    const themeStyle = `<style>
+:root {
+  color-scheme: dark light;
+  --bg: ${cssSafe(t.bg)};
+  --fg: ${cssSafe(t.fg)};
+  --muted: ${cssSafe(t.muted)};
+  --accent: ${cssSafe(t.accent)};
+  --accent-fg: ${cssSafe(t.accentFg)};
+  --border: ${cssSafe(t.border)};
+  --input-bg: ${cssSafe(t.inputBg)};
+  --input-fg: ${cssSafe(t.inputFg)};
+  --panel-bg: ${cssSafe(t.panelBg)};
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+}
+body { padding: 14px; }
+button {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-family: inherit;
+  transition: filter 120ms ease;
+}
+button:hover { filter: brightness(1.1); }
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.ghost {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--border);
+}
+input, select, textarea {
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+}
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; opacity: 0.8; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+svg { max-width: 100%; height: auto; }
+.cc-widget-error-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(239, 68, 68, 0.95);
+  color: white;
+  padding: 14px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow: auto;
+  z-index: 99999;
+}
+</style>`;
+
+    const bridge =
+      '<script>' +
+      '(function(){' +
+      'var __id=' + JSON.stringify(id) + ';' +
+      'function post(t,d){try{parent.postMessage(Object.assign({type:t,id:__id},d||{}),"*");}catch(e){}}' +
+      'function reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);post("cc-widget-resize",{height:h});}' +
+      'if(window.ResizeObserver){try{new ResizeObserver(reportH).observe(document.body);}catch(e){}}else{setInterval(reportH,500);}' +
+      'window.addEventListener("load",reportH);' +
+      'document.addEventListener("DOMContentLoaded",reportH);' +
+      'setTimeout(reportH,60);setTimeout(reportH,300);setTimeout(reportH,1000);' +
+      'window.addEventListener("error",function(e){post("cc-widget-error",{message:String(e.message||"unknown")+" @ "+(e.filename||"inline")+":"+(e.lineno||0)});var o=document.createElement("div");o.className="cc-widget-error-overlay";o.textContent="⚠ Widget 运行错误:\\n"+e.message+"\\n@ line "+e.lineno;document.body.appendChild(o);reportH();});' +
+      'window.addEventListener("unhandledrejection",function(e){post("cc-widget-error",{message:"Unhandled Promise: "+String(e.reason)});});' +
+      '})();' +
+      '</script>';
+
+    if (isFullDoc) {
+      // 用户给了完整 HTML doc，把 CSP / theme / bridge 注入到 <head> 末
+      // 简单做法：在 </head> 前插入；找不到就在 <html> 后插入
+      let doc = trimmed;
+      const headEnd = doc.search(/<\/head>/i);
+      if (headEnd >= 0) {
+        doc = doc.slice(0, headEnd) + cspMeta + themeStyle + doc.slice(headEnd);
+      } else {
+        doc = doc.replace(/<html[^>]*>/i, (m) => m + '<head>' + cspMeta + themeStyle + '</head>');
+      }
+      // bridge 放到 </body> 前
+      const bodyEnd = doc.search(/<\/body>/i);
+      if (bodyEnd >= 0) {
+        doc = doc.slice(0, bodyEnd) + bridge + doc.slice(bodyEnd);
+      } else {
+        doc += bridge;
+      }
+      return doc;
+    }
+
+    // 用户给了片段，包到模板里
+    return '<!DOCTYPE html><html><head>' +
+      '<meta charset="UTF-8">' +
+      cspMeta + themeStyle +
+      '</head><body>' + trimmed + bridge + '</body></html>';
+  }
+
+  /** 把可能包含 </style> 或注入字符的颜色值过掉。VS Code 颜色变量一般是 hex/rgb，但兜底 */
+  function cssSafe(v) {
+    return String(v || '').replace(/[<>"\\]/g, '');
+  }
+
+  // 父页监听 iframe postMessage：高度自适应 + 错误展示
+  window.addEventListener('message', (e) => {
+    const d = e && e.data;
+    if (!d || typeof d !== 'object' || !d.type || !d.id) return;
+    const wrap = document.querySelector('[data-widget-id="' + cssAttrSafe(d.id) + '"]');
+    if (!wrap) return;
+    if (d.type === 'cc-widget-resize') {
+      const iframe = wrap.querySelector('iframe.cc-widget-iframe');
+      if (iframe && typeof d.height === 'number' && d.height > 0) {
+        // +4 防滚动条出现
+        iframe.style.height = (Math.min(d.height + 4, 2000)) + 'px';
+      }
+    } else if (d.type === 'cc-widget-error') {
+      const err = wrap.querySelector('.cc-widget-error');
+      if (err) {
+        err.classList.remove('hidden');
+        err.textContent = '⚠ ' + String(d.message || '运行错误');
+      }
+    }
+  });
+
+  function cssAttrSafe(v) {
+    return String(v || '').replace(/["\\]/g, '');
+  }
+
   // ===== DOM refs =====
 
   const els = {
@@ -414,6 +651,7 @@
     renderMath(els.body);
     void renderMermaid(els.body); // 异步，不 block
     void renderGraphviz(els.body); // 异步，不 block
+    renderWidgets(els.body);       // 同步，但 iframe 内部脚本异步加载
   }
 
   function setHeader(args) {
@@ -837,6 +1075,7 @@
     renderMath(body);
     void renderMermaid(body);
     void renderGraphviz(body);
+    renderWidgets(body);
     bubble.appendChild(body);
 
     const actions = document.createElement('div');

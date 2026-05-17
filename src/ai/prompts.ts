@@ -846,8 +846,8 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
     : detail === 'detailed' ? '4000-6000 字（详尽，含证明、推导、多个例子）'
     : '2000-3000 字（标准，含定义、关键例子、本节小结）';
 
-  // 视觉化建议：按学科 hint 引导 mermaid / DOT / SVG + 通用样式约束
-  const visualHint = buildVisualHint(subject) + '\n\n' + VISUAL_STYLE_RULES;
+  // 视觉化建议：按学科 hint 引导 mermaid / DOT / SVG + 通用样式约束 + widget 交互演示
+  const visualHint = buildVisualHint(subject) + '\n\n' + VISUAL_STYLE_RULES + '\n' + INTERACTIVE_WIDGET_RULES;
 
   // Misconception 前置防御：找出与本节相关的常见误区，让 AI 在讲义里主动澄清
   // 同步引入避免循环；require 是 ts-node / commonjs 友好
@@ -924,6 +924,59 @@ const VISUAL_STYLE_RULES = [
   '⚠ **Mermaid 内部不要写 `style A fill:#xxx,color:#yyy` 或 `classDef` 设颜色** —— webview 已经统一注入 themeVariables 适配主题。手动设色容易让文字变浅灰色不可读。',
   '⚠ **DOT 内部不要写 `color="#xxx"` / `fontcolor="#xxx"` / `bgcolor="#xxx"`** 给节点/边整体上色 —— webview CSS 会把黑色描边/文字统一替换成主题前景色。只在你"要突出某条边/节点"时用 `color=red` / `color=blue` 这种命名色（语义清晰，CSS 不会覆盖）。',
   '⚠ 别在代码块外再加 markdown 标题或 `**强调**` 包住整段，会破坏 fence 识别。',
+].join('\n');
+
+/**
+ * 互动式 widget 使用指南：什么场景用 ```widget 而不是 dot/mermaid。
+ */
+const INTERACTIVE_WIDGET_RULES = [
+  '',
+  '【交互式演示】 webview 支持 ```widget 代码块，里面写完整 HTML+CSS+JS，渲染成沙箱 iframe 的可交互演示（按钮、动画、状态切换）。',
+  '',
+  '**什么时候用 widget**：',
+  '- 算法步进演示：Dijkstra / BFS / DFS / Floyd / 排序 → 有"下一步 / 重置 / 自动播放"按钮，每步高亮当前节点 + 更新数据表',
+  '- 数据结构操作：BST 插入/删除/旋转、堆调整、Trie 查找、链表反转 → 用户点按钮看每一步',
+  '- 网络协议交互：TCP 三次握手 / TLS handshake → 时序图带"下一步"',
+  '- 函数图像：用 Canvas / SVG 画 y=sin(x)、ReLU、softmax，加滑块调参',
+  '- 任何需要"鼠标点 / 滑块拖 / 输入框改" 才能体现概念的场景',
+  '',
+  '**不要用 widget 的情况**：',
+  '- 静态结构图 → ```dot 或 ```mermaid 即可，不必上 iframe',
+  '- 单张图表 → SVG / Vega-Lite 更轻',
+  '- 数学公式 → KaTeX 已支持',
+  '',
+  '**widget 块写法约束**：',
+  '- 完整的 HTML+CSS+JS，纯 vanilla，不要 import 任何外部库（iframe CSP 已禁网络，外链都会失败）',
+  '- 可以是 `<!DOCTYPE html>...<html>...` 完整 doc，也可以只写 `<body>` 里的片段（webview 会自动包模板）',
+  '- 主题色用 CSS 变量：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)`（webview 已注入）',
+  '- 也可以用语义化 HTML 元素，模板自带 button / input / table 基础样式',
+  '- 高度自适应：iframe 高度自动跟内容，不要写死 height',
+  '- 不要 `fetch` / `XMLHttpRequest` / `WebSocket` / 跨页通信 —— CSP 全部禁了',
+  '- 适合 200-500 行 HTML+JS 规模；超过 800 行说明可能不该用 widget',
+  '',
+  '**模板示例（Dijkstra 单步演示）**：',
+  '```widget',
+  '<style>',
+  '  .panel { padding: 12px; background: var(--panel-bg); border-radius: 8px; margin-top: 12px; }',
+  '  .node { transition: all 200ms ease; }',
+  '  .active { stroke: var(--accent); stroke-width: 3; }',
+  '</style>',
+  '<svg viewBox="0 0 400 200" id="g"><!-- 节点边 --></svg>',
+  '<div class="panel"><table id="tbl"><thead>...</thead><tbody></tbody></table></div>',
+  '<div style="margin-top:12px">',
+  '  <button id="next">下一步</button>',
+  '  <button id="reset" class="ghost">重置</button>',
+  '</div>',
+  '<script>',
+  '  const state = { dist: {...}, visited: new Set(), step: 0 };',
+  '  function render() { /* 更新 SVG + 表格 */ }',
+  '  function next() { /* dijkstra 推进 */ render(); }',
+  '  function reset() { /* 初始 state */ render(); }',
+  '  document.getElementById("next").onclick = next;',
+  '  document.getElementById("reset").onclick = reset;',
+  '  reset();',
+  '</script>',
+  '```',
 ].join('\n');
 
 /**

@@ -650,6 +650,9 @@ export class LectureWebviewProvider {
       `font-src ${webview.cspSource} data:`,
       // wasm-unsafe-eval：@hpcc-js/wasm 的 GraphViz 需要在浏览器里加载/执行内嵌的 wasm
       `script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'`,
+      // ```widget 代码块用 iframe srcdoc 渲染交互式演示；sandbox 模式下 iframe
+      // 是 unique origin，frame-src 'self' / data: 都允许 srcdoc
+      `frame-src 'self' data:`,
     ].join('; ');
 
     const htmlPath = path.join(
