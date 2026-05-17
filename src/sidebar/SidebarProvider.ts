@@ -3291,7 +3291,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               ...courseProfileContext,
               ...grounding,
             });
-            const reply = await this.aiClient.chatCompletion(messages);
+            // 流式：每个 token 通过 aiStreamDelta 推送，前端在 chat tab 内的
+            // assistant 消息气泡里逐字 append + 节流渲染 markdown
+            const reply = await this.aiClient.chatCompletion(messages, {
+              onDelta: (chunk) => {
+                this._view?.webview.postMessage({
+                  type: 'aiStreamDelta',
+                  turnId,
+                  channel: 'chat',
+                  delta: chunk,
+                });
+              },
+            });
             await this._recordRevisionFeedbackEvent({
               type: 'answer-revision',
               subject: msg.subject,
@@ -3301,7 +3312,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               summaryTarget: 'chat-answer',
             });
             this._recordChatTurn(userMessage, reply);
+            // chatResponse 留作流终结标记 + finalText 兜底（前端可对照流式累积值）
             this._view?.webview.postMessage({ type: 'chatResponse', content: reply, turnId });
+            this._view?.webview.postMessage({
+              type: 'aiStreamEnd',
+              turnId,
+              channel: 'chat',
+              finalText: reply,
+            });
             if (grounding.sources && grounding.sources.length > 0) {
               this._view?.webview.postMessage({
                 type: 'groundingSources',

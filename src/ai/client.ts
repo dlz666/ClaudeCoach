@@ -21,6 +21,22 @@ export interface MultimodalChatMessage extends ChatMessage {
   images?: MultimodalContent[];
 }
 
+/**
+ * chatCompletion 选项。
+ * - `onDelta`：传入时启用流式输出，每个 token 到达时回调一次（同步）。
+ *   不传时默认非流式行为（积累完整结果后返回）。
+ *   注意：仅文本 chatCompletion 暴露此回调；chatJson 不暴露，避免误用——
+ *   JSON 必须等完整 schema 才能验证，部分输出无意义。
+ * - `signal`：AbortController.signal，让上游能 cancel 长操作。
+ *   当前 fetch 已透传，但 UI 还未提供 cancel 按钮（下一期补）。
+ */
+export interface ChatOptions {
+  temperature?: number;
+  maxTokens?: number;
+  onDelta?: (chunk: string) => void;
+  signal?: AbortSignal;
+}
+
 /** 当前使用的 model 是否支持视觉？用于在调多模态前给前端友好报错。 */
 export class VisionUnsupportedError extends Error {
   readonly modelName: string;
@@ -40,6 +56,69 @@ const VISION_ANTHROPIC_MODELS = [
   'claude-3', 'claude-3.5-sonnet', 'claude-3.5-haiku', 'claude-3.7-sonnet', 'claude-4', 'claude-opus', 'claude-sonnet',
 ];
 
+/**
+ * 通用 SSE 流读取工具。
+ *
+ * 读完整个 stream，按 `\n\n` 切 event chunks，每个 chunk 内提取所有 `data:` 行
+ * 合并成一个 JSON payload 调用 `onPayload(parsed)`。`event: foo` 行通过
+ * `__event` 字段传给 callback 供其判断事件类型。
+ *
+ * 错误（JSON parse 失败 / [DONE] 标记）silently skip，stream 继续。
+ */
+async function streamSSE(
+  resp: Response,
+  onPayload: (payload: unknown, eventName?: string) => void,
+): Promise<void> {
+  if (!resp.body) {
+    throw new Error('响应体为空，无法启动 SSE 流。');
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const processChunk = (chunk: string) => {
+    const lines = chunk.split('\n');
+    let eventName = '';
+    const dataLines: string[] = [];
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      if (!line || line.startsWith(':')) continue;
+      if (line.startsWith('event:')) {
+        eventName = line.slice(6).trim();
+        continue;
+      }
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (dataLines.length === 0) return;
+    const data = dataLines.join('\n');
+    if (data === '[DONE]') return;
+    try {
+      const payload = JSON.parse(data);
+      onPayload(payload, eventName);
+    } catch {
+      // 单条 chunk 解析失败不中断流
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder
+      .decode(value ?? new Uint8Array(), { stream: !done })
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '');
+    let sep = buffer.indexOf('\n\n');
+    while (sep >= 0) {
+      processChunk(buffer.slice(0, sep));
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf('\n\n');
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) processChunk(buffer);
+}
+
 function isVisionCapable(provider: string, model: string): boolean {
   const m = model.toLowerCase();
   if (provider === 'anthropic') {
@@ -56,7 +135,7 @@ export class AIClient {
     this.config = config;
   }
 
-  async chatCompletion(messages: ChatMessage[], options?: { temperature?: number; maxTokens?: number }): Promise<string> {
+  async chatCompletion(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
     const config = await this.getConfig();
     if (!config.apiToken) {
       throw new Error('未配置 API Token，请先在设置中完善 AI 配置。');
@@ -381,28 +460,41 @@ export class AIClient {
   private async openaiChat(
     config: ResolvedAIConfig | AIConfig,
     messages: ChatMessage[],
-    options?: { temperature?: number; maxTokens?: number },
+    options?: ChatOptions,
   ): Promise<string> {
     const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-    const body = {
+    const useStream = typeof options?.onDelta === 'function';
+    const body: Record<string, unknown> = {
       model: config.model,
       messages,
       temperature: options?.temperature ?? 0.7,
       max_tokens: options?.maxTokens ?? config.maxTokens ?? 4096,
     };
+    if (useStream) {
+      body.stream = true;
+    }
 
     const resp = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'application/json',
+        Accept: useStream ? 'text/event-stream' : 'application/json',
         Authorization: `Bearer ${config.apiToken}`,
       },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!resp.ok) {
       throw await this.buildApiError(resp, config.baseUrl);
+    }
+
+    if (useStream) {
+      const accumulated = await this.readOpenAIChatEventStream(resp, options!.onDelta!);
+      if (!accumulated) {
+        throw new Error('API 流式返回了空内容。');
+      }
+      return accumulated;
     }
 
     const json = await resp.json() as { choices?: { message?: { content?: string } }[] };
@@ -413,10 +505,27 @@ export class AIClient {
     return content;
   }
 
+  /**
+   * 解析 OpenAI chat/completions 流式响应（SSE）。
+   * 每条 `data: {json}` 行解析 `choices[0].delta.content`，
+   * 逐 token 调 onDelta，最终累加返回完整 text。
+   */
+  private async readOpenAIChatEventStream(resp: Response, onDelta: (chunk: string) => void): Promise<string> {
+    let accumulated = '';
+    await streamSSE(resp, (payload) => {
+      const delta = (payload as { choices?: Array<{ delta?: { content?: unknown } }> }).choices?.[0]?.delta?.content;
+      if (typeof delta === 'string' && delta) {
+        accumulated += delta;
+        try { onDelta(delta); } catch { /* swallow callback errors */ }
+      }
+    });
+    return accumulated;
+  }
+
   private async openaiResponsesChat(
     config: ResolvedAIConfig | AIConfig,
     messages: ChatMessage[],
-    options?: { temperature?: number; maxTokens?: number },
+    options?: ChatOptions,
   ): Promise<string> {
     const url = `${config.baseUrl.replace(/\/+$/, '')}/responses`;
     const systemMessages = messages
@@ -466,13 +575,14 @@ export class AIClient {
         Authorization: `Bearer ${config.apiToken}`,
       },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!resp.ok) {
       throw await this.buildApiError(resp, config.baseUrl);
     }
 
-    const content = await this.readResponsesOutput(resp);
+    const content = await this.readResponsesOutput(resp, options?.onDelta);
     if (!content) {
       throw new Error('Responses API 返回了空内容。');
     }
@@ -482,9 +592,10 @@ export class AIClient {
   private async anthropicChat(
     config: ResolvedAIConfig | AIConfig,
     messages: ChatMessage[],
-    options?: { temperature?: number; maxTokens?: number },
+    options?: ChatOptions,
   ): Promise<string> {
     const url = `${config.anthropicBaseUrl.replace(/\/+$/, '')}/v1/messages`;
+    const useStream = typeof options?.onDelta === 'function';
 
     const systemPrompt = messages
       .filter((message) => message.role === 'system' && message.content.trim())
@@ -509,20 +620,32 @@ export class AIClient {
     if (systemPrompt) {
       body.system = systemPrompt;
     }
+    if (useStream) {
+      body.stream = true;
+    }
 
     const resp = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'application/json',
+        Accept: useStream ? 'text/event-stream' : 'application/json',
         'x-api-key': config.apiToken,
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!resp.ok) {
       throw await this.buildApiError(resp, config.anthropicBaseUrl);
+    }
+
+    if (useStream) {
+      const accumulated = await this.readAnthropicEventStream(resp, options!.onDelta!);
+      if (!accumulated) {
+        throw new Error('Anthropic 流式返回了空内容。');
+      }
+      return accumulated;
     }
 
     const json = await resp.json() as {
@@ -540,6 +663,26 @@ export class AIClient {
     }
 
     throw new Error(`API 返回了空内容，实际响应: ${JSON.stringify(json).slice(0, 200)}`);
+  }
+
+  /**
+   * 解析 Anthropic messages 流式响应。Anthropic SSE 事件类型：
+   *   - content_block_delta { delta: { type: 'text_delta', text: '...' } } —— 主流 token 流
+   *   - 其他事件（message_start / content_block_start / message_delta / message_stop）忽略
+   */
+  private async readAnthropicEventStream(resp: Response, onDelta: (chunk: string) => void): Promise<string> {
+    let accumulated = '';
+    await streamSSE(resp, (payload, eventName) => {
+      const type = String((payload as { type?: unknown }).type ?? eventName ?? '');
+      if (type === 'content_block_delta') {
+        const delta = (payload as { delta?: { type?: string; text?: unknown } }).delta;
+        if (delta && (delta.type === 'text_delta' || !delta.type) && typeof delta.text === 'string') {
+          accumulated += delta.text;
+          try { onDelta(delta.text); } catch { /* swallow */ }
+        }
+      }
+    });
+    return accumulated;
   }
 
   private shouldIncludeResponsesTemperature(
@@ -600,10 +743,10 @@ export class AIClient {
     }
   }
 
-  private async readResponsesOutput(resp: Response): Promise<string> {
+  private async readResponsesOutput(resp: Response, onDelta?: (chunk: string) => void): Promise<string> {
     const contentType = resp.headers.get('content-type') || '';
     if (/text\/event-stream/i.test(contentType)) {
-      return this.readResponsesEventStream(resp);
+      return this.readResponsesEventStream(resp, onDelta);
     }
 
     const json = await resp.json().catch(() => null);
@@ -611,10 +754,14 @@ export class AIClient {
     if (!content) {
       throw new Error(`Responses API 返回了无法解析的内容: ${JSON.stringify(json).slice(0, 200)}`);
     }
+    // 非流式时也调一次 onDelta，让前端逻辑统一
+    if (onDelta && content) {
+      try { onDelta(content); } catch { /* swallow */ }
+    }
     return content;
   }
 
-  private async readResponsesEventStream(resp: Response): Promise<string> {
+  private async readResponsesEventStream(resp: Response, onDelta?: (chunk: string) => void): Promise<string> {
     if (!resp.body) {
       throw new Error('Responses API 返回了空响应流。');
     }
@@ -660,7 +807,13 @@ export class AIClient {
 
       const type = String((payload as { type?: unknown }).type ?? eventName ?? '');
       if (type === 'response.output_text.delta') {
-        accumulatedText += String((payload as { delta?: unknown }).delta ?? '');
+        const deltaText = String((payload as { delta?: unknown }).delta ?? '');
+        if (deltaText) {
+          accumulatedText += deltaText;
+          if (onDelta) {
+            try { onDelta(deltaText); } catch { /* swallow */ }
+          }
+        }
         return;
       }
 

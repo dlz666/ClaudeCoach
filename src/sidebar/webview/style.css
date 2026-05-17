@@ -910,6 +910,23 @@ textarea:focus,
   border: 1px solid var(--border);
 }
 
+/* 流式中：左侧 accent 色条 + 末尾闪动光标 */
+.chat-msg.assistant.streaming {
+  border-left: 3px solid var(--vscode-button-background);
+}
+.chat-msg.assistant.streaming::after {
+  content: '▌';
+  display: inline-block;
+  margin-left: 2px;
+  animation: ccc-stream-blink 0.9s steps(2, start) infinite;
+  opacity: 0.6;
+  color: var(--vscode-button-background);
+  font-weight: 700;
+}
+@keyframes ccc-stream-blink {
+  to { opacity: 0; }
+}
+
 .chat-msg.assistant h1,
 .chat-msg.assistant h2,
 .chat-msg.assistant h3,

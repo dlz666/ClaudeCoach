@@ -425,6 +425,19 @@ html, body {
 .lecture-suggestion-bubble.failed { border-left-color: var(--danger); }
 .lecture-suggestion-bubble.applied { border-left-color: var(--success); }
 
+/* streaming：AI 还在逐字写入时，bubble 显示闪烁光标 */
+.lecture-suggestion-bubble.streaming .bubble-body[data-streaming-body]::after {
+  content: '▌';
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  opacity: 0.6;
+  animation: lecture-stream-blink 0.9s steps(2, start) infinite;
+}
+@keyframes lecture-stream-blink {
+  to { opacity: 0; }
+}
+
 .bubble-header {
   display: flex;
   align-items: center;

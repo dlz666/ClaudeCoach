@@ -408,9 +408,26 @@ export class LectureWebviewProvider {
 
     let suggestion = '';
     try {
-      suggestion = await this.deps.ai.chatCompletion(messages, { temperature: 0.4 });
+      // 流式：每个 token 立即 post 给 webview，前端在 preview bubble 里逐字累加渲染。
+      suggestion = await this.deps.ai.chatCompletion(messages, {
+        temperature: 0.4,
+        onDelta: (chunk) => {
+          ctx.panel.webview.postMessage({
+            type: 'aiStreamDelta',
+            turnId: request.turnId,
+            channel: 'lecture',
+            delta: chunk,
+          });
+        },
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({
+        type: 'aiStreamEnd',
+        turnId: request.turnId,
+        channel: 'lecture',
+        error: message,
+      });
       ctx.panel.webview.postMessage({
         type: 'inlineSuggestResult',
         result: {
@@ -423,6 +440,14 @@ export class LectureWebviewProvider {
     }
 
     const cleaned = stripFenceWrapper(suggestion).trim();
+
+    // 流式收尾：通知前端"finalText 是这个，可以采纳/丢弃"
+    ctx.panel.webview.postMessage({
+      type: 'aiStreamEnd',
+      turnId: request.turnId,
+      channel: 'lecture',
+      finalText: cleaned,
+    });
 
     if (effectiveApplyMode === 'auto-apply') {
       // webview 行号是半开区间（与 markdown-it token.map 一致），

@@ -4354,7 +4354,69 @@
         break;
       }
       case 'chatResponse': {
-        appendChat('assistant', msg.content || '');
+        // 流式版本下，aiStreamEnd 已经把 finalText 渲染好，chatResponse 只负责
+        // 持久化 (state.chatMessages.push)。如果当前 turn 没有流式 entry，
+        // 回退到非流式：直接 appendChat 一次性渲染。
+        if (state.streamingChat && state.streamingChat.turnId === msg.turnId) {
+          // 流式已完成，最终态 = msg.content。把消息持久化到 state（appendChat 的
+          // save 路径），但不再创建新 DOM（流式 bubble 已经存在）
+          const finalText = msg.content || '';
+          state.chatMessages.push({ role: 'assistant', content: finalText });
+          persist();
+          state.streamingChat = null;
+        } else {
+          appendChat('assistant', msg.content || '');
+        }
+        break;
+      }
+      case 'aiStreamDelta': {
+        if (msg.channel !== 'chat' || !msg.turnId) break;
+        // 第一次 delta：创建 assistant message DOM + 启动节流计时
+        if (!state.streamingChat || state.streamingChat.turnId !== msg.turnId) {
+          const el = document.createElement('div');
+          el.className = 'chat-msg assistant streaming';
+          els.chatMessages?.appendChild(el);
+          state.streamingChat = {
+            turnId: msg.turnId,
+            el,
+            buf: '',
+            lastRenderAt: 0,
+            trailingTimer: null,
+          };
+        }
+        const sc = state.streamingChat;
+        sc.buf += (msg.delta || '');
+        const renderNow = () => {
+          if (!sc.el) return;
+          sc.el.innerHTML = renderMarkdown(sc.buf);
+          renderMath(sc.el);
+          // 跟着新内容滚到底
+          if (els.chatMessages) els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+        };
+        const now = Date.now();
+        if (now - sc.lastRenderAt > 50) {
+          sc.lastRenderAt = now;
+          renderNow();
+        } else if (!sc.trailingTimer) {
+          sc.trailingTimer = setTimeout(() => {
+            if (!state.streamingChat || state.streamingChat.turnId !== msg.turnId) return;
+            state.streamingChat.lastRenderAt = Date.now();
+            state.streamingChat.trailingTimer = null;
+            renderNow();
+          }, 60);
+        }
+        break;
+      }
+      case 'aiStreamEnd': {
+        if (msg.channel !== 'chat' || !msg.turnId) break;
+        const sc = state.streamingChat;
+        if (!sc || sc.turnId !== msg.turnId) break;
+        if (sc.trailingTimer) clearTimeout(sc.trailingTimer);
+        const finalText = (typeof msg.finalText === 'string' && msg.finalText) ? msg.finalText : sc.buf;
+        sc.el.innerHTML = renderMarkdown(finalText);
+        renderMath(sc.el);
+        sc.el.classList.remove('streaming');
+        // 持久化由后续 chatResponse 处理（finalText 一致）
         break;
       }
       case 'gradeResult': {

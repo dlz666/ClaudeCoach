@@ -527,9 +527,40 @@
     bubble.style.left = `${left}px`;
   }
 
+  // ===== streaming 状态：每个 turn 一个 buffer，50ms 节流 re-render markdown =====
+  state.streamingTurns = state.streamingTurns || new Map();
+
+  function initStreamingBubble(turnId) {
+    const turn = state.activeTurns.get(turnId);
+    if (!turn) return;
+    const bubble = ensureBubble(turnId);
+    bubble.classList.remove('pending', 'preview', 'applied', 'failed');
+    bubble.classList.add('streaming');
+    const tagLabel = (turn.mode === 'ask') ? 'AI 回答中…' : 'AI 生成中…';
+    bubble.innerHTML = `
+      <div class="bubble-header">
+        <span class="bubble-tag">${tagLabel}</span>
+        <span class="bubble-range">行 ${turn.info.startLine + 1}–${turn.info.endLine}</span>
+      </div>
+      <div class="bubble-body markdown-body" data-streaming-body></div>
+    `;
+    positionBubble(bubble, bubbleAnchorRect(turnId));
+  }
+
+  function updateStreamingBubble(turnId, text) {
+    const bubble = bubbles.get(turnId);
+    if (!bubble) return;
+    const body = bubble.querySelector('[data-streaming-body]');
+    if (!body) return;
+    body.innerHTML = renderMarkdown(text);
+    renderMath(body);
+    // mermaid 渲染留到 final（每 50ms 重新 render mermaid 太重）
+    positionBubble(bubble, bubbleAnchorRect(turnId));
+  }
+
   function showPendingBubble(turnId, info) {
     const bubble = ensureBubble(turnId);
-    bubble.classList.remove('preview', 'applied', 'failed');
+    bubble.classList.remove('preview', 'applied', 'failed', 'streaming');
     bubble.classList.add('pending');
     bubble.innerHTML = `
       <div class="bubble-header">
@@ -835,6 +866,46 @@
         bubbles.forEach((bubble, turnId) => {
           positionBubble(bubble, bubbleAnchorRect(turnId));
         });
+        break;
+      }
+      case 'aiStreamDelta': {
+        // 流式 token 到达 → 累加到 turn buffer，50ms 节流 re-render preview bubble
+        if (msg.channel !== 'lecture' || !msg.turnId) break;
+        if (!state.activeTurns.has(msg.turnId)) break;
+        let entry = state.streamingTurns.get(msg.turnId);
+        if (!entry) {
+          entry = { buf: '', lastRenderAt: 0, trailingTimer: null };
+          state.streamingTurns.set(msg.turnId, entry);
+          initStreamingBubble(msg.turnId);
+        }
+        entry.buf += (msg.delta || '');
+        const now = Date.now();
+        if (now - entry.lastRenderAt > 50) {
+          entry.lastRenderAt = now;
+          updateStreamingBubble(msg.turnId, entry.buf);
+        } else if (!entry.trailingTimer) {
+          entry.trailingTimer = setTimeout(() => {
+            const e = state.streamingTurns.get(msg.turnId);
+            if (!e) return;
+            e.lastRenderAt = Date.now();
+            e.trailingTimer = null;
+            updateStreamingBubble(msg.turnId, e.buf);
+          }, 60);
+        }
+        break;
+      }
+      case 'aiStreamEnd': {
+        if (msg.channel !== 'lecture' || !msg.turnId) break;
+        const entry = state.streamingTurns.get(msg.turnId);
+        if (entry?.trailingTimer) clearTimeout(entry.trailingTimer);
+        // 最后一次渲染用 finalText（已经过 stripFenceWrapper trim 的版本）
+        if (typeof msg.finalText === 'string') {
+          updateStreamingBubble(msg.turnId, msg.finalText);
+        } else if (entry) {
+          updateStreamingBubble(msg.turnId, entry.buf);
+        }
+        state.streamingTurns.delete(msg.turnId);
+        // 后续 inlineSuggestResult preview 会重新构建 bubble 加 采纳/丢弃 按钮
         break;
       }
       case 'inlineSuggestResult': {

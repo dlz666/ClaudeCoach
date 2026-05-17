@@ -1398,6 +1398,11 @@ export type SidebarResponse =
   | { type: 'inlineSuggestResult'; result: InlineSuggestResult }
   | { type: 'inlineApplied'; turnId: string; appliedRange?: { startLine: number; endLine: number } }
   | { type: 'lectureFileChanged'; filePath: string; content: string }
+  // ===== AI 流式输出（chatCompletion onDelta 暴露给前端）=====
+  // 用 turnId 关联到具体的 inline turn / chat message / 其它后续扩展通道。
+  // channel 让前端知道这条 delta 该往哪个组件追加（讲义气泡 / 侧栏对话 / 大纲预览等）。
+  | { type: 'aiStreamDelta'; turnId: string; channel: 'lecture' | 'chat' | 'outline'; delta: string }
+  | { type: 'aiStreamEnd'; turnId: string; channel: 'lecture' | 'chat' | 'outline'; finalText?: string; error?: string }
   // ===== Coach 响应 =====
   | { type: 'dailyBrief'; data: DailyBriefEntry }
   | { type: 'coachSuggestions'; data: CoachSuggestion[] }
