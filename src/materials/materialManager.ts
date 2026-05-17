@@ -327,6 +327,24 @@ export class MaterialManager {
     for (const material of materials) {
       if (material.status !== 'indexed') continue;
       if (this.vectorizingMaterials.has(material.id)) continue;
+
+      // Fast path：磁盘上已有完整向量索引、模型/维度都匹配 → 跳过整个 ensureVectorIndexFor。
+      // 否则即便最终命中缓存，也要先 load index + chunkText 全文 + diff 全部 chunks
+      // （同步 CPU 工作累计十几秒，独占主线程，webview 的 getCourses 会被卡住）。
+      try {
+        const stats = await this.getVectorIndexStats(material);
+        if (
+          stats.exists &&
+          stats.chunks > 0 &&
+          stats.model === config.model &&
+          (stats.dimension ?? config.dimension) === config.dimension
+        ) {
+          continue;
+        }
+      } catch {
+        // stats 查询失败 → 走完整路径
+      }
+
       try {
         const result = await this.ensureVectorIndexFor(material, (event) => {
           this.vectorizeProgressEmitter.fire(event);

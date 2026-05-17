@@ -189,7 +189,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       at: new Date().toISOString(),
     });
     void this._pushAIConfigState();
-    this._reconcileMaterialsInBackground();
+    // 推到下一个 macrotask 再跑资料 reconcile：先让 webview 的首次 getCourses / getMaterials
+    // 进入 _handleMessage（否则启动期 reconcile 的同步开销会把这些消息卡在队列里）。
+    setImmediate(() => this._reconcileMaterialsInBackground());
   }
 
   sendCommand(command: { type: string; [key: string]: unknown }) {
