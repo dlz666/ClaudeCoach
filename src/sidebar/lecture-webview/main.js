@@ -701,7 +701,6 @@ svg {
   display: block;
   max-width: 100%;
   height: auto;
-  /* 没显式 width/height 时按 viewBox 比例伸展 */
 }
 svg:not([width]):not([height]) {
   width: 100%;
@@ -1111,7 +1110,10 @@ canvas { display: block; max-width: 100%; }
       '4. SVG 必须 `<svg width="600" height="300" viewBox="0 0 600 300">` 三件套都给齐，否则可能渲染成 0×0',
       '5. **模板字符串插值必须紧贴**：写 `${var}` 不是 `$ {var}` —— 中间空格会让插值失效，整个变字面量字符串，querySelector 全找不到节点',
       '6. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
-      '7. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— webview 已注入跟随主题',
+      '7. **颜色 CSS 变量 + 必须保证对比**：可用 `var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)`，**但绝对不能 SVG 节点 fill 用容器同色变量**：',
+      '   - ❌ `.graph-shell { background: var(--input-bg) }` + `.node circle { fill: var(--input-bg) }` → 节点融进背景看起来空',
+      '   - ✅ SVG 节点 fill 用 `var(--accent)` / `var(--fg)`（前景色）；stroke 用 `var(--border)` / `var(--accent-fg)`',
+      '   - ✅ SVG 边 stroke 用 `var(--fg)` / `var(--accent)` 这种前景色；不要用 `var(--border)` 因为 border 颜色对暗背景对比度低',
       '8. **不要写死 1000px 这种像素宽度**，要响应式',
       '9. **绝对不要内联 `// 注释`**：因为 AI 经常把多个语句压一行，`// xxx` 注释会**吃掉同一行后面的所有代码**，导致 syntax error。要写注释**用 `/* xxx */` 块注释**，或者把注释独占一行。',
       '10. **每个语句独占一行**，不要 `a;b;c;d;` 压一行。代码再啰嗦也比单行难调试强。',
