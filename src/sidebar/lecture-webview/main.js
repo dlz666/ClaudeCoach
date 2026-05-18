@@ -496,7 +496,9 @@
     iframe.setAttribute('srcdoc', srcdoc);
     iframe.dataset.widgetId = id;
     iframe.style.width = '100%';
-    iframe.style.height = '160px';
+    // 初始就给个足够大的高度（多数 widget 用得着），ResizeObserver 上报后会精修。
+    // 之前 160px 太小，简单 widget 一上来就出滚动条，体验差。
+    iframe.style.height = '500px';
     iframe.style.border = '0';
     iframe.style.display = 'block';
     iframe.setAttribute('title', '互动演示');
@@ -523,28 +525,20 @@
       if (act === 'toggle-source') {
         srcPanel.classList.toggle('hidden');
       } else if (act === 'reload') {
-        // 重新挂 srcdoc 触发 iframe 重新加载
         iframe.setAttribute('srcdoc', srcdoc);
       }
     });
 
-    // 失败检测：3 秒内 iframe 没汇报 cc-widget-resize 视为"白屏"，自动展开源码
-    let _gotResize = false;
-    const onMsg = (e) => {
-      if (e.data && e.data.id === id && e.data.type === 'cc-widget-resize' && e.data.height > 20) {
-        _gotResize = true;
-        window.removeEventListener('message', onMsg);
-      }
-    };
-    window.addEventListener('message', onMsg);
-    setTimeout(() => {
-      if (!_gotResize) {
-        errBanner.classList.remove('hidden');
-        errBanner.textContent = '⚠ Widget 似乎没渲染出内容（3s 内无内容报告）。已展开源码方便排查。';
-        srcPanel.classList.remove('hidden');
-        window.removeEventListener('message', onMsg);
-      }
-    }, 3000);
+    // iframe.onload 兜底：如果 bridge 因为某种原因没发 resize，iframe 加载完
+    // 后强制设一个稳健的最低高度（>= 300px），用户至少不会看到只露半截。
+    iframe.addEventListener('load', () => {
+      // 给 bridge 200ms 时间发首个 resize；如果 height 还在初始 500，
+      // 保持 500（已经够大），不再降级。
+      setTimeout(() => {
+        const cur = parseFloat(iframe.style.height) || 0;
+        if (cur < 300) iframe.style.height = '500px';
+      }, 200);
+    });
 
     return container;
   }
@@ -686,12 +680,16 @@ canvas { display: block; max-width: 100%; }
       '<script>' +
       '(function(){' +
       'var __id=' + JSON.stringify(id) + ';' +
+      'var __lastH=0;' +
       'function post(t,d){try{parent.postMessage(Object.assign({type:t,id:__id},d||{}),"*");}catch(e){}}' +
-      'function reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);post("cc-widget-resize",{height:h});}' +
-      'if(window.ResizeObserver){try{new ResizeObserver(reportH).observe(document.body);}catch(e){}}else{setInterval(reportH,500);}' +
+      'function reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);if(h!==__lastH){__lastH=h;post("cc-widget-resize",{height:h});}}' +
+      'if(window.ResizeObserver){try{new ResizeObserver(reportH).observe(document.body);}catch(e){}}' +
+      // 节流轮询兜底：每 300ms 一次，最多 30 次（9 秒），防止 ResizeObserver
+      // 因为某些边缘情况漏发；__lastH dedup 避免刷屏
+      'var __pollCount=0;var __pollT=setInterval(function(){reportH();if(++__pollCount>=30)clearInterval(__pollT);},300);' +
       'window.addEventListener("load",reportH);' +
       'document.addEventListener("DOMContentLoaded",reportH);' +
-      'setTimeout(reportH,60);setTimeout(reportH,300);setTimeout(reportH,1000);' +
+      'setTimeout(reportH,30);setTimeout(reportH,150);setTimeout(reportH,500);setTimeout(reportH,1500);' +
       'window.addEventListener("error",function(e){post("cc-widget-error",{message:String(e.message||"unknown")+" @ "+(e.filename||"inline")+":"+(e.lineno||0)});var o=document.createElement("div");o.className="cc-widget-error-overlay";o.textContent="⚠ Widget 运行错误:\\n"+e.message+"\\n@ line "+e.lineno;document.body.appendChild(o);reportH();});' +
       'window.addEventListener("unhandledrejection",function(e){post("cc-widget-error",{message:"Unhandled Promise: "+String(e.reason)});});' +
       '})();' +
@@ -738,8 +736,11 @@ canvas { display: block; max-width: 100%; }
     if (d.type === 'cc-widget-resize') {
       const iframe = wrap.querySelector('iframe.cc-widget-iframe');
       if (iframe && typeof d.height === 'number' && d.height > 0) {
-        // +4 防滚动条出现
-        iframe.style.height = (Math.min(d.height + 4, 2000)) + 'px';
+        // +16 安全余量防出滚动条；上限放宽到 4000 兼容大 widget
+        const next = Math.min(d.height + 16, 4000);
+        // 单调增高：防止过渡态反复涨缩抖动（如 SVG 加载前 body 短暂塌成小高度）
+        const cur = parseFloat(iframe.style.height) || 0;
+        if (next > cur || cur === 0) iframe.style.height = next + 'px';
       }
     } else if (d.type === 'cc-widget-error') {
       const err = wrap.querySelector('.cc-widget-error');
@@ -834,22 +835,17 @@ canvas { display: block; max-width: 100%; }
 
   function showPopoverFor(info) {
     if (!els.popover || !info) return;
-    // 定位：如果 info 自带 rect（来自选区），popover 在选区下方；
-    // 否则（全文模式 / 没 rect）popover 锚到蓝色按钮左下方。
+    // 永远锚到右上角蓝色按钮下方，位置固定不晃。
+    // 之前根据 info.rect 跟选区跑，每次点都换位置，体验差。
     let top, left;
-    if (info.rect) {
-      top = window.scrollY + info.rect.bottom + 12;
-      left = Math.max(16, Math.min(window.scrollX + info.rect.left, window.innerWidth - 420));
+    const chipRect = els.chip?.getBoundingClientRect();
+    if (chipRect) {
+      top = window.scrollY + chipRect.bottom + 8;
+      // popover 往左展开，对齐 chip 右边
+      left = Math.max(16, window.scrollX + chipRect.right - 400);
     } else {
-      const chipRect = els.chip?.getBoundingClientRect();
-      if (chipRect) {
-        top = window.scrollY + chipRect.bottom + 8;
-        // popover 往左展开，对齐 chip 右边
-        left = Math.max(16, window.scrollX + chipRect.right - 400);
-      } else {
-        top = window.scrollY + 60;
-        left = 16;
-      }
+      top = window.scrollY + 60;
+      left = Math.max(16, window.innerWidth - 416);
     }
     els.popover.style.top = `${top}px`;
     els.popover.style.left = `${left}px`;
