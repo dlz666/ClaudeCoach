@@ -270,9 +270,11 @@ html, body {
 /* ===== popover (评论框) ===== */
 
 .lecture-comment-popover {
-  position: absolute;
+  /* position: fixed 让 popover 跟着 chip 一样锚到视口右上角，
+     用户滚动讲义不会改变 popover 位置。 */
+  position: fixed;
   z-index: 1001;
-  width: 360px;
+  width: 380px;
   max-width: calc(100vw - 32px);
   background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
   border: 1px solid var(--border);
@@ -296,6 +298,7 @@ html, body {
 
 .popover-mode-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 8px;
   padding: 3px;
@@ -304,12 +307,14 @@ html, body {
 }
 
 .popover-mode-btn {
-  flex: 1;
+  flex: 1 1 calc(50% - 4px);
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--vscode-foreground);
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
   border-radius: 6px;
   cursor: pointer;
   transition: 120ms ease;

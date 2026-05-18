@@ -835,17 +835,16 @@ canvas { display: block; max-width: 100%; }
 
   function showPopoverFor(info) {
     if (!els.popover || !info) return;
-    // 永远锚到右上角蓝色按钮下方，位置固定不晃。
-    // 之前根据 info.rect 跟选区跑，每次点都换位置，体验差。
+    // popover 现在是 position: fixed（与 chip 一致），直接用 viewport 坐标。
+    // 不再 + window.scrollY/scrollX —— 之前那么写，用户滚动后位置会漂。
     let top, left;
     const chipRect = els.chip?.getBoundingClientRect();
     if (chipRect) {
-      top = window.scrollY + chipRect.bottom + 8;
-      // popover 往左展开，对齐 chip 右边
-      left = Math.max(16, window.scrollX + chipRect.right - 400);
+      top = chipRect.bottom + 8;                          // 视口顶 + chip 下方 8px
+      left = Math.max(16, chipRect.right - 380);          // 380 = popover 宽度
     } else {
-      top = window.scrollY + 60;
-      left = Math.max(16, window.innerWidth - 416);
+      top = 60;
+      left = Math.max(16, window.innerWidth - 396);
     }
     els.popover.style.top = `${top}px`;
     els.popover.style.left = `${left}px`;
@@ -868,11 +867,13 @@ canvas { display: block; max-width: 100%; }
       ? [
           { key: 'rewrite', label: '🛠 重写整篇', hint: 'AI 输出完整新版讲义并整篇覆盖（强制走预览 + 自动 .bak 备份，可撤回）' },
           { key: 'ask', label: '❓ 提问', hint: 'AI 基于整篇讲义回答你的问题' },
+          { key: 'widget', label: '🎮 互动演示', hint: '强制让 AI 输出一个 ```widget 代码块（可点按钮 / 拖滑块的交互式演示），追加到讲义末尾' },
           { key: 'idea', label: '💡 记想法', hint: '把你的想法以引用块追加到讲义末尾' },
         ]
       : [
           { key: 'rewrite', label: '🛠 改这段', hint: 'AI 输出会替换/插入到选区' },
           { key: 'ask', label: '❓ 提问', hint: 'AI 会以聊天形式回答，不动讲义' },
+          { key: 'widget', label: '🎮 互动演示', hint: '强制让 AI 基于这段输出一个 ```widget 互动演示块' },
           { key: 'idea', label: '💡 记想法', hint: '把你的想法以脚注形式追加到这段下方，不调 AI' },
         ];
     const modeButtons = modes.map((m) => {
@@ -892,14 +893,19 @@ canvas { display: block; max-width: 100%; }
             ? (info.isFullDoc
                 ? '关于整篇讲义你想问什么：「主要思想是什么」「跟 X 概念有什么联系」…'
                 : '关于这段你想问什么：「这步为什么成立」「能换种方式解释吗」…')
-            : (info.isFullDoc
-                ? '记下你自己的想法/疑问，会作为引用块追加到讲义末尾。'
-                : '记下你自己的想法/疑问，会作为引用块追加到这段下方。');
+            : m.key === 'widget'
+              ? (info.isFullDoc
+                  ? '描述要做什么互动演示：「Dijkstra 单步演示，6 个节点」「ReLU 函数图带温度滑块」「快排可视化」…'
+                  : '描述基于这段做什么互动演示：「这个算法的单步演示」「这个概念的可调参数可视化」…')
+              : (info.isFullDoc
+                  ? '记下你自己的想法/疑问，会作为引用块追加到讲义末尾。'
+                  : '记下你自己的想法/疑问，会作为引用块追加到这段下方。');
         btnSubmit.textContent = m.key === 'rewrite'
           ? (info.isFullDoc
               ? '重写整篇讲义'
               : (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI'))
           : m.key === 'ask' ? '问 AI'
+          : m.key === 'widget' ? '🎮 生成互动演示'
           : '保存想法';
       });
       modeBar.appendChild(btn);
@@ -952,6 +958,8 @@ canvas { display: block; max-width: 100%; }
         submitInlineSuggest(info, instruction);
       } else if (currentMode === 'ask') {
         submitInlineAsk(info, instruction);
+      } else if (currentMode === 'widget') {
+        submitInlineWidget(info, instruction);
       } else {
         submitInlineIdea(info, instruction);
       }
@@ -972,6 +980,64 @@ canvas { display: block; max-width: 100%; }
         e.preventDefault();
         submit();
       }
+    });
+  }
+
+  /**
+   * widget 模式：强制 AI 输出一个 ```widget 代码块（互动演示）。
+   * 走 ask 通道（preview-confirm，结果以气泡显示，用户点采纳后追加到讲义末尾），
+   * 但 instruction 前缀注入极强的格式约束 —— 因为 inline ask 的 system prompt
+   * 不带 widget 规则，要靠这里硬塞。
+   */
+  function submitInlineWidget(info, instruction) {
+    if (!vscode) return;
+    const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    state.activeTurns.set(turnId, {
+      info: { startLine: info.startLine, endLine: info.endLine, text: info.text || '', rect: info.rect },
+      instruction,
+      mode: 'widget',
+    });
+    showPendingBubble(turnId, info);
+
+    // 这是关键 prompt —— 不让 AI 含糊"我来描述一下"，而是必须输出代码块
+    const widgetDirective = [
+      '【模式：互动演示生成】',
+      '你必须输出**一个且仅一个 ```widget 代码块**作为回答。不要写其它解释、标题、段落 — 直接给代码块。',
+      '',
+      '## widget 代码块**严格规则**（违反任一条会渲染失败）：',
+      '',
+      '1. 用 ```widget 开始，``` 结束，里面是**完整可运行的 vanilla HTML+CSS+JS**',
+      '2. **不要 import / require / <script src=> 任何外部库** — iframe CSP 禁了网络，外链全部失败',
+      '3. **不要 fetch / XMLHttpRequest / WebSocket** — 同上',
+      '4. SVG 必须 `<svg width="600" height="300" viewBox="0 0 600 300">` 三件套都给齐，否则可能渲染成 0×0',
+      '5. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 字符串里的 `</style>` 同理写 `<\\/style>`',
+      '6. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— 这些 webview 已注入，跟随主题',
+      '7. **全段 JS 包在 try/catch 里**，防一处错就白屏',
+      '8. **不要写死像素宽度** 1000px 这种，要响应式',
+      '',
+      '## 演示设计要求',
+      '- 有可点的按钮或可拖的滑块（至少 2 个交互控件）',
+      '- 有视觉反馈（高亮 / 颜色变化 / 数字更新），不能只是静态图',
+      '- 当前步骤 / 状态在 UI 上可见',
+      '',
+      '## 用户需求',
+      instruction,
+      '',
+      '现在请直接输出 ```widget 代码块，开始。',
+    ].join('\n');
+
+    vscode.postMessage({
+      type: 'inlineSuggest',
+      request: {
+        filePath: state.filePath,
+        selectionText: info.text || '',
+        sourceLineStart: info.startLine,
+        sourceLineEnd: info.endLine,
+        instruction: widgetDirective,
+        applyMode: 'preview-confirm',
+        turnId,
+        intent: 'ask',
+      },
     });
   }
 
