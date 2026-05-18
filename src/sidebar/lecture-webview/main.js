@@ -575,8 +575,15 @@
     const iframe = document.createElement('iframe');
     iframe.className = 'cc-widget-iframe';
     iframe.setAttribute('sandbox', 'allow-scripts');
-    iframe.setAttribute('srcdoc', srcdoc);
+    // **关键**：不用 srcdoc 用 blob: URL。
+    // srcdoc iframe 会继承 VS Code 父 webview 的严格 CSP（要 nonce），用户
+    // widget 的 inline script 全被拦。blob: URL 是独立 origin，不继承父 CSP，
+    // iframe 内 script 由 widget 自己的 meta CSP 决定（'unsafe-inline' 允许）。
+    const blob = new Blob([srcdoc], { type: 'text/html;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+    iframe.src = blobUrl;
     iframe.dataset.widgetId = id;
+    iframe.dataset.blobUrl = blobUrl; // 卸载时撤销
     iframe.style.width = '100%';
     iframe.style.height = '500px';
     iframe.style.border = '0';
@@ -612,7 +619,12 @@
       if (act === 'toggle-source') {
         srcPanel.classList.toggle('hidden');
       } else if (act === 'reload') {
-        iframe.setAttribute('srcdoc', srcdoc);
+        // 撤销旧 blob URL，建一个新的 → 强制 iframe 重新加载
+        try { URL.revokeObjectURL(iframe.dataset.blobUrl); } catch (_e) {}
+        const blob2 = new Blob([srcdoc], { type: 'text/html;charset=utf-8' });
+        const blobUrl2 = URL.createObjectURL(blob2);
+        iframe.src = blobUrl2;
+        iframe.dataset.blobUrl = blobUrl2;
       } else if (act === 'copy-source') {
         try {
           navigator.clipboard.writeText(userSrc).then(

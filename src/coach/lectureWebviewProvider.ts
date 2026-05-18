@@ -650,9 +650,12 @@ export class LectureWebviewProvider {
       `font-src ${webview.cspSource} data:`,
       // wasm-unsafe-eval：@hpcc-js/wasm 的 GraphViz 需要在浏览器里加载/执行内嵌的 wasm
       `script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'`,
-      // ```widget 代码块用 iframe srcdoc 渲染交互式演示；sandbox 模式下 iframe
-      // 是 unique origin，frame-src 'self' / data: 都允许 srcdoc
-      `frame-src 'self' data:`,
+      // ```widget 代码块用 iframe + blob: URL 渲染交互式演示。
+      // **不能用 srcdoc** —— srcdoc iframe 会继承父 webview 的 CSP（需要 nonce），
+      // 用户 widget 的 inline script 没有 nonce 直接被拦。改用 blob: URL：
+      // 不同 origin，父 CSP 只决定能否 LOAD blob:，里面 script 由 iframe 自己的
+      // meta CSP（'unsafe-inline' 'unsafe-eval'）决定。
+      `frame-src 'self' data: blob:`,
     ].join('; ');
 
     const htmlPath = path.join(
