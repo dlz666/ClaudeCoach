@@ -498,13 +498,15 @@
     iframe.className = 'cc-widget-iframe';
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('srcdoc', srcdoc);
+    // 旧版 HTML 属性，禁止 iframe 出滚动条；现代浏览器虽然主要靠 CSS overflow，
+    // 但这个属性有时能补 CSS 控不到的边缘情况
+    iframe.setAttribute('scrolling', 'no');
     iframe.dataset.widgetId = id;
     iframe.style.width = '100%';
-    // 初始就给个足够大的高度（多数 widget 用得着），ResizeObserver 上报后会精修。
-    // 之前 160px 太小，简单 widget 一上来就出滚动条，体验差。
     iframe.style.height = '500px';
     iframe.style.border = '0';
     iframe.style.display = 'block';
+    iframe.style.overflow = 'hidden';
     iframe.setAttribute('title', '互动演示');
     container.appendChild(iframe);
 
@@ -628,9 +630,14 @@
   --panel-bg: ${cssSafe(t.panelBg)};
 }
 * { box-sizing: border-box; }
+/* !important 锁死高度自适应：AI 的 widget CSS 可能写 body{height:100%} 之类，
+   会让 scrollHeight 等于 iframe 当前高度（永远不增长），导致高度永远是初始 500 */
 html, body {
-  margin: 0;
-  padding: 0;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  margin: 0 !important;
   background: transparent;
   color: var(--fg);
   font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
@@ -701,7 +708,17 @@ canvas { display: block; max-width: 100%; }
       'var __id=' + JSON.stringify(id) + ';' +
       'var __lastH=0;' +
       'function post(t,d){try{parent.postMessage(Object.assign({type:t,id:__id},d||{}),"*");}catch(e){}}' +
-      'function reportH(){var h=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);if(h!==__lastH){__lastH=h;post("cc-widget-resize",{height:h});}}' +
+      // 测高度三路取最大：scrollHeight × 2 + 子元素 bottom 真值。
+      // 子元素 bottom 是兜底：用户 CSS 写 body{height:100%} 时 scrollHeight 会失效，
+      // 但 getBoundingClientRect().bottom 永远是真实 layout 位置。
+      'function reportH(){' +
+      '  var sH=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);' +
+      '  var maxB=0;' +
+      '  var kids=document.body?document.body.children:[];' +
+      '  for(var ki=0;ki<kids.length;ki++){try{var r=kids[ki].getBoundingClientRect();if(r.bottom>maxB)maxB=r.bottom;}catch(e){}}' +
+      '  var h=Math.max(sH,maxB)+(document.body?parseFloat(getComputedStyle(document.body).paddingBottom)||0:0);' +
+      '  if(h!==__lastH){__lastH=h;post("cc-widget-resize",{height:h});}' +
+      '}' +
       'if(window.ResizeObserver){try{new ResizeObserver(reportH).observe(document.body);}catch(e){}}' +
       // 节流轮询兜底：每 300ms 一次，最多 30 次（9 秒），防止 ResizeObserver
       // 因为某些边缘情况漏发；__lastH dedup 避免刷屏
