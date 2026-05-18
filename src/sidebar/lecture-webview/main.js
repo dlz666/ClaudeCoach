@@ -252,6 +252,58 @@
     if (e) toEl.setAttribute('data-source-line-end', e);
   }
 
+  /**
+   * 给 mermaid / dot 渲染产物外面包一个 .cc-chart-wrap：顶部 toolbar (复制源码 /
+   * { } 显示源码) + 渲染输出 + 隐藏的源码面板（默认折叠，点 { } 展开）。
+   *
+   * 关键：源码面板是普通 <pre> 在 lecture-body 文档里 —— 用户在里面选文字，
+   * window.getSelection() 直接可读，配合容器继承的 data-source-line，
+   * pickContextInfo 拿得到原始位置 + 文本，点蓝色按钮就能基于选区提问。
+   */
+  function wrapChartWithToolbar(rendered, rawSource, sourceLang, kind /* 'mermaid' | 'dot' */) {
+    const wrap = document.createElement('div');
+    wrap.className = 'cc-chart-wrap';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'cc-chart-toolbar';
+    toolbar.innerHTML = `
+      <span class="cc-chart-label">${kind === 'mermaid' ? 'Mermaid' : 'DOT'}</span>
+      <span class="cc-chart-spacer"></span>
+      <button class="cc-chart-btn" data-action="copy-source" title="复制源码到剪贴板">📋 复制源码</button>
+      <button class="cc-chart-btn" data-action="toggle-source" title="显示/隐藏源码，可选中里面文字后点蓝色按钮提问">{ }</button>
+    `;
+    wrap.appendChild(toolbar);
+
+    wrap.appendChild(rendered);
+
+    const srcPanel = document.createElement('pre');
+    srcPanel.className = 'cc-chart-source-panel hidden';
+    const srcCode = document.createElement('code');
+    srcCode.className = 'language-' + sourceLang;
+    srcCode.textContent = rawSource;
+    srcPanel.appendChild(srcCode);
+    wrap.appendChild(srcPanel);
+
+    toolbar.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-action');
+      if (act === 'toggle-source') {
+        srcPanel.classList.toggle('hidden');
+      } else if (act === 'copy-source') {
+        try {
+          navigator.clipboard.writeText(rawSource).then(() => {
+            const orig = btn.textContent;
+            btn.textContent = '✓ 已复制';
+            setTimeout(() => { btn.textContent = orig; }, 1500);
+          });
+        } catch (_e) { /* ignore */ }
+      }
+    });
+
+    return wrap;
+  }
+
   // widget iframe 跨源，父页 getSelection 看不到。bridge 通过 postMessage 把选区
   // 文本上报到这里，pickContextInfo 没拿到 lecture 选区时回退用它。
   let _lastWidgetSelection = null;
@@ -366,9 +418,10 @@
       const id = `mermaid-${Date.now().toString(36)}-${counter++}`;
       try {
         const { svg } = await window.mermaid.render(id, source);
-        const wrap = document.createElement('div');
-        wrap.className = 'mermaid-rendered';
-        wrap.innerHTML = svg;
+        const inner = document.createElement('div');
+        inner.className = 'mermaid-rendered';
+        inner.innerHTML = svg;
+        const wrap = wrapChartWithToolbar(inner, rawSource, 'mermaid', 'mermaid');
         inheritSourceLines(pre, wrap);
         pre.replaceWith(wrap);
       } catch (err) {
@@ -440,17 +493,18 @@
       const source = codeEl.textContent || '';
       try {
         const svg = gv.dot(source, 'svg');
-        const wrap = document.createElement('div');
-        wrap.className = 'graphviz-rendered';
-        wrap.innerHTML = svg;
+        const inner = document.createElement('div');
+        inner.className = 'graphviz-rendered';
+        inner.innerHTML = svg;
         // 让 SVG 自适应宽度，遵循主题色（stroke/text 用 currentColor 由 CSS 注入）
-        const svgEl = wrap.querySelector('svg');
+        const svgEl = inner.querySelector('svg');
         if (svgEl) {
           svgEl.removeAttribute('width');
           svgEl.removeAttribute('height');
           svgEl.style.maxWidth = '100%';
           svgEl.style.height = 'auto';
         }
+        const wrap = wrapChartWithToolbar(inner, source, 'dot', 'dot');
         inheritSourceLines(pre, wrap);
         pre.replaceWith(wrap);
       } catch (err) {

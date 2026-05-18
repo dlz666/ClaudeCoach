@@ -610,6 +610,77 @@ html, body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ===== 通用图表外壳：mermaid / dot 都用，提供 toolbar + 源码切换面板 ===== */
+.cc-chart-wrap {
+  margin: 16px 0;
+  border-radius: 10px;
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.08));
+  background: var(--vscode-editor-background, transparent);
+  overflow: hidden;
+}
+.cc-chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.06));
+  background: color-mix(in srgb, var(--vscode-sideBar-background, #252526) 70%, transparent);
+}
+.cc-chart-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.62;
+}
+.cc-chart-spacer { flex: 1; }
+.cc-chart-btn {
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
+  color: var(--vscode-foreground);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms ease, background 120ms ease;
+  font-family: inherit;
+}
+.cc-chart-btn:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+}
+.cc-chart-source-panel {
+  margin: 0;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+  border-top: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.06));
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 400px;
+  /* 关键：可选中文字，user-select: text 让用户拖蓝色按钮的"基于选区"流程能拿到 */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.cc-chart-source-panel.hidden { display: none; }
+.cc-chart-source-panel code {
+  font-family: inherit;
+  white-space: pre;
+  user-select: text;
+}
+
+/* 把 .mermaid-rendered / .graphviz-rendered 的外边距和边框去掉 —— 它们现在
+   是 .cc-chart-wrap 的子元素，外壳已经处理了 margin / border */
+.cc-chart-wrap .mermaid-rendered,
+.cc-chart-wrap .graphviz-rendered {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
 /* ===== Mermaid 视觉化 ===== */
 .mermaid-rendered {
   margin: 16px 0;
