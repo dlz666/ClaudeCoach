@@ -475,6 +475,17 @@
     container.className = 'cc-widget-container';
     container.dataset.widgetId = id;
 
+    // 顶部 toolbar：查看源码 / 重载
+    const toolbar = document.createElement('div');
+    toolbar.className = 'cc-widget-toolbar';
+    toolbar.innerHTML = `
+      <span class="cc-widget-label">互动演示</span>
+      <span class="cc-widget-spacer"></span>
+      <button class="cc-widget-btn" data-action="reload" title="重新加载">↻</button>
+      <button class="cc-widget-btn" data-action="toggle-source" title="查看 / 隐藏源码">{ }</button>
+    `;
+    container.appendChild(toolbar);
+
     // 主题色从父 webview 抽出来注入 iframe
     const themeVars = getThemeVarsForWidget();
     const srcdoc = buildWidgetSrcdoc(userSrc, id, themeVars);
@@ -485,17 +496,55 @@
     iframe.setAttribute('srcdoc', srcdoc);
     iframe.dataset.widgetId = id;
     iframe.style.width = '100%';
-    iframe.style.height = '120px';
+    iframe.style.height = '160px';
     iframe.style.border = '0';
     iframe.style.display = 'block';
     iframe.setAttribute('title', '互动演示');
-    iframe.setAttribute('loading', 'lazy');
     container.appendChild(iframe);
 
     // 错误提示横条（默认隐藏）
     const errBanner = document.createElement('div');
     errBanner.className = 'cc-widget-error hidden';
     container.appendChild(errBanner);
+
+    // 源码面板（默认隐藏，按 toolbar 切换）
+    const srcPanel = document.createElement('pre');
+    srcPanel.className = 'cc-widget-source-panel hidden';
+    const srcCode = document.createElement('code');
+    srcCode.textContent = userSrc;
+    srcPanel.appendChild(srcCode);
+    container.appendChild(srcPanel);
+
+    // toolbar 按钮事件
+    toolbar.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-action');
+      if (act === 'toggle-source') {
+        srcPanel.classList.toggle('hidden');
+      } else if (act === 'reload') {
+        // 重新挂 srcdoc 触发 iframe 重新加载
+        iframe.setAttribute('srcdoc', srcdoc);
+      }
+    });
+
+    // 失败检测：3 秒内 iframe 没汇报 cc-widget-resize 视为"白屏"，自动展开源码
+    let _gotResize = false;
+    const onMsg = (e) => {
+      if (e.data && e.data.id === id && e.data.type === 'cc-widget-resize' && e.data.height > 20) {
+        _gotResize = true;
+        window.removeEventListener('message', onMsg);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    setTimeout(() => {
+      if (!_gotResize) {
+        errBanner.classList.remove('hidden');
+        errBanner.textContent = '⚠ Widget 似乎没渲染出内容（3s 内无内容报告）。已展开源码方便排查。';
+        srcPanel.classList.remove('hidden');
+        window.removeEventListener('message', onMsg);
+      }
+    }, 3000);
 
     return container;
   }
@@ -516,8 +565,26 @@
     };
   }
 
+  /**
+   * 防御性补丁：扫 <script>...</script> 块内的字符串字面量，
+   * 把里面的 `</script>` 改成 `<\/script>`。AI 经常在 JS 里写
+   * `const html = "<script>...</script>"`，导致 HTML 解析器提前
+   * 关 script 标签，后面所有 JS 都失效（widget 白屏）。
+   *
+   * 用 **贪婪匹配** 抓 LAST `</script>`：用户实际写了一对 script tag，
+   * 中间嵌字符串里有 `</script>` → 贪婪能正确判断真正的关闭点。
+   * 副作用：多个独立 script 块会被合并 —— widget 场景下基本只有 1-2 个
+   * 块，可接受。`<\/script` 在 JS 里完全合法等价于 `</script`。
+   */
+  function patchScriptStrings(html) {
+    return html.replace(/<script\b[^>]*>([\s\S]*)<\/script\s*>/gi, (match, body) => {
+      const fixed = body.replace(/<\/(script\b)/gi, '<\\/$1');
+      return match.replace(body, fixed);
+    });
+  }
+
   function buildWidgetSrcdoc(userSrc, id, t) {
-    const trimmed = String(userSrc || '').trim();
+    const trimmed = patchScriptStrings(String(userSrc || '').trim());
     const isFullDoc = /^<!doctype\s+html|^<html\b/i.test(trimmed);
     // CSP 是 widget iframe 自己的；和外面 webview CSP 是两套不同的策略层
     const cspMeta =
@@ -588,7 +655,19 @@ input, select, textarea {
 table { border-collapse: collapse; width: 100%; }
 th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
 th { font-weight: 600; opacity: 0.8; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-svg { max-width: 100%; height: auto; }
+/* SVG 默认尺寸：很多 AI 写 <svg viewBox="..."> 不带 width/height，
+   有些浏览器会渲染成 0×0。强制 display: block + min-height + 用 viewBox 推算。 */
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  /* 没显式 width/height 时按 viewBox 比例伸展 */
+}
+svg:not([width]):not([height]) {
+  width: 100%;
+  min-height: 50px;
+}
+canvas { display: block; max-width: 100%; }
 .cc-widget-error-overlay {
   position: fixed;
   inset: 0;
