@@ -240,6 +240,24 @@
   }
 
   /**
+   * 替换占位 <pre> 为渲染容器时，把 data-source-line / data-source-line-end
+   * 从 pre 继承到新容器上 —— 否则 getSelectionLineRange 找不到行号，用户在
+   * mermaid SVG / DOT SVG / widget iframe 内选区，点蓝色按钮拿不到上下文。
+   */
+  function inheritSourceLines(fromEl, toEl) {
+    if (!fromEl || !toEl) return;
+    const s = fromEl.getAttribute('data-source-line');
+    const e = fromEl.getAttribute('data-source-line-end');
+    if (s) toEl.setAttribute('data-source-line', s);
+    if (e) toEl.setAttribute('data-source-line-end', e);
+  }
+
+  // widget iframe 跨源，父页 getSelection 看不到。bridge 通过 postMessage 把选区
+  // 文本上报到这里，pickContextInfo 没拿到 lecture 选区时回退用它。
+  let _lastWidgetSelection = null;
+  const WIDGET_SELECTION_STALE_MS = 30000;
+
+  /**
    * 在送给 mermaid 之前自动给节点标签加引号 —— AI 经常生成 `A[dist[s]=0]` 这种
    * 嵌套括号写法，mermaid 解析器没办法处理。state machine 逐字符扫：遇到
    * `<id>[`/`(`/`{` 节点定义就用 depth 跟踪匹配的闭合括号，如果中间出现需要
@@ -351,6 +369,7 @@
         const wrap = document.createElement('div');
         wrap.className = 'mermaid-rendered';
         wrap.innerHTML = svg;
+        inheritSourceLines(pre, wrap);
         pre.replaceWith(wrap);
       } catch (err) {
         console.warn('mermaid render failed for block', id, err);
@@ -370,6 +389,7 @@
           <pre><code class="language-mermaid">${escaped}</code></pre>
           <a href="${liveUrl}" target="_blank" rel="noopener">在 mermaid.live 调试</a>
         `;
+        inheritSourceLines(pre, fallback);
         pre.replaceWith(fallback);
       }
     }
@@ -431,6 +451,7 @@
           svgEl.style.maxWidth = '100%';
           svgEl.style.height = 'auto';
         }
+        inheritSourceLines(pre, wrap);
         pre.replaceWith(wrap);
       } catch (err) {
         console.warn('graphviz render failed', err);
@@ -441,6 +462,7 @@
           <div class="graphviz-fallback-banner">⚠ DOT 图渲染失败：${(err && err.message ? err.message : '语法错').replace(/[<&]/g, (c) => c === '<' ? '&lt;' : '&amp;')}</div>
           <pre><code class="language-dot">${escaped}</code></pre>
         `;
+        inheritSourceLines(pre, fallback);
         pre.replaceWith(fallback);
       }
       counter++;
@@ -470,6 +492,7 @@
       const userSrc = codeEl.textContent || '';
       const id = 'cc-widget-' + Date.now().toString(36) + '-' + (counter++);
       const container = makeWidgetContainer(userSrc, id);
+      inheritSourceLines(pre, container);
       pre.replaceWith(container);
     }
   }
@@ -747,6 +770,14 @@ canvas { display: block; max-width: 100%; }
       'setTimeout(reportH,30);setTimeout(reportH,150);setTimeout(reportH,500);setTimeout(reportH,1500);' +
       'window.addEventListener("error",function(e){post("cc-widget-error",{message:String(e.message||"unknown")+" @ "+(e.filename||"inline")+":"+(e.lineno||0)});var o=document.createElement("div");o.className="cc-widget-error-overlay";o.textContent="⚠ Widget 运行错误:\\n"+e.message+"\\n@ line "+e.lineno;document.body.appendChild(o);reportH();});' +
       'window.addEventListener("unhandledrejection",function(e){post("cc-widget-error",{message:"Unhandled Promise: "+String(e.reason)});});' +
+      // 选区转发：iframe sandbox 跨源，父页 window.getSelection 看不到 iframe 内的
+      // selection。这里监听 iframe 自己的 selectionchange，把选中文本 postMessage
+      // 给父页，父页缓存供 pickContextInfo 用 → 用户在 widget 里选文字也能用蓝色按钮。
+      'var __lastSel="";' +
+      'document.addEventListener("selectionchange",function(){' +
+      '  var s=window.getSelection?String(window.getSelection().toString()||""):"";' +
+      '  if(s!==__lastSel){__lastSel=s;post("cc-widget-selection",{text:s});}' +
+      '});' +
       // 拦截 console.error / warn / log，转发到父页面便于排查"无错误但内容空"的情况
       'var __consoleMethods=["error","warn","log"];' +
       'for (var i=0;i<__consoleMethods.length;i++){(function(m){' +
@@ -828,6 +859,15 @@ canvas { display: block; max-width: 100%; }
         // shrink 回真实高度。现在完全跟随内容。
         iframe.style.height = (d.height + 16) + 'px';
       }
+    } else if (d.type === 'cc-widget-selection') {
+      // 缓存 widget 内的选区文本 + 时间戳。pickContextInfo 在没有 lecture 选区
+      // 时回退使用这个 → 用户在 widget 里选文字也能用蓝色按钮。
+      _lastWidgetSelection = {
+        text: String(d.text || ''),
+        widgetId: d.id,
+        timestamp: Date.now(),
+        wrap,
+      };
     } else if (d.type === 'cc-widget-console') {
       // widget 里 console.log/warn/error 转发，显示在 console 面板（默认折叠的话先展开）
       const cp = wrap.querySelector('.cc-widget-console');
@@ -908,9 +948,31 @@ canvas { display: block; max-width: 100%; }
 
   /** 收集当前选区；若没有有效选区，返回一个"全文"info 当 fallback。 */
   function pickContextInfo() {
+    // 优先 1：lecture body 内的原生选区（普通 markdown / mermaid SVG / dot SVG）
     const info = helpers.getSelectionLineRange ? helpers.getSelectionLineRange(els.body) : null;
     if (info && info.text && info.text.trim()) {
       return info;
+    }
+    // 优先 2：widget iframe 选区（跨源，通过 postMessage 缓存）
+    if (
+      _lastWidgetSelection &&
+      _lastWidgetSelection.text &&
+      _lastWidgetSelection.text.trim() &&
+      Date.now() - _lastWidgetSelection.timestamp < WIDGET_SELECTION_STALE_MS &&
+      _lastWidgetSelection.wrap &&
+      document.body.contains(_lastWidgetSelection.wrap)
+    ) {
+      const wrap = _lastWidgetSelection.wrap;
+      const s = parseInt(wrap.getAttribute('data-source-line') || '', 10);
+      const e = parseInt(wrap.getAttribute('data-source-line-end') || '', 10);
+      const rect = wrap.getBoundingClientRect();
+      return {
+        startLine: Number.isFinite(s) ? s : 0,
+        endLine: Number.isFinite(e) ? e : (Number.isFinite(s) ? s + 1 : 1),
+        text: _lastWidgetSelection.text,
+        rect,
+        fromWidget: true,
+      };
     }
     // 无选区 → 全文模式
     const content = state.content || '';
