@@ -645,16 +645,14 @@ export class LectureWebviewProvider {
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} data:`,
-      // Mermaid 在渲染时会动态注入 <style>，需要 unsafe-inline；img-src 也要支持 SVG data URI
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource} data:`,
-      // wasm-unsafe-eval：@hpcc-js/wasm 的 GraphViz 需要在浏览器里加载/执行内嵌的 wasm
-      `script-src ${webview.cspSource} 'nonce-${nonce}' 'wasm-unsafe-eval'`,
-      // ```widget 代码块用 iframe + blob: URL 渲染交互式演示。
-      // **不能用 srcdoc** —— srcdoc iframe 会继承父 webview 的 CSP（需要 nonce），
-      // 用户 widget 的 inline script 没有 nonce 直接被拦。改用 blob: URL：
-      // 不同 origin，父 CSP 只决定能否 LOAD blob:，里面 script 由 iframe 自己的
-      // meta CSP（'unsafe-inline' 'unsafe-eval'）决定。
+      // **关键**：必须 'unsafe-inline' 让 widget iframe srcdoc 里的 inline
+      // <script> 能跑（srcdoc 继承父 CSP，blob: 也被 VS Code 拦下）。
+      // 注意：CSP3 规范规定 nonce 存在时 'unsafe-inline' 被忽略 → 必须移除 nonce
+      // 才能让 'unsafe-inline' 生效。我们的 webview 脚本全部是 src=... 外部加载，
+      // 由 cspSource 的 'self' 等效授权，不依赖 nonce。
+      `script-src ${webview.cspSource} 'unsafe-inline' 'wasm-unsafe-eval'`,
       `frame-src 'self' data: blob:`,
     ].join('; ');
 
