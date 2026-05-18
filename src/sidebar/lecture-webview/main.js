@@ -1183,10 +1183,19 @@ canvas { display: block; max-width: 100%; }
     return bubble;
   }
 
-  function positionBubble(bubble, anchor) {
-    if (!anchor) return;
-    const top = window.scrollY + anchor.bottom + 10;
-    const left = Math.max(16, Math.min(window.scrollX + anchor.left, window.innerWidth - 460));
+  function positionBubble(bubble /*, anchor 已废弃 */) {
+    // 永远锚到右上角 chip 下方，视口固定，跟 popover 一致。
+    // 之前根据 selection rect 跑，无选区时 anchor=null 直接早返回，bubble 留在 (0,0)
+    // 跑到左下角去。现在完全脱钩。
+    const chipRect = els.chip?.getBoundingClientRect();
+    let top, left;
+    if (chipRect) {
+      top = chipRect.bottom + 8;
+      left = Math.max(16, chipRect.right - 440); // 440 = bubble 宽度
+    } else {
+      top = 60;
+      left = Math.max(16, window.innerWidth - 456);
+    }
     bubble.style.top = `${top}px`;
     bubble.style.left = `${left}px`;
   }

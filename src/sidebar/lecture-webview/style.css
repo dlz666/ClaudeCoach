@@ -409,7 +409,8 @@ html, body {
 /* ===== suggestion bubble ===== */
 
 .lecture-suggestion-bubble {
-  position: absolute;
+  /* position: fixed 跟 chip / popover 一致，锚到视口右上角不跟随讲义滚动 */
+  position: fixed;
   z-index: 999;
   width: 440px;
   max-width: calc(100vw - 32px);
