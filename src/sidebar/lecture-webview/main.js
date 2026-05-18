@@ -540,16 +540,8 @@
       }
     });
 
-    // iframe.onload 兜底：如果 bridge 因为某种原因没发 resize，iframe 加载完
-    // 后强制设一个稳健的最低高度（>= 300px），用户至少不会看到只露半截。
-    iframe.addEventListener('load', () => {
-      // 给 bridge 200ms 时间发首个 resize；如果 height 还在初始 500，
-      // 保持 500（已经够大），不再降级。
-      setTimeout(() => {
-        const cur = parseFloat(iframe.style.height) || 0;
-        if (cur < 300) iframe.style.height = '500px';
-      }, 200);
-    });
+    // bridge 上报真实高度后，iframe 完全跟随；不再强制最低 300。
+    // 之前有 onload 兜底强行设 500，但 widget 小的话会显得空荡荡。
 
     return container;
   }
@@ -772,11 +764,10 @@ canvas { display: block; max-width: 100%; }
     if (d.type === 'cc-widget-resize') {
       const iframe = wrap.querySelector('iframe.cc-widget-iframe');
       if (iframe && typeof d.height === 'number' && d.height > 0) {
-        // +16 安全余量防出滚动条；上限放宽到 4000 兼容大 widget
-        const next = Math.min(d.height + 16, 4000);
-        // 单调增高：防止过渡态反复涨缩抖动（如 SVG 加载前 body 短暂塌成小高度）
-        const cur = parseFloat(iframe.style.height) || 0;
-        if (next > cur || cur === 0) iframe.style.height = next + 'px';
+        // 直接匹配 widget 内容真实高度 + 16px 安全余量，永不出内层滚动条。
+        // 之前有 4000 上限和"单调增高"约束 → 大 widget 被截 + 加载完后没法
+        // shrink 回真实高度。现在完全跟随内容。
+        iframe.style.height = (d.height + 16) + 'px';
       }
     } else if (d.type === 'cc-widget-console') {
       // widget 里 console.log/warn/error 转发，显示在 console 面板（默认折叠的话先展开）
