@@ -489,6 +489,12 @@ html, body {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
+/* 含 widget 的 bubble 不限高 —— widget 自己已经 iframe + 自适应高度，
+   再套一层 max-height: 320px + overflow:auto 会把 widget 切断 */
+.bubble-body:has(.cc-widget-container) {
+  max-height: none;
+  overflow: visible;
+}
 
 .bubble-body p { margin: 0.4em 0; }
 .bubble-body pre { margin: 0.4em 0; }

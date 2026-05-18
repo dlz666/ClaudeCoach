@@ -479,12 +479,13 @@
     container.className = 'cc-widget-container';
     container.dataset.widgetId = id;
 
-    // 顶部 toolbar：查看源码 / 重载
+    // 顶部 toolbar：查看源码 / 复制源码 / 重载
     const toolbar = document.createElement('div');
     toolbar.className = 'cc-widget-toolbar';
     toolbar.innerHTML = `
       <span class="cc-widget-label">互动演示</span>
       <span class="cc-widget-spacer"></span>
+      <button class="cc-widget-btn" data-action="copy-source" title="复制源码到剪贴板（方便发给开发者排查）">📋 复制源码</button>
       <button class="cc-widget-btn" data-action="reload" title="重新加载">↻</button>
       <button class="cc-widget-btn" data-action="toggle-source" title="查看 / 隐藏源码">{ }</button>
     `;
@@ -498,15 +499,11 @@
     iframe.className = 'cc-widget-iframe';
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('srcdoc', srcdoc);
-    // 旧版 HTML 属性，禁止 iframe 出滚动条；现代浏览器虽然主要靠 CSS overflow，
-    // 但这个属性有时能补 CSS 控不到的边缘情况
-    iframe.setAttribute('scrolling', 'no');
     iframe.dataset.widgetId = id;
     iframe.style.width = '100%';
     iframe.style.height = '500px';
     iframe.style.border = '0';
     iframe.style.display = 'block';
-    iframe.style.overflow = 'hidden';
     iframe.setAttribute('title', '互动演示');
     container.appendChild(iframe);
 
@@ -539,6 +536,29 @@
         srcPanel.classList.toggle('hidden');
       } else if (act === 'reload') {
         iframe.setAttribute('srcdoc', srcdoc);
+      } else if (act === 'copy-source') {
+        try {
+          navigator.clipboard.writeText(userSrc).then(
+            () => {
+              const orig = btn.textContent;
+              btn.textContent = '✓ 已复制';
+              setTimeout(() => { btn.textContent = orig; }, 1500);
+            },
+            () => { btn.textContent = '✗ 失败'; },
+          );
+        } catch (err) {
+          // navigator.clipboard 不可用时降级到 execCommand
+          const ta = document.createElement('textarea');
+          ta.value = userSrc;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); btn.textContent = '✓ 已复制'; }
+          catch (_e) { btn.textContent = '✗ 失败'; }
+          document.body.removeChild(ta);
+          setTimeout(() => { btn.textContent = '📋 复制源码'; }, 1500);
+        }
       }
     });
 
