@@ -612,6 +612,33 @@ html, body {
   max-width: 100%;
   height: auto;
 }
+
+/* CSS 兜底：即使 themeVariables 漏覆盖某类节点（如自定义 shape），强制把
+   svg 内文字 / 描边的"中性色"撞回 VS Code 前景色。注意不要碰用户用 style
+   显式上的颜色（如 stroke=#ff0000），所以只覆盖 fill/stroke 包含
+   neutral gray (#aaa-#ccc-#888-rgb(170,..)) 的元素。
+   实操更保险：只把 mermaid 默认的 stroke / fill 颜色（#333 / #000 / 灰系）
+   兜底为 currentColor。但风险高，先用 text fill 兜底。 */
+.mermaid-rendered svg .nodeLabel,
+.mermaid-rendered svg .edgeLabel,
+.mermaid-rendered svg .label,
+.mermaid-rendered svg .messageText,
+.mermaid-rendered svg .actor-text,
+.mermaid-rendered svg .titleText,
+.mermaid-rendered svg foreignObject div,
+.mermaid-rendered svg foreignObject span {
+  color: var(--vscode-foreground) !important;
+}
+.mermaid-rendered svg text {
+  /* 只有 fill 是 none / 接近灰白时才覆盖；其它情况（用户/themeVariables 主动设了色）保留 */
+  fill: var(--vscode-foreground);
+}
+.mermaid-rendered svg text[fill="#333"],
+.mermaid-rendered svg text[fill="#333333"],
+.mermaid-rendered svg text[fill="black"],
+.mermaid-rendered svg text[fill="rgb(51, 51, 51)"] {
+  fill: var(--vscode-foreground) !important;
+}
 .mermaid-fallback {
   margin: 16px 0;
   padding: 12px;
