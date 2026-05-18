@@ -509,6 +509,13 @@
     errBanner.className = 'cc-widget-error hidden';
     container.appendChild(errBanner);
 
+    // console 日志面板（widget 内 console.log/warn/error 转发到这里，
+    // 帮助排查"看起来渲染了但内容是空的"这种逻辑 bug）
+    const consolePanel = document.createElement('div');
+    consolePanel.className = 'cc-widget-console hidden';
+    consolePanel.dataset.widgetId = id;
+    container.appendChild(consolePanel);
+
     // 源码面板（默认隐藏，按 toolbar 切换）
     const srcPanel = document.createElement('pre');
     srcPanel.className = 'cc-widget-source-panel hidden';
@@ -692,6 +699,15 @@ canvas { display: block; max-width: 100%; }
       'setTimeout(reportH,30);setTimeout(reportH,150);setTimeout(reportH,500);setTimeout(reportH,1500);' +
       'window.addEventListener("error",function(e){post("cc-widget-error",{message:String(e.message||"unknown")+" @ "+(e.filename||"inline")+":"+(e.lineno||0)});var o=document.createElement("div");o.className="cc-widget-error-overlay";o.textContent="⚠ Widget 运行错误:\\n"+e.message+"\\n@ line "+e.lineno;document.body.appendChild(o);reportH();});' +
       'window.addEventListener("unhandledrejection",function(e){post("cc-widget-error",{message:"Unhandled Promise: "+String(e.reason)});});' +
+      // 拦截 console.error / warn / log，转发到父页面便于排查"无错误但内容空"的情况
+      'var __consoleMethods=["error","warn","log"];' +
+      'for (var i=0;i<__consoleMethods.length;i++){(function(m){' +
+      '  var orig=console[m];' +
+      '  console[m]=function(){' +
+      '    try{var parts=[];for(var k=0;k<arguments.length;k++){var a=arguments[k];parts.push(typeof a==="string"?a:(a&&a.message)||(function(){try{return JSON.stringify(a);}catch(e){return String(a);}})());}post("cc-widget-console",{level:m,text:parts.join(" ")});}catch(e){}' +
+      '    if(orig)return orig.apply(console,arguments);' +
+      '  };' +
+      '})(__consoleMethods[i]);}' +
       '})();' +
       '</script>';
 
@@ -741,6 +757,18 @@ canvas { display: block; max-width: 100%; }
         // 单调增高：防止过渡态反复涨缩抖动（如 SVG 加载前 body 短暂塌成小高度）
         const cur = parseFloat(iframe.style.height) || 0;
         if (next > cur || cur === 0) iframe.style.height = next + 'px';
+      }
+    } else if (d.type === 'cc-widget-console') {
+      // widget 里 console.log/warn/error 转发，显示在 console 面板（默认折叠的话先展开）
+      const cp = wrap.querySelector('.cc-widget-console');
+      if (cp) {
+        cp.classList.remove('hidden');
+        const line = document.createElement('div');
+        line.className = 'cc-widget-console-line level-' + (String(d.level || 'log').replace(/[^a-z]/g, ''));
+        line.textContent = '[' + (d.level || 'log') + '] ' + String(d.text || '');
+        cp.appendChild(line);
+        // 最多保留 50 行
+        while (cp.children.length > 50) cp.removeChild(cp.firstChild);
       }
     } else if (d.type === 'cc-widget-error') {
       const err = wrap.querySelector('.cc-widget-error');
@@ -1010,13 +1038,15 @@ canvas { display: block; max-width: 100%; }
       '2. **不要 import / require / <script src=> 任何外部库** — iframe CSP 禁了网络，外链全部失败',
       '3. **不要 fetch / XMLHttpRequest / WebSocket** — 同上',
       '4. SVG 必须 `<svg width="600" height="300" viewBox="0 0 600 300">` 三件套都给齐，否则可能渲染成 0×0',
-      '5. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 字符串里的 `</style>` 同理写 `<\\/style>`',
-      '6. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— 这些 webview 已注入，跟随主题',
-      '7. **全段 JS 包在 try/catch 里**，防一处错就白屏',
-      '8. **不要写死像素宽度** 1000px 这种，要响应式',
+      '5. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
+      '6. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— webview 已注入跟随主题',
+      '7. **不要写死 1000px 这种像素宽度**，要响应式',
+      '8. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug 让 widget 看起来"渲染成功但内容是空的"。让错误抛出，iframe bridge 的 error 监听会显示红色覆盖层方便排查',
+      '9. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）是不是有真元素？init()/reset() 是不是真的填了状态？render() 调用时数据 ready 了吗？',
+      '10. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
       '',
       '## 演示设计要求',
-      '- 有可点的按钮或可拖的滑块（至少 2 个交互控件）',
+      '- 有可点的按钮（至少 1-2 个：下一步 / 重置）',
       '- 有视觉反馈（高亮 / 颜色变化 / 数字更新），不能只是静态图',
       '- 当前步骤 / 状态在 UI 上可见',
       '',

@@ -787,6 +787,25 @@ html, body {
   white-space: pre-wrap;
 }
 .cc-widget-error.hidden { display: none; }
+.cc-widget-console {
+  padding: 6px 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 95%, var(--vscode-foreground) 5%);
+  border-top: 1px dashed var(--vscode-panel-border, rgba(255,255,255,0.06));
+}
+.cc-widget-console.hidden { display: none; }
+.cc-widget-console-line {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cc-widget-console-line.level-log { color: var(--vscode-foreground); opacity: 0.75; }
+.cc-widget-console-line.level-warn { color: var(--vscode-charts-yellow, #d4a017); }
+.cc-widget-console-line.level-error { color: #ef4444; }
+
 .cc-widget-source-panel {
   margin: 0;
   padding: 10px 12px;
