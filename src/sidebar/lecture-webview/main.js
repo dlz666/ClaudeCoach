@@ -93,6 +93,10 @@
     ],
     throwOnError: false,
     strict: 'ignore',
+    // 不要扫 pre/code/script —— 否则 widget 代码里的 `${var}` 会被 KaTeX 当成
+    // `$...$` 内联公式去渲染，搞坏模板字符串
+    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+    ignoredClasses: ['widget-source', 'dot-source', 'mermaid-source', 'cc-widget-source-panel'],
   };
 
   function renderMarkdown(text) {
@@ -584,8 +588,24 @@
     });
   }
 
+  /**
+   * 修 AI 经常写错的模板字符串：`$ {var}`（有空格）→ `${var}`（紧贴）。
+   * 这个 bug 在 AI 生成代码里非常常见：插值失效后 querySelector 找不到匹配，
+   * try/catch 一吞表面看着"渲染成功但内容空"。
+   * 只在 <script> 体内修，HTML 属性外的"$ {" 不动。
+   */
+  function patchTemplateLiterals(html) {
+    return html.replace(/<script\b[^>]*>([\s\S]*)<\/script\s*>/gi, (match, body) => {
+      // 注意：只修复 backtick 内部的 `$ {`。简单做法：全局 replace `$ {` → `${`
+      // 因为 `$ {` 在合法 JS 代码里几乎没意义（不是模板字符串就是字面美元加空格大括号），
+      // 误伤代价极低。
+      const fixed = body.replace(/\$\s+\{/g, '${');
+      return match.replace(body, fixed);
+    });
+  }
+
   function buildWidgetSrcdoc(userSrc, id, t) {
-    const trimmed = patchScriptStrings(String(userSrc || '').trim());
+    const trimmed = patchTemplateLiterals(patchScriptStrings(String(userSrc || '').trim()));
     const isFullDoc = /^<!doctype\s+html|^<html\b/i.test(trimmed);
     // CSP 是 widget iframe 自己的；和外面 webview CSP 是两套不同的策略层
     const cspMeta =
@@ -1038,12 +1058,13 @@ canvas { display: block; max-width: 100%; }
       '2. **不要 import / require / <script src=> 任何外部库** — iframe CSP 禁了网络，外链全部失败',
       '3. **不要 fetch / XMLHttpRequest / WebSocket** — 同上',
       '4. SVG 必须 `<svg width="600" height="300" viewBox="0 0 600 300">` 三件套都给齐，否则可能渲染成 0×0',
-      '5. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
-      '6. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— webview 已注入跟随主题',
-      '7. **不要写死 1000px 这种像素宽度**，要响应式',
-      '8. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug 让 widget 看起来"渲染成功但内容是空的"。让错误抛出，iframe bridge 的 error 监听会显示红色覆盖层方便排查',
-      '9. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）是不是有真元素？init()/reset() 是不是真的填了状态？render() 调用时数据 ready 了吗？',
-      '10. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
+      '5. **模板字符串插值必须紧贴**：写 `${var}` 不是 `$ {var}` —— 中间空格会让插值失效，整个变字面量字符串，querySelector 全找不到节点',
+      '6. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
+      '7. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— webview 已注入跟随主题',
+      '8. **不要写死 1000px 这种像素宽度**，要响应式',
+      '9. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug 让 widget 看起来"渲染成功但内容是空的"。让错误抛出，iframe bridge 的 error 监听会显示红色覆盖层方便排查',
+      '10. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）是不是有真元素？init()/reset() 是不是真的填了状态？render() 调用时数据 ready 了吗？',
+      '11. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
       '',
       '## 演示设计要求',
       '- 有可点的按钮（至少 1-2 个：下一步 / 重置）',
