@@ -723,15 +723,38 @@ canvas { display: block; max-width: 100%; }
       '})();' +
       '</script>';
 
+    // 错误前置监听器：在 body 第一行就装上 window.error / unhandledrejection 监听，
+    // 这样即使用户 <script> 里有 parse error（脚本根本没执行 → 不会触发用户自己的
+    // try/catch），浏览器报错时这个早期监听器也能抓到，post 给父页面显示醒目错误条。
+    // 必须早于用户 <script> 注册 → 放在 body 最前。
+    const earlyErrorListener =
+      '<script>' +
+      '(function(){' +
+      'var __id=' + JSON.stringify(id) + ';' +
+      'function post(t,d){try{parent.postMessage(Object.assign({type:t,id:__id},d||{}),"*");}catch(e){}}' +
+      'window.addEventListener("error",function(e){' +
+      '  var msg=String(e.message||"unknown error");' +
+      '  var loc=" @ line "+(e.lineno||"?")+(e.colno?":"+e.colno:"");' +
+      '  post("cc-widget-error",{message:msg+loc});' +
+      '  try{var o=document.createElement("div");o.className="cc-widget-error-overlay";o.style.cssText="position:fixed;inset:0;background:rgba(239,68,68,0.95);color:white;padding:14px;font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;overflow:auto;z-index:99999;";o.textContent="⚠ Widget JS 错误:\\n"+msg+loc;(document.body||document.documentElement).appendChild(o);}catch(_e){}' +
+      '});' +
+      '})();' +
+      '</script>';
+
     if (isFullDoc) {
-      // 用户给了完整 HTML doc，把 CSP / theme / bridge 注入到 <head> 末
-      // 简单做法：在 </head> 前插入；找不到就在 <html> 后插入
+      // 用户给了完整 HTML doc，把 CSP / theme / 早期错误监听器 / bridge 注入
       let doc = trimmed;
       const headEnd = doc.search(/<\/head>/i);
       if (headEnd >= 0) {
         doc = doc.slice(0, headEnd) + cspMeta + themeStyle + doc.slice(headEnd);
       } else {
         doc = doc.replace(/<html[^>]*>/i, (m) => m + '<head>' + cspMeta + themeStyle + '</head>');
+      }
+      // 早期错误监听器：注入到 <body> 之后
+      const bodyOpen = doc.search(/<body[^>]*>/i);
+      if (bodyOpen >= 0) {
+        const bodyTagEnd = doc.indexOf('>', bodyOpen) + 1;
+        doc = doc.slice(0, bodyTagEnd) + earlyErrorListener + doc.slice(bodyTagEnd);
       }
       // bridge 放到 </body> 前
       const bodyEnd = doc.search(/<\/body>/i);
@@ -743,11 +766,11 @@ canvas { display: block; max-width: 100%; }
       return doc;
     }
 
-    // 用户给了片段，包到模板里
+    // 用户给了片段，包到模板里。早期错误监听器必须在用户脚本之前。
     return '<!DOCTYPE html><html><head>' +
       '<meta charset="UTF-8">' +
       cspMeta + themeStyle +
-      '</head><body>' + trimmed + bridge + '</body></html>';
+      '</head><body>' + earlyErrorListener + trimmed + bridge + '</body></html>';
   }
 
   /** 把可能包含 </style> 或注入字符的颜色值过掉。VS Code 颜色变量一般是 hex/rgb，但兜底 */
@@ -1053,9 +1076,11 @@ canvas { display: block; max-width: 100%; }
       '6. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
       '7. 颜色 **全部用 CSS 变量**：`var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)` —— webview 已注入跟随主题',
       '8. **不要写死 1000px 这种像素宽度**，要响应式',
-      '9. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug 让 widget 看起来"渲染成功但内容是空的"。让错误抛出，iframe bridge 的 error 监听会显示红色覆盖层方便排查',
-      '10. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）是不是有真元素？init()/reset() 是不是真的填了状态？render() 调用时数据 ready 了吗？',
-      '11. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
+      '9. **绝对不要内联 `// 注释`**：因为 AI 经常把多个语句压一行，`// xxx` 注释会**吃掉同一行后面的所有代码**，导致 syntax error。要写注释**用 `/* xxx */` 块注释**，或者把注释独占一行。',
+      '10. **每个语句独占一行**，不要 `a;b;c;d;` 压一行。代码再啰嗦也比单行难调试强。',
+      '11. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug。让错误抛出，iframe bridge 的 error 监听会显示醒目红色覆盖层方便排查',
+      '12. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）有真元素？init()/reset() 真填了状态？render() 调用时数据 ready 了吗？',
+      '13. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
       '',
       '## 演示设计要求',
       '- 有可点的按钮（至少 1-2 个：下一步 / 重置）',
