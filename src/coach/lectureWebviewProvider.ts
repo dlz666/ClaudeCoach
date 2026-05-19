@@ -473,7 +473,14 @@ export class LectureWebviewProvider {
         prompt,
         cwd: lectureDir,
         allowedTools: ['WebSearch', 'WebFetch', 'Write', 'Read'],
+        // 显式禁掉所有可能让 Claude 分散注意力的工具（Task 会让它 spawn 子 agent 反复思考，
+        // TodoWrite 会让它先 plan、Edit/Bash 跟搜图无关）
+        disallowedTools: ['Task', 'TodoWrite', 'Edit', 'Bash', 'Glob', 'Grep', 'NotebookEdit',
+          'Skill', 'SlashCommand', 'SendUserMessage'],
         skipPermissions: true,  // 不交互模式，工具调用直接生效
+        effort: 'low',           // 关键：Claude 4 默认 Extended Thinking 占 output 配额 →
+                                  // Claude 思考完没 token 输出"实际搜图"，直接输出 fallback
+                                  // "未找到合适图"。effort=low 把配额留给真实搜+下载+输出 JSON。
         timeoutMs: 180000,       // 3 分钟够长（搜+下载 1-3 张图）
         signal: controller.signal,
         onEvent: (event: ClaudeStreamEvent) => {
@@ -523,6 +530,29 @@ export class LectureWebviewProvider {
     if (!summary || !Array.isArray(summary.saved) || summary.saved.length === 0) {
       const reason = summary?.reason || '未找到合适图';
       pushDelta(`\n\n⚠ ${reason}`);
+
+      // 调试：把 Claude 真实 stdout / stderr / 耗时 / arg 信息 dump 到临时文件，
+      // 便于排查 "Claude 真的搜了但没找到" vs "Claude 没搜直接放弃" vs "stream-json 解析丢字段"
+      try {
+        const os = require('os') as typeof import('os');
+        const fsSync = require('fs') as typeof import('fs');
+        const dbgPath = path.join(os.tmpdir(), `cc-search-image-debug-${Date.now()}.json`);
+        fsSync.writeFileSync(dbgPath, JSON.stringify({
+          query,
+          duration: result.durationMs,
+          exitCode: result.exitCode,
+          stdoutLines: result.stdoutLines.length,
+          stdoutPreview: result.stdoutLines.slice(0, 10),
+          stdoutTail: result.stdoutLines.slice(-15),
+          stderrTail: result.stderr.slice(-1000),
+          finalJson: result.finalJson,
+        }, null, 2), 'utf8');
+        ctx.panel.webview.postMessage({
+          type: 'log', level: 'warn',
+          message: `[claude search-image] 未找到图。调试信息: ${dbgPath}`,
+        });
+      } catch { /* swallow */ }
+
       this.postCancel(ctx, turnId, reason);
       return;
     }

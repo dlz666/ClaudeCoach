@@ -1345,12 +1345,14 @@ canvas { display: block; max-width: 100%; }
 
     if (act === 'suggest-search') {
       // 直接调 Claude Code 搜图，query 用 prompt 里 AI 写的
-      submitInlineSearchImage(info, query || '相关教学示意图');
-      // 把 suggest 块标记为"处理中"
+      const turnId = submitInlineSearchImage(info, query || '相关教学示意图');
+      // 把 suggest 块标记为"处理中"，dataset 记 turnId 用于失败时反查解锁
+      if (turnId) wrap.dataset.busyTurnId = turnId;
       wrap.classList.add('cc-suggest-busy');
     } else if (act === 'suggest-widget') {
       // 触发 widget 生成
-      submitInlineWidget(info, query || '相关概念的互动演示');
+      const turnId = submitInlineWidget(info, query || '相关概念的互动演示');
+      if (turnId) wrap.dataset.busyTurnId = turnId;
       wrap.classList.add('cc-suggest-busy');
     } else if (act === 'suggest-paste') {
       // 提示用户粘贴：什么都不做，让用户 Ctrl+V 粘剪贴板里的图
@@ -1735,6 +1737,7 @@ canvas { display: block; max-width: 100%; }
         intent: 'ask',
       },
     });
+    return turnId;
   }
 
   /**
@@ -1744,7 +1747,7 @@ canvas { display: block; max-width: 100%; }
    * 结束后宿主发 inlineCancelled 关闭 bubble + 弹 toast。
    */
   function submitInlineSearchImage(info, instruction) {
-    if (!vscode) return;
+    if (!vscode) return null;
     const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
     state.activeTurns.set(turnId, {
       info: { startLine: info.startLine, endLine: info.endLine, text: info.text || '', rect: info.rect },
@@ -1767,6 +1770,7 @@ canvas { display: block; max-width: 100%; }
       topic: state.topicTitle || '',
       lessonTitle: state.lessonTitle || '',
     });
+    return turnId;
   }
 
   /** ask 模式：让 AI 以聊天形式回答，结果以建议气泡显示但不写回。 */
@@ -2731,12 +2735,20 @@ canvas { display: block; max-width: 100%; }
       case 'inlineCancelled': {
         // 用户点 ✕ 取消后，宿主端 AbortController.abort() 把 chatCompletion 中断，
         // 在 abort 错误分支发了这个消息。这里清理 bubble + streaming buf + 提示。
+        // 同时也是"智能搜图未找到合适图"等失败场景的统一收尾：清 cc-suggest 卡 busy 态
+        // 让用户能重试，而不是永远卡在灰色禁用状态。
         if (!msg.turnId) break;
         const entry = state.streamingTurns.get(msg.turnId);
         if (entry?.trailingTimer) clearTimeout(entry.trailingTimer);
         state.streamingTurns.delete(msg.turnId);
         state.activeTurns.delete(msg.turnId);
         removeBubble(msg.turnId);
+        // 找到关联到此 turnId 的 cc-suggest 卡，解除 busy 灰态
+        const stuckCard = document.querySelector(`.cc-suggest[data-busy-turn-id="${msg.turnId}"]`);
+        if (stuckCard) {
+          stuckCard.classList.remove('cc-suggest-busy');
+          delete stuckCard.dataset.busyTurnId;
+        }
         toast('已取消 AI 生成', 'info');
         break;
       }

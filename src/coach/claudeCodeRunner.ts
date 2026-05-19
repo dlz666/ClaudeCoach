@@ -19,10 +19,14 @@ export interface ClaudeCodeRunOptions {
   cwd: string;
   /** 允许的工具列表，例如 ["WebSearch", "WebFetch", "Write", "Read"] */
   allowedTools?: string[];
+  /** 显式禁用的工具，避免 Claude 用无关工具分散注意力（Task / TodoWrite 等） */
+  disallowedTools?: string[];
   /** 额外可访问目录（--add-dir），如有 */
   additionalDirs?: string[];
   /** 是否跳过工具确认（生产用一般要 true，否则 Claude 每次工具调用都卡住等 confirm） */
   skipPermissions?: boolean;
+  /** Thinking effort（low/medium/high/max），默认 low 避免吃 output 配额 */
+  effort?: 'low' | 'medium' | 'high' | 'max';
   /** 超时（毫秒），默认 120000（2 分钟）。超时后 kill 子进程 */
   timeoutMs?: number;
   /** CLI 可执行路径，默认 'claude'（依赖 PATH） */
@@ -79,6 +83,9 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
     // Claude Code 的 --allowedTools 接受空格或逗号分隔
     args.push('--allowedTools', opts.allowedTools.join(' '));
   }
+  if (opts.disallowedTools && opts.disallowedTools.length) {
+    args.push('--disallowedTools', opts.disallowedTools.join(','));
+  }
   if (opts.additionalDirs && opts.additionalDirs.length) {
     for (const dir of opts.additionalDirs) {
       args.push('--add-dir', dir);
@@ -87,6 +94,9 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
   if (opts.skipPermissions) {
     args.push('--dangerously-skip-permissions');
   }
+  // Thinking effort：默认 low 避免 Claude 4 系列 Extended Thinking 吃 output token 配额
+  // （讲义生成 / 智能搜图都不需要复杂推理，prompt 已经给死格式）
+  args.push('--effort', opts.effort || 'low');
   // stream-json 需要 verbose 才能输出每个事件
   args.push('--verbose');
 
