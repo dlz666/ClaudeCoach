@@ -474,10 +474,17 @@ function buildSystemBase(ctx: PromptContext): string {
     sys += '\n如果你的回答明显依赖某份资料，请尽量在答案末尾列出“参考资料：文件名”。';
   }
 
-  sys += `\n\n数学公式格式规则（必须严格遵守）：
+  sys += `\n\n数学公式格式规则（必须严格遵守，KaTeX 渲染）：
 - 行内公式使用单个美元符号，例如 $x^2+1$，不要在美元符号内侧加空格。
 - 独立公式使用双美元符号，并单独占一行，前后各空一行。
-- 不要用 $ 包裹中文说明文字，中文直接写在正文里。`;
+- 不要用 $ 包裹中文说明文字，中文直接写在正文里。
+- **\\text{} 内绝对不能含下划线 _**：KaTeX 仍把 \\text 内的 _ 当下标解析 → 渲染报红错。
+  ❌ \\text{warmup_steps}  ❌ \\text{d_model}
+  ✅ \\text{warmup-steps}  ✅ \\mathrm{warmup\\_steps}  ✅ \\text{warmup steps}
+  变量名含下划线时改用 \\mathrm{} 并把 _ 转义成 \\_，或者把下划线改成连字符/驼峰/空格。
+- **\\text{} 内同样禁止用 $ { } & % # 等 LaTeX 元字符**：要么转义（\\$ \\{ \\}）要么换成中文/英文等价表述。
+- 优先用单字符变量名（$d_m$ $w_s$）配 subscript，避免长变量名进 \\text。
+- 训练超参数等长名词在正文里直接写英文（warmup steps、learning rate），不要塞公式。`;
 
   sys += '\nHard math formatting rules: single-dollar inline math must open and close on the same physical line. Never output delimiter-adjacent prose such as "记作$" or "$存在"; write prose and math with spaces, e.g. "记作 $S_n=...$" and "$\\lim_{n\\to\\infty}S_n=S$ 存在". Never let list markers, punctuation, or Chinese prose share a dangling single "$". Use $$...$$ only for standalone display equations.';
 
