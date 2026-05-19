@@ -1086,8 +1086,15 @@ export class AIClient {
     if (config.model && config.model.trim()) {
       args.push('--model', config.model.trim());
     }
-    if (systemPrompt) {
+    // Windows cmd.exe 单条命令行最大 8191 字符。讲义生成 system prompt 长 ~9K-12K，
+    // 作为 --append-system-prompt 参数传过去就触发 "命令行太长" (exit 1)。
+    // 策略：短 system 继续走 flag（保留 CLI 语义），长 system 拼到 stdin。
+    const APPEND_FLAG_MAX_LEN = 3500;  // 留充足 buffer 给其他 args + claude.cmd 包装
+    let inlineSystemInStdin = false;
+    if (systemPrompt && systemPrompt.length < APPEND_FLAG_MAX_LEN) {
       args.push('--append-system-prompt', systemPrompt);
+    } else if (systemPrompt) {
+      inlineSystemInStdin = true;
     }
 
     return new Promise<string>((resolve, reject) => {
@@ -1194,7 +1201,12 @@ export class AIClient {
       }
 
       try {
-        proc.stdin.write(promptText, 'utf-8');
+        // 长 system prompt 走 stdin：拼到 user 消息前面作为"前置 instructions"
+        // Claude 看到这段后会把它当任务背景处理（讲义生成 prompt 里已有"请用 Markdown 写一篇讲义"等明确指令）
+        const fullPromptForStdin = inlineSystemInStdin
+          ? `# 任务背景与硬性约束（必须严格遵守）\n\n${systemPrompt}\n\n---\n\n# 用户请求\n\n${promptText}`
+          : promptText;
+        proc.stdin.write(fullPromptForStdin, 'utf-8');
         proc.stdin.end();
       } catch (e: any) {
         settle(() => reject(new Error(`向 claude CLI 写入 prompt 失败：${e?.message || e}`)));
