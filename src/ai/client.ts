@@ -1095,13 +1095,26 @@ export class AIClient {
 
     // Windows cmd.exe 单条命令行最大 8191 字符。讲义生成 system prompt 长 ~9K-12K，
     // 作为 --append-system-prompt 参数传过去就触发 "命令行太长" (exit 1)。
-    // 策略：短 system 继续走 flag（保留 CLI 语义），长 system 拼到 stdin。
+    // 之前尝试过把长 system 拼到 stdin（作为 user message 前缀），但 Claude
+    // 误认为前面那段是讲义内容的一部分，只补充输出"五、六、小结"部分讲义残废。
+    // 正确方案：用 --append-system-prompt-file <路径> 传文件路径（CLI 提供此 flag）。
+    // 命令行参数短，Claude 仍认知为 system instructions，不会跟 user message 混淆。
     const APPEND_FLAG_MAX_LEN = 3500;  // 留充足 buffer 给其他 args + claude.cmd 包装
-    let inlineSystemInStdin = false;
+    let tempSystemPromptFile: string | null = null;
     if (systemPrompt && systemPrompt.length < APPEND_FLAG_MAX_LEN) {
       args.push('--append-system-prompt', systemPrompt);
     } else if (systemPrompt) {
-      inlineSystemInStdin = true;
+      // 长 system → 写临时文件 → --append-system-prompt-file
+      const os = await import('os');
+      const path = await import('path');
+      const fsp = await import('fs/promises');
+      const crypto = await import('crypto');
+      tempSystemPromptFile = path.join(
+        os.tmpdir(),
+        `cc-claude-sysprompt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`,
+      );
+      await fsp.writeFile(tempSystemPromptFile, systemPrompt, 'utf-8');
+      args.push('--append-system-prompt-file', tempSystemPromptFile);
     }
 
     return new Promise<string>((resolve, reject) => {
@@ -1208,15 +1221,19 @@ export class AIClient {
       }
 
       try {
-        // 长 system prompt 走 stdin：拼到 user 消息前面作为"前置 instructions"
-        // Claude 看到这段后会把它当任务背景处理（讲义生成 prompt 里已有"请用 Markdown 写一篇讲义"等明确指令）
-        const fullPromptForStdin = inlineSystemInStdin
-          ? `# 任务背景与硬性约束（必须严格遵守）\n\n${systemPrompt}\n\n---\n\n# 用户请求\n\n${promptText}`
-          : promptText;
-        proc.stdin.write(fullPromptForStdin, 'utf-8');
+        // user message 走 stdin（system prompt 已通过 flag 或 file 传给 CLI，不再拼到 stdin）
+        proc.stdin.write(promptText, 'utf-8');
         proc.stdin.end();
       } catch (e: any) {
         settle(() => reject(new Error(`向 claude CLI 写入 prompt 失败：${e?.message || e}`)));
+      }
+    }).finally(async () => {
+      // 清理临时 system prompt 文件（成功失败都清）
+      if (tempSystemPromptFile) {
+        try {
+          const fsp = await import('fs/promises');
+          await fsp.unlink(tempSystemPromptFile);
+        } catch { /* 忽略：临时目录会自动清理 */ }
       }
     });
   }
