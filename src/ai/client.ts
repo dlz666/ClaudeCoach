@@ -1097,8 +1097,12 @@ export class AIClient {
         env: process.env,
       });
 
-      let stdout = '';
-      let stderr = '';
+      // Windows 上 shell:true 会走 cmd.exe，默认 code page 是 GBK（936）。
+      // 子进程输出的中文错误信息（如"请检查 / 未登录"）是 GBK 字节，强按
+      // UTF-8 解码会出 � 替换符（用户看到的 ��������）。
+      // 修法：累积原始 Buffer，结束时智能解码 —— 先试 UTF-8，遇到替换符回退 GBK。
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
       let settled = false;
 
       const settle = (fn: () => void) => {
@@ -1107,8 +1111,21 @@ export class AIClient {
         fn();
       };
 
-      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString('utf-8'); });
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString('utf-8'); });
+      const smartDecode = (buf: Buffer): string => {
+        const utf8 = buf.toString('utf-8');
+        // UTF-8 解码成功（不含替换符）→ 用它
+        if (!utf8.includes('�')) return utf8;
+        // 含替换符 → 试 GBK（Node 13+ 内置 ICU 支持 gbk）
+        try {
+          return new TextDecoder('gbk', { fatal: false }).decode(buf);
+        } catch {
+          // ICU 编译时没带 gbk（少见）→ 退回 latin1 至少不丢字节
+          return buf.toString('latin1');
+        }
+      };
+
+      proc.stdout.on('data', (data: Buffer) => { stdoutChunks.push(data); });
+      proc.stderr.on('data', (data: Buffer) => { stderrChunks.push(data); });
 
       proc.on('error', (err) => {
         settle(() => reject(new Error(
@@ -1118,6 +1135,10 @@ export class AIClient {
 
       proc.on('close', (code) => {
         settle(() => {
+          // 智能解码累积的 buffer（UTF-8 → 失败回退 GBK），治 Windows 中文乱码
+          const stdout = smartDecode(Buffer.concat(stdoutChunks));
+          const stderr = smartDecode(Buffer.concat(stderrChunks));
+
           // 先尝试解析 JSON，无论 exit code 是 0 还是 1：
           // claude --output-format json 在 is_error=true 时（如未登录）也返回 1 +
           // 完整 JSON，需要把 result 字段提取出来给友好错误，而不是 dump raw JSON。

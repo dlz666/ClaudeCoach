@@ -108,6 +108,9 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
 
     const stdoutLines: string[] = [];
     let stdoutBuf = '';
+    // stderr 累积原始 buffer：Windows 上 shell=true 时 cmd.exe code page 是 GBK，
+    // 中文错误信息按 UTF-8 强解会乱码。close 时智能解码（UTF-8 → 替换符回退 GBK）。
+    const stderrChunks: Buffer[] = [];
     let stderr = '';
     let aborted = false;
     let finishedNormally = false;
@@ -151,8 +154,8 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
       }
     });
 
-    proc.stderr.setEncoding('utf8');
-    proc.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    // stderr 不 setEncoding，保持 Buffer 模式，close 时智能解码
+    proc.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
 
     proc.on('error', (err: Error) => {
       clearTimeout(timeoutTimer);
@@ -164,6 +167,15 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
       clearTimeout(timeoutTimer);
       if (opts.signal) opts.signal.removeEventListener('abort', onExternalAbort);
       finishedNormally = true;
+      // 智能解码 stderr buffer：UTF-8 → 含替换符回退 GBK（治 Windows cmd.exe 中文乱码）
+      const stderrBuf = Buffer.concat(stderrChunks);
+      const stderrUtf8 = stderrBuf.toString('utf-8');
+      stderr = stderrUtf8.includes('�')
+        ? (() => {
+            try { return new TextDecoder('gbk', { fatal: false }).decode(stderrBuf); }
+            catch { return stderrBuf.toString('latin1'); }
+          })()
+        : stderrUtf8;
       // 处理 buffer 残留
       if (stdoutBuf.trim()) {
         stdoutLines.push(stdoutBuf.trim());
