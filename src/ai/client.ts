@@ -1093,6 +1093,12 @@ export class AIClient {
     args.push('--disallowedTools',
       'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit,Skill,SlashCommand,SendUserMessage');
 
+    // 控制 thinking budget：Claude 4 系列默认开 Extended Thinking，会吃掉大量
+    // output tokens 用于"思考"。给一个 12K 长 system prompt 让它写 2500 字讲义，
+    // 它会反复思考"哪些规则要遵守"，最后 output 配额耗尽，只输出末尾几节甚至只剩小结。
+    // --effort low 显著降低 thinking budget，把 output 配额留给最终答案。
+    args.push('--effort', 'low');
+
     // Windows cmd.exe 单条命令行最大 8191 字符。讲义生成 system prompt 长 ~9K-12K，
     // 作为 --append-system-prompt 参数传过去就触发 "命令行太长" (exit 1)。
     // 之前尝试过把长 system 拼到 stdin（作为 user message 前缀），但 Claude
@@ -1206,6 +1212,27 @@ export class AIClient {
           } else {
             result = stdout.trim();
           }
+
+          // 调试日志：长 prompt 时如果输出明显残废（< 2000 字符），把完整 stdout
+          // 写到 tmp 文件方便排查（thinking budget / maxTokens / JSON 字段问题）。
+          // console.log 会被 vscode output channel 捕获显示在 ClaudeCoach 输出里。
+          if (systemPrompt && systemPrompt.length > 3000 && result.length < 2000) {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-var-requires
+              const dbgPath = `${require('os').tmpdir()}/cc-claude-cli-debug-${Date.now()}.json`;
+              require('fs').writeFileSync(dbgPath, JSON.stringify({
+                stdoutLength: stdout.length,
+                stdoutPreview: stdout.slice(0, 500),
+                stdoutTail: stdout.slice(-500),
+                parsedKeys: parsed ? Object.keys(parsed) : null,
+                resultLength: result.length,
+                stderrTail: stderr.slice(-500),
+                args: args.filter((_a, i) => i === 0 || args[i - 1] !== '--append-system-prompt'),
+              }, null, 2));
+              console.warn(`[ClaudeCoach][claude-cli] ⚠️ 输出疑似截断 (result=${result.length} 字符)，调试信息已写入: ${dbgPath}`);
+            } catch { /* swallow */ }
+          }
+
           if (typeof options?.onDelta === 'function' && result) {
             try { options.onDelta(result); } catch { /* swallow */ }
           }
