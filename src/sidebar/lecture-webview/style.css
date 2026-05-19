@@ -267,6 +267,197 @@ html, body {
   transform: scale(0.96);
 }
 
+/* ===== 可视化建议卡片 (cc-suggest) ===== */
+/* AI 生成讲义时插入 <div class="cc-suggest" data-kind="image|widget" data-query="...">
+   渲染成"虚线框 + 标题 + 几个按钮"的卡片，让用户一键触发对应操作。 */
+div.cc-suggest {
+  margin: 18px 0;
+}
+.cc-suggest-card {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--vscode-textLink-foreground, #4dabf7) 8%, var(--vscode-editor-background));
+  border: 1.5px dashed color-mix(in srgb, var(--vscode-textLink-foreground, #4dabf7) 55%, transparent);
+  position: relative;
+  transition: opacity 200ms ease;
+}
+.cc-suggest-busy .cc-suggest-card {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.cc-suggest-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.cc-suggest-icon {
+  font-size: 16px;
+}
+.cc-suggest-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--vscode-textLink-foreground, #4dabf7) 80%, var(--vscode-foreground));
+  text-transform: uppercase;
+}
+.cc-suggest-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--vscode-foreground);
+  margin-bottom: 12px;
+}
+.cc-suggest-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cc-suggest-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.cc-suggest-btn:hover {
+  background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
+}
+.cc-suggest-btn.primary {
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+  border-color: var(--vscode-button-background, #0e639c);
+  font-weight: 500;
+}
+.cc-suggest-btn.primary:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+  border-color: var(--vscode-button-hoverBackground, #1177bb);
+}
+.cc-suggest-btn.ghost {
+  opacity: 0.7;
+}
+.cc-suggest-btn.ghost:hover {
+  opacity: 1;
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  border-color: color-mix(in srgb, #ef4444 50%, transparent);
+  color: #ef4444;
+}
+
+/* ===== 视频卡片（粘贴 YouTube / B 站 URL 后嵌入）===== */
+.cc-video {
+  margin: 18px 0;
+}
+.cc-video-card {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.08));
+  color: var(--vscode-foreground);
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.cc-video-card:hover {
+  background: color-mix(in srgb, var(--vscode-editor-background) 80%, var(--vscode-foreground) 20%);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 35%, transparent);
+  transform: translateY(-1px);
+}
+.cc-video-thumb {
+  flex-shrink: 0;
+  position: relative;
+  width: 168px;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1a1a1a center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cc-video-thumb-fallback {
+  color: #888;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+.cc-video-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 44px;
+  height: 44px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  pointer-events: none;
+}
+.cc-video-meta {
+  flex: 1;
+  min-width: 0;
+}
+.cc-video-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  margin-bottom: 6px;
+}
+.cc-video-sub {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
+}
+.cc-video-platform, .cc-video-t {
+  white-space: nowrap;
+}
+
+/* ===== 右键菜单 ===== */
+.lecture-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background, #252526));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, rgba(255,255,255,0.12)));
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  font-family: inherit;
+}
+.lecture-context-menu[hidden] { display: none !important; }
+.lecture-context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 7px 12px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.lecture-context-menu button:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, #094771));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground, #fff));
+}
+
 /* ===== popover (评论框) ===== */
 
 .lecture-comment-popover {
@@ -483,6 +674,29 @@ html, body {
   font-size: 11px;
   color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 80%, transparent);
   font-variant-numeric: tabular-nums;
+}
+
+/* ✕ 取消按钮：仅在 pending/streaming bubble 显示，靠 header 右侧 */
+.bubble-cancel-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--vscode-foreground) 20%, transparent);
+  color: color-mix(in srgb, var(--vscode-foreground) 75%, transparent);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.bubble-cancel-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 60%, transparent);
+  color: var(--danger, #ef4444);
+}
+.bubble-cancel-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .bubble-body {
@@ -747,45 +961,55 @@ html, body {
 }
 
 /* ===== GraphViz / DOT 视觉化 ===== */
+/* DOT 图：固定"白底深字"专业制图风格，不跟随 VS Code 主题色。
+   原因：之前用 var(--vscode-foreground)，Dark+ 默认主题下是 #cccccc 浅灰，
+   暗背景上对比度只有 4.5:1（WCAG AA 边缘），用户反馈"看不清"。
+   现在锁死白底深字，任何主题下文字都清晰可读，DOT 看起来像传统流程图。
+   inline fill="black" 由 renderGraphviz 的 SVG 后处理移除（main.js）。 */
 .graphviz-rendered {
   margin: 16px 0;
   padding: 12px;
   border-radius: 8px;
-  background: var(--vscode-editor-background, transparent);
-  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.08));
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
   overflow-x: auto;
   text-align: center;
 }
 .graphviz-rendered svg {
   max-width: 100%;
   height: auto;
-  /* GraphViz 默认输出黑底白字 / 白底黑字。强制 currentColor 让 stroke / text 跟随主题 */
-  color: var(--vscode-foreground);
 }
-/* 把 SVG 里所有黑色描边和文字改成跟随主题色（深色主题里黑字看不见）*/
 .graphviz-rendered svg text {
-  fill: var(--vscode-foreground);
+  fill: #111827;  /* 深灰黑文字 */
+  font-weight: 500;
 }
 .graphviz-rendered svg .node ellipse,
 .graphviz-rendered svg .node polygon,
 .graphviz-rendered svg .node path,
-.graphviz-rendered svg .node circle,
-.graphviz-rendered svg .edge path,
+.graphviz-rendered svg .node circle {
+  fill: #ffffff;    /* 节点白底 */
+  stroke: #374151;  /* 深灰节点边框 */
+}
+/* 边线（贝塞尔 path）：只描边不填充。
+   之前 .edge path 和 .edge polygon 合并写了 fill: #374151，
+   直边没事，但弯曲 path 的"首尾连线围出区域"被实心填充 → 视觉上像"箭头拖尾"楔形。 */
+.graphviz-rendered svg .edge path {
+  stroke: #374151;
+  fill: none;
+}
+/* 箭头三角（polygon）：填充 + 描边都用同色，让箭头实心醒目 */
 .graphviz-rendered svg .edge polygon {
-  /* 仅当原 stroke 是黑色（GraphViz 默认）时改成主题前景色；
-     带颜色的节点（用户指定的 color=red 等）保留原样 */
-  stroke: var(--vscode-foreground);
+  stroke: #374151;
+  fill: #374151;
 }
-.graphviz-rendered svg .node [stroke="black"],
-.graphviz-rendered svg .edge [stroke="black"] {
-  stroke: var(--vscode-foreground);
-}
-.graphviz-rendered svg .node [fill="black"] {
-  fill: var(--vscode-foreground);
-}
-/* 但 cluster 子图背景不应被强制覆盖 */
+/* cluster（子图）：浅灰底 + 中灰边框，让节点群"区域感"明显 */
 .graphviz-rendered svg .cluster polygon {
-  stroke: color-mix(in srgb, var(--vscode-foreground) 50%, transparent);
+  fill: rgba(243, 244, 246, 0.55);
+  stroke: #9ca3af;
+}
+.graphviz-rendered svg .cluster text {
+  fill: #111827;
+  font-weight: 600;  /* cluster 标题更粗 */
 }
 
 .graphviz-fallback {
@@ -848,6 +1072,16 @@ html, body {
 .cc-widget-btn:hover {
   opacity: 1;
   background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+}
+/* 高度被自动锁定时给 ↻ 按钮加个橙色提示，告诉用户"我已经锁住了，
+   如果你想再测一次就点 ↻"。功能没区别（reload 始终能重测），只是视觉提示。 */
+.cc-widget-container[data-height-locked] .cc-widget-btn[data-action="reload"] {
+  border-color: color-mix(in srgb, #f59e0b 60%, var(--vscode-panel-border));
+  color: #f59e0b;
+  opacity: 1;
+}
+.cc-widget-container[data-height-locked] .cc-widget-btn[data-action="reload"]:hover {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
 }
 .cc-widget-iframe {
   width: 100%;

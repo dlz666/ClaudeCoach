@@ -31,23 +31,15 @@
       linkify: true,
       typographer: false,
       breaks: false,
+      // 注意：widget/mermaid/dot 的特殊处理**不放在 highlight 函数里**！
+      // 原因：当 highlight 返回的字符串包含完整 <pre> 时，markdown-it 直接用
+      // 这个字符串作为 fence 输出，绕过 md.renderer.rules.fence（那里负责
+      // 注入 data-source-line）。结果：pre.widget-source 没有行号属性，
+      // inheritSourceLines 继承不到东西 → 删除/呼叫菜单都拿不到行号。
+      // 解决：把这些自定义渲染**整段搬到 fence renderer 里**（见下方），
+      // 在那里手动把 data-source-line 拼进返回的 HTML 字符串。
+      // highlight 只剩 hljs 这一种通用代码高亮路径。
       highlight: (str, lang) => {
-        // Mermaid 代码块特殊处理：占位 div，由 renderMermaid 阶段渲染为 SVG
-        if (lang === 'mermaid') {
-          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          return `<pre class="mermaid-source"><code class="language-mermaid">${escaped}</code></pre>`;
-        }
-        // DOT/GraphViz 代码块：占位 pre，由 renderGraphviz 阶段编译成 SVG
-        if (lang === 'dot' || lang === 'graphviz') {
-          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          return `<pre class="dot-source"><code class="language-dot">${escaped}</code></pre>`;
-        }
-        // ```widget 块：完整 HTML+JS+CSS 的交互式演示，由 renderWidgets 用 iframe 渲染
-        if (lang === 'widget' || lang === 'interactive' || lang === 'demo') {
-          const escaped = (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          return `<pre class="widget-source"><code class="language-widget">${escaped}</code></pre>`;
-        }
-        // 用 highlight.js 渲染代码块
         if (typeof window.hljs !== 'undefined' && window.hljs) {
           try {
             if (lang && window.hljs.getLanguage(lang)) {
@@ -64,10 +56,55 @@
     if (typeof helpers.attachSourceLines === 'function') {
       helpers.attachSourceLines(md);
     }
-    // 让 fence 也带 source-line
+    // 自定义 html_block renderer：让 raw HTML 块（<div class="cc-suggest">、<details>
+    // 等）也拿到 data-source-line。默认 html_block renderer 直接 return token.content
+    // 字符串，完全跳过 token.attrs —— 跟 fence 的同根问题。这里把 data-source-line
+    // 注入到第一个开标签里。
+    const defaultHtmlBlock = md.renderer.rules.html_block;
+    md.renderer.rules.html_block = function (tokens, idx, options, env, self) {
+      const token = tokens[idx];
+      if (token.map && token.level === 0) {
+        const startLine = String(token.map[0]);
+        const endLine = String(token.map[1]);
+        const html = String(token.content || '');
+        // 找内容里第一个开标签，注入 data-source-line / data-source-line-end
+        const injected = html.replace(
+          /<([a-z][a-z0-9]*)\b([^>]*)>/i,
+          `<$1$2 data-source-line="${startLine}" data-source-line-end="${endLine}">`,
+        );
+        return injected;
+      }
+      return (defaultHtmlBlock || ((t, i, o, e, s) => s.renderToken(t, i, o)))(tokens, idx, options, env, self);
+    };
+
+    // 自定义 fence renderer：widget/mermaid/dot 在这里直接生成 HTML，并手动
+    // 注入 data-source-line（这样 inheritSourceLines → widget container 才有
+    // 行号 → ⋯ 菜单的"删除"/"呼叫"才能拿到）。其他语言走默认 fence renderer，
+    // 默认 renderer 又会调 highlight 函数（hljs 通用高亮）。
+    const escapeFenceHtml = (s) => String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
     const defaultFence = md.renderer.rules.fence;
     md.renderer.rules.fence = function (tokens, idx, options, env, self) {
       const token = tokens[idx];
+      const info = (token.info || '').trim();
+      const lang = info.split(/\s+/g)[0];
+      const sourceLineAttrs = (token.map && token.level === 0)
+        ? ` data-source-line="${token.map[0]}" data-source-line-end="${token.map[1]}"`
+        : '';
+      const escaped = escapeFenceHtml(token.content);
+      if (lang === 'widget' || lang === 'interactive' || lang === 'demo') {
+        return `<pre class="widget-source"${sourceLineAttrs}><code class="language-widget">${escaped}</code></pre>`;
+      }
+      if (lang === 'mermaid') {
+        return `<pre class="mermaid-source"${sourceLineAttrs}><code class="language-mermaid">${escaped}</code></pre>`;
+      }
+      if (lang === 'dot' || lang === 'graphviz') {
+        return `<pre class="dot-source"${sourceLineAttrs}><code class="language-dot">${escaped}</code></pre>`;
+      }
+      // 通用 fence：也补一下 source-line（attachSourceLines 设的 attrs 会被
+      // highlight 字符串路径吞掉，所以这里保险再 attrSet 一次）
       if (token.map && token.level === 0) {
         token.attrSet('data-source-line', String(token.map[0]));
         token.attrSet('data-source-line-end', String(token.map[1]));
@@ -309,6 +346,33 @@
   let _lastWidgetSelection = null;
   const WIDGET_SELECTION_STALE_MS = 30000;
 
+  // widget 高度上报历史。key = widget id，value = 最近 N 次 { t, h }。
+  // 用于侦测 vh 循环增长：AI 写 widget 里用了 100vh / vmin 等 viewport 单位时，
+  // iframe 增高 → vh 元素跟着增 → bridge 又上报更大值 → 死循环。
+  // 检测：连续 4 次都是小幅单调增长（每次 5-80px）→ 锁定到循环开始前的高度。
+  const _widgetHeightHistory = new Map();
+  const _WIDGET_HEIGHT_HISTORY_MAX = 6;
+  const _WIDGET_LOOP_MIN_RUN = 4;        // 连续多少次小幅增长才判定循环
+  const _WIDGET_LOOP_INC_MIN = 5;        // 单次增量下限（更小当抖动忽略）
+  const _WIDGET_LOOP_INC_MAX = 80;       // 单次增量上限（更大是真实变化）
+  const _WIDGET_UNLOCK_DELTA = 200;      // 锁定后差距 > 这个值视为真实变化，自动解锁
+
+  // Ctrl+滚轮缩放期间挂起 widget 高度自适应（zoom 会传到 iframe 内部 viewport，
+  // 让 vh 元素跟着变，bridge 上报的 reportedH 会跳一大段触发误解锁 + 疯狂增长）。
+  // wheel handler 设置此标记，缩放停止 400ms 后清除并触发 relockWidgetHeight。
+  let _isZooming = false;
+
+  // 当前讲义整体缩放倍数（Ctrl+滚轮触发的 document.body.style.zoom 同步值）。
+  // 提到 IIFE 顶部是因为 makeWidgetContainer 创建新 widget 时需要立即应用反向 zoom：
+  //   body.zoom = scale  ×  widget.zoom = 1/scale  =  1（widget 视觉不被 zoom 拉伸）
+  // 这是治根的解 —— 不让父 zoom 传到 iframe 内部 viewport，vh 元素就不会循环。
+  let _lectureFontScale = 1;
+
+  // 每个 widget container 关联的原始源码。⋯ 菜单的"呼叫"动作要把这段源码作为
+  // chip 选区的 text 注入 popover，让用户跟 AI 谈这个 widget 时上下文完整。
+  // 用 WeakMap 是避免 container 移除后内存泄漏。
+  const _widgetUserSrc = new WeakMap();
+
   /**
    * 在送给 mermaid 之前自动给节点标签加引号 —— AI 经常生成 `A[dist[s]=0]` 这种
    * 嵌套括号写法，mermaid 解析器没办法处理。state machine 逐字符扫：遇到
@@ -496,13 +560,27 @@
         const inner = document.createElement('div');
         inner.className = 'graphviz-rendered';
         inner.innerHTML = svg;
-        // 让 SVG 自适应宽度，遵循主题色（stroke/text 用 currentColor 由 CSS 注入）
+        // 让 SVG 自适应宽度
         const svgEl = inner.querySelector('svg');
         if (svgEl) {
           svgEl.removeAttribute('width');
           svgEl.removeAttribute('height');
           svgEl.style.maxWidth = '100%';
           svgEl.style.height = 'auto';
+          // GraphViz 默认给 text / 节点 / 边输出 inline fill="black" stroke="black"，
+          // inline 属性特异度最高 → CSS 里 .graphviz-rendered svg text { fill: ... } 干不过。
+          // 这里逐个把 black 的 inline 属性删掉，让 CSS（白底深字风格）能 cover。
+          svgEl.querySelectorAll('[fill="black"], [fill="#000000"], [fill="#000"]').forEach((el) => {
+            el.removeAttribute('fill');
+          });
+          svgEl.querySelectorAll('[stroke="black"], [stroke="#000000"], [stroke="#000"]').forEach((el) => {
+            el.removeAttribute('stroke');
+          });
+          // GraphViz 给 cluster 输出 fill="none"，保留（让 CSS 给 cluster polygon 单独填浅灰）。
+          // 但有些版本给 node polygon 也输出 fill="none"，会让节点透明 → 删掉 fill="none" 让 CSS 接管
+          svgEl.querySelectorAll('.node [fill="none"]').forEach((el) => {
+            el.removeAttribute('fill');
+          });
         }
         const wrap = wrapChartWithToolbar(inner, source, 'dot', 'dot');
         inheritSourceLines(pre, wrap);
@@ -555,15 +633,25 @@
     const container = document.createElement('div');
     container.className = 'cc-widget-container';
     container.dataset.widgetId = id;
+    // 把 userSrc 关联到 container：⋯ 菜单的"呼叫"动作要把这段源码注入 popover。
+    _widgetUserSrc.set(container, userSrc);
+    // 反向 zoom 抵消 body.zoom：CSS zoom 在父子之间是相乘关系，
+    // body × widget = scale × (1/scale) = 1 → widget 视觉保持原大小。
+    // 治根目的：让 widget iframe 内部 viewport 不被父 zoom 拉伸，
+    // 否则 widget 内任何 vh / 100% 元素会跟着 zoom 涨 → 无限循环。
+    if (_lectureFontScale !== 1) {
+      container.style.zoom = String(1 / _lectureFontScale);
+    }
 
-    // 顶部 toolbar：查看源码 / 复制源码 / 重载
+    // 顶部 toolbar：⋯ 菜单（删除 / 呼叫） / 复制源码 / 重载 / 查看源码
     const toolbar = document.createElement('div');
     toolbar.className = 'cc-widget-toolbar';
     toolbar.innerHTML = `
+      <button class="cc-widget-btn cc-widget-btn-more" data-action="more" title="更多操作（删除 / 呼叫 AI）" aria-haspopup="true">⋯</button>
       <span class="cc-widget-label">互动演示</span>
       <span class="cc-widget-spacer"></span>
       <button class="cc-widget-btn" data-action="copy-source" title="复制源码到剪贴板（方便发给开发者排查）">📋 复制源码</button>
-      <button class="cc-widget-btn" data-action="reload" title="重新加载">↻</button>
+      <button class="cc-widget-btn" data-action="reload" title="重新加载 + 重测高度（高度卡死/疯狂增长时按这个）">↻</button>
       <button class="cc-widget-btn" data-action="toggle-source" title="查看 / 隐藏源码">{ }</button>
     `;
     container.appendChild(toolbar);
@@ -611,7 +699,14 @@
       const act = btn.getAttribute('data-action');
       if (act === 'toggle-source') {
         srcPanel.classList.toggle('hidden');
+      } else if (act === 'more') {
+        // 弹 ⋯ 菜单（删除 / 呼叫）。锚在按钮下方左对齐。
+        showWidgetMoreMenu(container, btn);
       } else if (act === 'reload') {
+        // 重新加载 iframe 同时重测高度：自动循环检测不够鲁棒（某些非 vh 类型的
+        // 持续增长会绕过 5-80px 区间检测），所以让 ↻ 始终兜底——清掉锁定 + history
+        // + iframe 压到 100px，再重新 setAttribute srcdoc 让 bridge 从头跑一遍。
+        relockWidgetHeight(container);
         iframe.setAttribute('srcdoc', srcdoc);
       } else if (act === 'copy-source') {
         try {
@@ -908,10 +1003,7 @@ canvas { display: block; max-width: 100%; }
     if (d.type === 'cc-widget-resize') {
       const iframe = wrap.querySelector('iframe.cc-widget-iframe');
       if (iframe && typeof d.height === 'number' && d.height > 0) {
-        // 直接匹配 widget 内容真实高度 + 16px 安全余量，永不出内层滚动条。
-        // 之前有 4000 上限和"单调增高"约束 → 大 widget 被截 + 加载完后没法
-        // shrink 回真实高度。现在完全跟随内容。
-        iframe.style.height = (d.height + 16) + 'px';
+        applyWidgetHeight(wrap, iframe, d.id, d.height);
       }
     } else if (d.type === 'cc-widget-selection') {
       // 缓存 widget 内的选区文本 + 时间戳。pickContextInfo 在没有 lecture 选区
@@ -947,6 +1039,218 @@ canvas { display: block; max-width: 100%; }
     return String(v || '').replace(/["\\]/g, '');
   }
 
+  /**
+   * 把 bridge 上报的高度应用到 iframe，附带"vh 循环侦测 + 锁定"机制。
+   *
+   * 背景：AI 写 widget 时若用了 100vh / 100vmin / vh 等 viewport 单位，
+   * 会和 iframe 自适应高度形成循环——iframe 一变高，vh 元素跟着大，
+   * bridge 又上报更大值。0473861 删掉了单调增高约束（让大 widget 不出
+   * 内滚动条），就把这个隐患暴露出来。
+   *
+   * 策略：维护每个 widget 的高度历史，检测"连续 N 次小幅单调增长"。
+   * 一旦判定为循环，锁定到循环开始前的高度（≈ 第一次稳定的真实自然高度），
+   * 并给容器加 data-height-locked 让 CSS 显示"手动重测"按钮。
+   * 之后若上报值跟锁定差 > 200px，视为真实变化（折叠展开、数据切换），
+   * 自动解锁继续跟随。
+   */
+  function applyWidgetHeight(wrap, iframe, id, reportedH) {
+    // 缩放期挂起：zoom 影响 iframe viewport，reportedH 不可信。
+    // 既不进 history（避免污染循环检测），也不动 iframe（避免疯狂增长）。
+    // wheel handler 缩放停止后会清 _isZooming 并触发 relockWidgetHeight 重测。
+    if (_isZooming) return;
+
+    const list = _widgetHeightHistory.get(id) || [];
+    list.push({ t: Date.now(), h: reportedH });
+    while (list.length > _WIDGET_HEIGHT_HISTORY_MAX) list.shift();
+    _widgetHeightHistory.set(id, list);
+
+    const lockedH = wrap._heightLockedAt;
+
+    // 已锁定：检查是否该解锁
+    if (typeof lockedH === 'number') {
+      if (Math.abs(reportedH - lockedH) > _WIDGET_UNLOCK_DELTA) {
+        // 真实变化，解锁
+        wrap._heightLockedAt = undefined;
+        wrap.removeAttribute('data-height-locked');
+        iframe.style.height = (reportedH + 16) + 'px';
+      }
+      // 还在锁定且变化小：不动 iframe，保持锁定高度
+      return;
+    }
+
+    // 未锁定：检测最近 _WIDGET_LOOP_MIN_RUN 次是否都是小幅单调增长
+    if (list.length >= _WIDGET_LOOP_MIN_RUN) {
+      const tail = list.slice(-_WIDGET_LOOP_MIN_RUN);
+      let isLoop = true;
+      for (let i = 1; i < tail.length; i++) {
+        const delta = tail[i].h - tail[i - 1].h;
+        if (delta < _WIDGET_LOOP_INC_MIN || delta > _WIDGET_LOOP_INC_MAX) {
+          isLoop = false;
+          break;
+        }
+      }
+      if (isLoop) {
+        // 锁定到循环开始前的那次稳定高度（tail 第一项的 h）
+        const lockTarget = tail[0].h;
+        wrap._heightLockedAt = lockTarget;
+        wrap.setAttribute('data-height-locked', '1');
+        iframe.style.height = (lockTarget + 16) + 'px';
+        try {
+          console.warn(
+            '[ClaudeCoach widget] 检测到 vh / viewport 单位导致的高度循环增长，已锁定 iframe 高度 ≈',
+            lockTarget,
+            'px。如果显示不全，点 widget toolbar 的 "↕ 重测高度" 按钮。',
+          );
+        } catch (_e) { /* noop */ }
+        return;
+      }
+    }
+
+    // 正常路径：直接跟随
+    iframe.style.height = (reportedH + 16) + 'px';
+  }
+
+  /**
+   * 手动解锁并重新测高度：清掉锁定标记 + 历史，先把 iframe 设为 0，强制 vh 元素
+   * 缩到 0，再让 bridge 在 polling 中报出真实自然高度。
+   */
+  function relockWidgetHeight(wrap) {
+    const iframe = wrap.querySelector('iframe.cc-widget-iframe');
+    if (!iframe) return;
+    const id = wrap.dataset.widgetId;
+    wrap._heightLockedAt = undefined;
+    wrap.removeAttribute('data-height-locked');
+    if (id) _widgetHeightHistory.delete(id);
+    // 把 iframe 暂时压回小高度，强迫 vh 元素缩小，下次 reportH 会拿到内容自然高度
+    iframe.style.height = '100px';
+  }
+
+  // ===== widget ⋯ 菜单（删除 / 呼叫 AI）=====
+
+  let _widgetMoreMenuEl = null;
+
+  function ensureWidgetMoreMenu() {
+    if (_widgetMoreMenuEl) return _widgetMoreMenuEl;
+    const el = document.createElement('div');
+    // 复用 .lecture-context-menu 的浮层样式；cc-widget-more-menu 留给将来差异化用
+    el.className = 'lecture-context-menu cc-widget-more-menu';
+    el.hidden = true;
+    el.innerHTML =
+      '<button type="button" data-action="callout">💬 呼叫 AI（把这个 widget 当作上下文）</button>' +
+      '<button type="button" data-action="delete">🗑 删除这个 widget</button>';
+    document.body.appendChild(el);
+    // 阻止 menu 内 button mousedown 偷 focus / 折叠 document selection
+    el.addEventListener('mousedown', (e) => e.preventDefault());
+    el.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-action');
+      const wrap = el._currentWidget;
+      hideWidgetMoreMenu();
+      if (!wrap) return;
+      if (act === 'callout') callOutWidget(wrap);
+      else if (act === 'delete') deleteWidget(wrap);
+    });
+    _widgetMoreMenuEl = el;
+    return el;
+  }
+
+  function showWidgetMoreMenu(container, anchorBtn) {
+    const el = ensureWidgetMoreMenu();
+    el._currentWidget = container;
+    el.hidden = false;
+    // 锚在 ⋯ 按钮下方左对齐；做边界裁剪
+    const anchorRect = anchorBtn.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - elRect.width - 8));
+    const top = Math.max(8, Math.min(anchorRect.bottom + 4, window.innerHeight - elRect.height - 8));
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+
+  function hideWidgetMoreMenu() {
+    if (_widgetMoreMenuEl) {
+      _widgetMoreMenuEl.hidden = true;
+      _widgetMoreMenuEl._currentWidget = null;
+    }
+  }
+
+  /**
+   * "呼叫"：把整个 widget 当成一次 chip 选区，弹 popover。
+   * info.text = widget 完整源码 → AI 拿到完整上下文。
+   * startLine/endLine 从 container 继承的 data-source-line 拿（指向 .md 中
+   * ```widget 块的位置），便于"改这段"模式精确替换。
+   */
+  function callOutWidget(container) {
+    const startLineRaw = parseInt(container.getAttribute('data-source-line') || '', 10);
+    const endLineRaw = parseInt(container.getAttribute('data-source-line-end') || '', 10);
+    const startLine = Number.isFinite(startLineRaw) ? startLineRaw : 0;
+    const endLine = Number.isFinite(endLineRaw) ? endLineRaw : startLine + 1;
+    const text = _widgetUserSrc.get(container) || '';
+    const rect = container.getBoundingClientRect();
+    const info = {
+      startLine,
+      endLine,
+      text,
+      rect,
+      fromWidget: true,
+    };
+    currentSelectionInfo = info;
+    showPopoverFor(info);
+  }
+
+  /**
+   * "删除"：删除讲义 .md 中此 widget 块对应的行范围。
+   * 走宿主端 deleteLectureRange 消息，宿主负责 .bak 备份 + 写回，
+   * 之后 Ctrl+Z（讲义阅读器内）能撤回。
+   *
+   * 特别处理：如果 widget 被包在 <details class="cc-qa"> 外壳里（用户当时点
+   * "保存到讲义"通过 wrapAsCallout 生成的折叠卡片），单删 widget fence 会留下
+   * 空 details 壳。这里检测后扩大删除范围到含外壳 + 前置 \n\n---\n\n 分隔线。
+   */
+  function deleteWidget(container) {
+    if (!vscode) return;
+    let startLineRaw = parseInt(container.getAttribute('data-source-line') || '', 10);
+    let endLineRaw = parseInt(container.getAttribute('data-source-line-end') || '', 10);
+    if (!Number.isFinite(startLineRaw) || !Number.isFinite(endLineRaw)) {
+      flashStatus && flashStatus('该 widget 没有行号信息，无法删除', 'error');
+      return;
+    }
+
+    // widget 在 callout 内？扩大范围
+    if (container.closest && container.closest('details.cc-qa')) {
+      const lines = (state.content || '').split('\n');
+      // 往前最多看 8 行，找 <details 起始
+      let detailsStart = -1;
+      for (let i = startLineRaw - 1; i >= Math.max(0, startLineRaw - 8); i--) {
+        if (/^<details\b/i.test((lines[i] || '').trim())) { detailsStart = i; break; }
+      }
+      // 往后最多看 6 行（widget body 之后是 \n\n</details>\n），找 </details> 结束
+      let detailsEnd = -1;
+      for (let i = endLineRaw; i < Math.min(lines.length, endLineRaw + 6); i++) {
+        if (/^<\/details\b/i.test((lines[i] || '').trim())) { detailsEnd = i + 1; break; }
+      }
+      if (detailsStart >= 0 && detailsEnd >= 0) {
+        // 顺便清掉 wrapAsCallout 注入的前置 "\n\n---\n\n"：
+        // 跳过 <details 前的空行 → 如果遇到 --- 行也跳过 → 再跳 --- 前的空行
+        let cleanStart = detailsStart;
+        while (cleanStart > 0 && !(lines[cleanStart - 1] || '').trim()) cleanStart--;
+        if (cleanStart > 0 && (lines[cleanStart - 1] || '').trim() === '---') {
+          cleanStart--;
+          while (cleanStart > 0 && !(lines[cleanStart - 1] || '').trim()) cleanStart--;
+        }
+        startLineRaw = cleanStart;
+        endLineRaw = detailsEnd;
+      }
+    }
+
+    vscode.postMessage({
+      type: 'deleteLectureRange',
+      startLine: startLineRaw,
+      endLine: endLineRaw,
+    });
+  }
+
   // ===== DOM refs =====
 
   const els = {
@@ -970,10 +1274,117 @@ canvas { display: block; max-width: 100%; }
     state.content = String(content || '');
     if (!els.body) return;
     els.body.innerHTML = renderMarkdown(state.content);
+    rewriteRelativeImageSrc(els.body);  // 把 ![](assets/xxx) 相对路径变成 webview URI
     renderMath(els.body);
     void renderMermaid(els.body); // 异步，不 block
     void renderGraphviz(els.body); // 异步，不 block
     renderWidgets(els.body);       // 同步，但 iframe 内部脚本异步加载
+    renderVideoCards(els.body);    // 视频卡片（粘贴 YouTube/B 站 URL 后嵌入的）
+    renderSuggestPlaceholders(els.body);  // 讲义生成时 AI 输出的可视化建议块
+  }
+
+  /**
+   * 把 <div class="cc-suggest" data-kind="image|widget" data-query="..."> 渲染成
+   * 一个带按钮的卡片：让 Claude 搜图 / 生成 widget / 手动粘贴 / 删除建议。
+   *
+   * 每个 cc-suggest 块带 data-source-line（来自 markdown-it html_block token），
+   * 按钮点击时拿这个行号作为 targetLine 插入对应内容。
+   */
+  function renderSuggestPlaceholders(root) {
+    if (!root) return;
+    const blocks = root.querySelectorAll('div.cc-suggest[data-kind]');
+    blocks.forEach((wrap) => {
+      if (wrap.dataset.rendered === '1') return;
+      const kind = wrap.dataset.kind || 'image';
+      const query = wrap.dataset.query || '';
+      // 原文里的"💡 建议：..." 文字（保留作为卡片描述）
+      const hint = (wrap.textContent || '').trim();
+      const iconLabel = kind === 'image' ? '🖼' : '🎮';
+      const kindLabel = kind === 'image' ? '建议加图' : '建议加互动演示';
+      const primaryBtn = kind === 'image'
+        ? '<button class="cc-suggest-btn primary" data-action="suggest-search">🔍 让 Claude 搜图</button>'
+        : '<button class="cc-suggest-btn primary" data-action="suggest-widget">🎮 生成互动演示</button>';
+      wrap.innerHTML = `
+        <div class="cc-suggest-card">
+          <div class="cc-suggest-header">
+            <span class="cc-suggest-icon">${iconLabel}</span>
+            <span class="cc-suggest-label">${kindLabel}</span>
+          </div>
+          <div class="cc-suggest-body">${helpers.escapeHtml(hint || query)}</div>
+          <div class="cc-suggest-actions">
+            ${primaryBtn}
+            <button class="cc-suggest-btn" data-action="suggest-paste">📎 我自己粘</button>
+            <button class="cc-suggest-btn ghost" data-action="suggest-dismiss">✕ 不要</button>
+          </div>
+        </div>
+      `;
+      wrap.dataset.rendered = '1';
+    });
+  }
+
+  // 委托 suggest 卡片按钮点击 → 路由到对应模式
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('.cc-suggest-btn[data-action]');
+    if (!btn) return;
+    const wrap = btn.closest('div.cc-suggest');
+    if (!wrap) return;
+    const act = btn.getAttribute('data-action');
+    const kind = wrap.dataset.kind || 'image';
+    const query = wrap.dataset.query || '';
+    const startLine = parseInt(wrap.getAttribute('data-source-line') || '0', 10);
+    const endLine = parseInt(wrap.getAttribute('data-source-line-end') || String(startLine + 1), 10);
+    const rect = wrap.getBoundingClientRect();
+    // 构造 info 让 submit 函数当成"选区在 suggest 块上"处理
+    const info = {
+      startLine: Number.isFinite(startLine) ? startLine : 0,
+      endLine: Number.isFinite(endLine) ? endLine : (Number.isFinite(startLine) ? startLine + 1 : 1),
+      text: '',
+      rect,
+      fromSuggest: true,
+    };
+
+    if (act === 'suggest-search') {
+      // 直接调 Claude Code 搜图，query 用 prompt 里 AI 写的
+      submitInlineSearchImage(info, query || '相关教学示意图');
+      // 把 suggest 块标记为"处理中"
+      wrap.classList.add('cc-suggest-busy');
+    } else if (act === 'suggest-widget') {
+      // 触发 widget 生成
+      submitInlineWidget(info, query || '相关概念的互动演示');
+      wrap.classList.add('cc-suggest-busy');
+    } else if (act === 'suggest-paste') {
+      // 提示用户粘贴：什么都不做，让用户 Ctrl+V 粘剪贴板里的图
+      // 但要把 currentSelectionInfo 设到这里，让 pasteMedia 知道插哪
+      currentSelectionInfo = info;
+      toast('提示：粘贴剪贴板里的图片（Ctrl+V），会插入到此建议处', 'info');
+    } else if (act === 'suggest-dismiss') {
+      // 删除这个建议块（连同 source line 范围一起删）
+      if (!vscode) return;
+      vscode.postMessage({
+        type: 'deleteLectureRange',
+        startLine: info.startLine,
+        endLine: info.endLine,
+      });
+    }
+  });
+
+  /**
+   * 把 markdown 渲染产物里 <img src="assets/foo.png"> 之类的相对路径，
+   * 重写成 webview 可加载的绝对 URI（assetBaseUri + '/' + 相对路径）。
+   * 绝对 URL（http/https/data/blob/vscode-*）原样保留。
+   */
+  function rewriteRelativeImageSrc(root) {
+    if (!root || !state.assetBaseUri) return;
+    const imgs = root.querySelectorAll('img[src]');
+    imgs.forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      if (!src) return;
+      if (/^(https?:|data:|blob:|file:|vscode-|\/\/)/i.test(src)) return;  // 绝对路径不动
+      // 拼接：assetBaseUri/<src>，去重斜杠
+      const base = state.assetBaseUri.replace(/\/+$/, '');
+      const rel = src.replace(/^\/+/, '');
+      img.setAttribute('src', base + '/' + rel);
+    });
   }
 
   function setHeader(args) {
@@ -1082,12 +1493,14 @@ canvas { display: block; max-width: 100%; }
           { key: 'rewrite', label: '🛠 重写整篇', hint: 'AI 输出完整新版讲义并整篇覆盖（强制走预览 + 自动 .bak 备份，可撤回）' },
           { key: 'ask', label: '❓ 提问', hint: 'AI 基于整篇讲义回答你的问题' },
           { key: 'widget', label: '🎮 互动演示', hint: '强制让 AI 输出一个 ```widget 代码块（可点按钮 / 拖滑块的交互式演示），追加到讲义末尾' },
+          { key: 'searchImage', label: '🔍 智能搜图', hint: '让 Claude Code（用你的 Claude 订阅，零额外费用）联网搜 1-3 张教学图，下载到 assets/ 并嵌入讲义' },
           { key: 'idea', label: '💡 记想法', hint: '把你的想法以引用块追加到讲义末尾' },
         ]
       : [
           { key: 'rewrite', label: '🛠 改这段', hint: 'AI 输出会替换/插入到选区' },
           { key: 'ask', label: '❓ 提问', hint: 'AI 会以聊天形式回答，不动讲义' },
           { key: 'widget', label: '🎮 互动演示', hint: '强制让 AI 基于这段输出一个 ```widget 互动演示块' },
+          { key: 'searchImage', label: '🔍 智能搜图', hint: '让 Claude Code 联网搜跟这段相关的教学图，下载到 assets/ 并嵌入选区下方' },
           { key: 'idea', label: '💡 记想法', hint: '把你的想法以脚注形式追加到这段下方，不调 AI' },
         ];
     const modeButtons = modes.map((m) => {
@@ -1111,15 +1524,18 @@ canvas { display: block; max-width: 100%; }
               ? (info.isFullDoc
                   ? '描述要做什么互动演示：「Dijkstra 单步演示，6 个节点」「ReLU 函数图带温度滑块」「快排可视化」…'
                   : '描述基于这段做什么互动演示：「这个算法的单步演示」「这个概念的可调参数可视化」…')
-              : (info.isFullDoc
-                  ? '记下你自己的想法/疑问，会作为引用块追加到讲义末尾。'
-                  : '记下你自己的想法/疑问，会作为引用块追加到这段下方。');
+              : m.key === 'searchImage'
+                ? '描述要搜什么图：「Transformer 完整架构图」「TCP 三次握手示意图」「CPU 五级流水图」…'
+                : (info.isFullDoc
+                    ? '记下你自己的想法/疑问，会作为引用块追加到讲义末尾。'
+                    : '记下你自己的想法/疑问，会作为引用块追加到这段下方。');
         btnSubmit.textContent = m.key === 'rewrite'
           ? (info.isFullDoc
               ? '重写整篇讲义'
               : (state.applyMode === 'auto-apply' ? '直接改写' : '发送给 AI'))
           : m.key === 'ask' ? '问 AI'
           : m.key === 'widget' ? '🎮 生成互动演示'
+          : m.key === 'searchImage' ? '🔍 让 Claude 搜图'
           : '保存想法';
       });
       modeBar.appendChild(btn);
@@ -1174,6 +1590,8 @@ canvas { display: block; max-width: 100%; }
         submitInlineAsk(info, instruction);
       } else if (currentMode === 'widget') {
         submitInlineWidget(info, instruction);
+      } else if (currentMode === 'searchImage') {
+        submitInlineSearchImage(info, instruction);
       } else {
         submitInlineIdea(info, instruction);
       }
@@ -1231,21 +1649,77 @@ canvas { display: block; max-width: 100%; }
       '   - ✅ SVG 节点 fill 用 `var(--accent)` / `var(--fg)`（前景色）；stroke 用 `var(--border)` / `var(--accent-fg)`',
       '   - ✅ SVG 边 stroke 用 `var(--fg)` / `var(--accent)` 这种前景色；不要用 `var(--border)` 因为 border 颜色对暗背景对比度低',
       '8. **不要写死 1000px 这种像素宽度**，要响应式',
+      '   8a. **绝对不要用 viewport 单位** `vh` `vw` `vmin` `vmax` `svh` `dvh` `lvh` `dvw` —— iframe 高度跟随内容自适应，vh 元素会让 iframe 增高 → vh 跟着增 → 死循环。需要"较大块"用具体 `px`（例如 `min-height: 400px`）；需要相对宽度用 `%`',
       '9. **绝对不要内联 `// 注释`**：因为 AI 经常把多个语句压一行，`// xxx` 注释会**吃掉同一行后面的所有代码**，导致 syntax error。要写注释**用 `/* xxx */` 块注释**，或者把注释独占一行。',
       '10. **每个语句独占一行**，不要 `a;b;c;d;` 压一行。代码再啰嗦也比单行难调试强。',
       '11. **不要把整段 JS 包在 try/catch** —— 会吞掉真实逻辑 bug。让错误抛出，iframe bridge 的 error 监听会显示醒目红色覆盖层方便排查',
       '12. **写完代码自己脑中跑一遍**：数据数组（nodes/edges/items）有真元素？init()/reset() 真填了状态？render() 调用时数据 ready 了吗？',
       '13. **保持简单 < 100 行 JS**。多功能 ≠ 好 widget。别上 playback / 调速滑块 / 多状态那一套，单纯"下一步 / 重置 + 高亮当前节点"就够好。复杂 = bug = 白屏',
+      '14. **默认上下分区布局，不要左右两列**。widget iframe 宽度有限（讲义阅读器一栏 ≈ 1300px），左右各占 50% 后每列只剩 ≈ 550px，SVG 图被压扁、表格行被挤、节点标签和边权挤一起，整体局促。',
+      '    - ✅ 推荐：`display: flex; flex-direction: column; gap: 16px;` —— 上面放图/可视化（占满宽度），下面放控制按钮 + 数据表',
+      '    - ✅ 下半区如果有多个小卡片（queue / result / table），可以横向 `display: grid; grid-template-columns: auto auto 1fr;` 并排但权重不同',
+      '    - ❌ 避免：把"图区"和"控制+数据区"用 `grid-template-columns: 1fr 1fr` 或 `flex-direction: row` 左右切两半 —— 图被压瘦，右侧多个卡片再纵向堆 → 整体局促',
+      '    - 例外：纯"对比 A vs B"这种语义上必须并排的可以左右',
       '',
       '## 演示设计要求',
       '- 有可点的按钮（至少 1-2 个：下一步 / 重置）',
       '- 有视觉反馈（高亮 / 颜色变化 / 数字更新），不能只是静态图',
       '- 当前步骤 / 状态在 UI 上可见',
       '',
+      '## 算法演示型 widget 视觉系统（图 / 树 / 排序 / DP 等，必读）',
+      '如果演示涉及"节点 / 顶点 / 多状态切换 / 多步推进"（Dijkstra、BFS、拓扑排序、各种 sort、并查集、DP 表格等），必须按下面这套硬规范输出，否则即使能跑也"看不清状态/混乱/丑"。',
+      '',
+      'A. **节点 5 状态色板（必须可视区分，不要全用 accent 同色！）**：',
+      '   - 起点/源点：`fill="var(--accent)" stroke="var(--accent-fg)" stroke-width="3"`',
+      '   - **当前正在处理**：`fill="#f59e0b"` 独立 amber 色，**不要复用 accent**，必须是第二种独立色，让用户一眼看到"现在轮到谁"',
+      '   - 候选 / 已发现但未确定：`fill="var(--accent)" opacity="1"`',
+      '   - 已 settled / 已确定：`fill="var(--muted)" opacity="0.7"` 暗淡表示"已处理完"',
+      '   - 未发现 / 未访问：`fill="transparent" stroke="var(--border)" stroke-width="2"` 空心',
+      '   - 状态切换：`setAttribute("class", "state-current")` 然后 CSS 控样式，或直接改 fill/stroke',
+      '',
+      'B. **节点旁贴实时数据**：节点圆下方加 `<text>` 显示当前 `dist=∞` / `in=2` / `cost=5` 等实时值。用户不用回头扫表格才知道现在每个节点的状态。',
+      '',
+      'C. **边的 stroke 和 marker 必须够粗**：',
+      '   - 边普通态：`stroke="var(--border)" stroke-width="2"`（不要 1px，太细看不见）',
+      '   - 边高亮态（当前正在 relax / 当前在路径上）：`stroke="#f59e0b" stroke-width="3"`',
+      '   - 有方向时 marker：`markerWidth="10" markerHeight="8" refX` 必须算准（让箭头落在节点圆外、不钻进圆里）',
+      '',
+      'D. **边权 / 边 label 必须加底色描边**：SVG 裸 `<text>` 直接放边中点会跟边线打架。两种做法选一：',
+      '   - 加 stroke 描边：`<text paint-order="stroke fill" stroke="var(--bg)" stroke-width="4" fill="var(--fg)">2</text>` —— 文字外有一圈底色',
+      '   - 加背景矩形：`<rect fill="var(--panel-bg)" rx="4" />` 垫在 text 后面',
+      '',
+      'E. **节点布局手工排版避免边交叉**：≤ 7 节点应该分 2-3 层（左中右 或 上中下），同层节点 y 一致。不要随手摆位置让边在中央打结。',
+      '',
+      'F. **控制台分独立卡片，不要压扁**：',
+      '   - 卡片 1：「当前步骤说明」（panel-bg 背景 + padding + border-radius，显示当前在做什么）',
+      '   - 卡片 2：「当前数据结构状态」（priority queue / stack / settled 集合 / queue 列表 / 拓扑序结果）—— **必须有**，让用户看到算法内部状态',
+      '   - 卡片 3：「主数据表」',
+      '   - 每个卡片 `background: var(--panel-bg); border-radius: 8px; padding: 12px;` 视觉分块',
+      '',
+      'G. **数据表用纵向布局**：每行一个节点/实体，列固定为（节点名 + 各字段 + 状态）。不要"列=节点"横向铺开 —— 加节点列就要拉宽，且行少难扫读。',
+      '',
+      'H. **边权 text 位置 + 描边**：text 沿边段放在 0.45-0.5 比例处（避开两端节点圆，不要贴节点），描边用 `paint-order="stroke fill" stroke="var(--bg)" stroke-width="5"` —— stroke-width 必须 ≥ 5 才能在暗背景上清晰区分（4 还会跟边线打架）。',
+      '',
+      'I. **箭头 marker 颜色随边走，不要写死白色**：marker `fill` 用 `context-stroke`（SVG2）或者用 CSS `marker { fill: var(--fg) }` 通过 class 同步切换。当边切到 amber 高亮态时，marker fill 也要变 amber。**不能让边变色但箭头还是白色** —— 视觉断层。简单做法：定义两个 marker（`#arrow-normal` `#arrow-current`），用 JS 切换 `setAttribute("marker-end", "url(#arrow-current)")`。',
+      '',
+      'J. **节点外环不要硬白边**：暗背景上 `stroke="var(--fg)" stroke-width="3"` 等效"白圈贴纸"。普通态用 `stroke="color-mix(in srgb, var(--fg) 30%, transparent)"` 或者 `stroke="var(--border)"`；只有 "当前处理"高亮态才用强 stroke 突出。',
+      '',
+      'K. **表格高亮行**（"当前正在处理 / discovered"）**用低饱和底色 + 不变字色**：底色 `background: color-mix(in srgb, #f59e0b 22%, transparent)`，字色仍是 `var(--fg)`。**绝对不要让字色变浅**（字浅 + 底色浅 → 对比度炸）。或者只给"状态"那一列加 chip 标签，整行不染色。',
+      '',
+      'L. **"当前数据结构状态"用 chip 而非 log 文本**：`priority queue: (3,b), (4,c)` 这种 log 形式可读性差。改成每个项目用圆角 pill：`<span class="chip">(3, b)</span> <span class="chip">(4, c)</span>`，chip CSS：`display: inline-flex; padding: 4px 10px; border-radius: 999px; background: var(--panel-bg); border: 1px solid var(--border); margin-right: 6px; font-size: 13px;`。',
+      '',
+      'M. **整体字号梯度**：标题 14-15px / 正文 13-13.5px / 标签或辅助说明 11.5-12px。不要全部 12px 一刀切（信息层级看不出）。卡片标题用 `font-weight: 600` 给视觉锚点。',
+      '',
       '## 用户需求',
       instruction,
       '',
-      '现在请直接输出 ```widget 代码块，开始。',
+      '## 输出格式硬约束（最重要，最后强调一次）',
+      '你的回复**第一个字符必须是反引号 `**，前 9 个字符必须是 "```widget" 加一个换行。',
+      '**禁止**在 "```widget" 之前写任何文字 / 解释 / 引导语（"好的，下面是..." / "我来生成一个..." 之类全部禁止）。',
+      '**禁止**直接以 `<!DOCTYPE html>` / `<html` / `<style` / `<div` / `<script` 等 HTML 标签开头 —— 必须先 "```widget" + 换行，然后才是 HTML。',
+      '回复**最后 3 个字符必须是 "```"**（关闭围栏）。',
+      '',
+      '现在开始输出。第一行必须是 ```widget',
     ].join('\n');
 
     vscode.postMessage({
@@ -1260,6 +1734,38 @@ canvas { display: block; max-width: 100%; }
         turnId,
         intent: 'ask',
       },
+    });
+  }
+
+  /**
+   * 智能搜图模式：发 claudeCodeSearchImage 给宿主，宿主 spawn Claude Code CLI
+   * 跑搜图任务（用用户 Claude 订阅，零额外 token 费用）。
+   * 进度通过 streaming bubble 显示（宿主端 push aiStreamDelta 文本片段），
+   * 结束后宿主发 inlineCancelled 关闭 bubble + 弹 toast。
+   */
+  function submitInlineSearchImage(info, instruction) {
+    if (!vscode) return;
+    const turnId = (helpers.uuid && helpers.uuid()) || ('t-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    state.activeTurns.set(turnId, {
+      info: { startLine: info.startLine, endLine: info.endLine, text: info.text || '', rect: info.rect },
+      instruction,
+      mode: 'searchImage',
+    });
+    // 用 pending bubble 占位（aiStreamDelta 到达后会切到 streaming bubble）
+    showPendingBubble(turnId, info);
+
+    // 决定插入位置：选区结束行后；全文模式则末尾
+    const targetLine = info.isFullDoc ? 'end' : info.endLine;
+
+    vscode.postMessage({
+      type: 'claudeCodeSearchImage',
+      turnId,
+      query: instruction,
+      targetLine,
+      // 上下文（让 Claude 写更精准的 search query）
+      subject: state.subject || '',
+      topic: state.topicTitle || '',
+      lessonTitle: state.lessonTitle || '',
     });
   }
 
@@ -1400,9 +1906,46 @@ canvas { display: block; max-width: 100%; }
     bubble = document.createElement('div');
     bubble.className = 'lecture-suggestion-bubble';
     bubble.dataset.turnId = turnId;
+    // 事件委托：cancel-turn / 其它将来加的 bubble 内按钮统一在这里分发。
+    // bubble.innerHTML 多次重写后子元素会重建，但绑在 bubble 上的 listener 不变，
+    // 冒泡上来仍然能命中。
+    bubble.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-action');
+      if (act === 'cancel-turn') {
+        const tid = btn.getAttribute('data-turn-id') || turnId;
+        cancelTurn(tid);
+      }
+    });
     document.body.appendChild(bubble);
     bubbles.set(turnId, bubble);
     return bubble;
+  }
+
+  /**
+   * 取消正在进行的 AI 生成 turn：**用户视角立即清理**（关 bubble + 清状态 + toast），
+   * 不等宿主端响应。
+   *
+   * 为什么不等宿主端：之前的实现是"显示'已请求取消…' → 等宿主 abort + 回 inlineCancelled
+   * → 才 removeBubble"，但如果 abort 路径任何一环卡住（client.ts 还没 compile、fetch 的
+   * signal 没真正接到、SSE 流读到一半才响应 abort 等），bubble 就一直挂在那。
+   *
+   * 现在：webview 端立刻摆脱这个 turn。宿主端的 abort + inflightTurns 清理在后台异步跑，
+   * 跟 UI 解耦。即使宿主端最终送回 inlineSuggestResult preview（abort 来不及），
+   * showPreviewBubble 看到 activeTurns 找不到此 turnId 会直接 return（已经验证安全）。
+   */
+  function cancelTurn(turnId) {
+    if (!vscode || !turnId) return;
+    // 通知宿主端 abort（不等结果）
+    vscode.postMessage({ type: 'cancelInlineSuggest', turnId });
+    // 立即清理 webview 端的所有 turn 状态
+    const entry = state.streamingTurns.get(turnId);
+    if (entry?.trailingTimer) clearTimeout(entry.trailingTimer);
+    state.streamingTurns.delete(turnId);
+    state.activeTurns.delete(turnId);
+    removeBubble(turnId);
+    toast('已取消 AI 生成', 'info');
   }
 
   function positionBubble(bubble /*, anchor 已废弃 */) {
@@ -1431,15 +1974,39 @@ canvas { display: block; max-width: 100%; }
     const bubble = ensureBubble(turnId);
     bubble.classList.remove('pending', 'preview', 'applied', 'failed');
     bubble.classList.add('streaming');
-    const tagLabel = (turn.mode === 'ask') ? 'AI 回答中…' : 'AI 生成中…';
+    const tagLabel = (turn.mode === 'widget') ? '🎮 互动演示生成中…'
+      : (turn.mode === 'searchImage') ? '🔍 Claude 正在搜图…'
+      : (turn.mode === 'ask') ? 'AI 回答中…'
+      : 'AI 生成中…';
     bubble.innerHTML = `
       <div class="bubble-header">
         <span class="bubble-tag">${tagLabel}</span>
         <span class="bubble-range">行 ${turn.info.startLine + 1}–${turn.info.endLine}</span>
+        <button type="button" class="bubble-cancel-btn" data-action="cancel-turn" data-turn-id="${turnId}" title="取消这次 AI 生成（中断网络请求）">✕ 取消</button>
       </div>
       <div class="bubble-body markdown-body" data-streaming-body></div>
     `;
     positionBubble(bubble, bubbleAnchorRect(turnId));
+  }
+
+  /**
+   * markdown-it 配置了 html:true（讲义里 <details> 等需要透传 raw HTML），但
+   * streaming 阶段 AI 一字一字往外吐 widget 源码时，AI 输出里的 <style>/<script>
+   * 会在 ```widget 围栏闭合前被 markdown-it 当 raw HTML 注入 DOM。webview CSP
+   * 包含 style-src 'unsafe-inline'（widget iframe srcdoc 需要它），所以 <style>
+   * 真的被浏览器执行 —— widget 内的 `:root { --bg: #ffffff }` 把整个 webview
+   * 的 --bg 改成白色，bubble 整片变白。CSP 只拦 <script>（script-src 不含
+   * 'unsafe-inline'），但 <style> 兜不住。这里在 markdown 输出后用正则剥掉。
+   */
+  function sanitizeRawStyleScript(html) {
+    let s = String(html || '');
+    // 完整闭合的：整段剥
+    s = s.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+    s = s.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    // streaming 未闭合的（流式输出到一半）：从 <style 一直切到末尾
+    s = s.replace(/<style\b[\s\S]*$/i, '');
+    s = s.replace(/<script\b[\s\S]*$/i, '');
+    return s;
   }
 
   function updateStreamingBubble(turnId, text) {
@@ -1447,7 +2014,25 @@ canvas { display: block; max-width: 100%; }
     if (!bubble) return;
     const body = bubble.querySelector('[data-streaming-body]');
     if (!body) return;
-    body.innerHTML = renderMarkdown(text);
+
+    // widget 模式 streaming 期早期兜底：AI 即便经过 prompt 加强仍可能不写 ```widget
+    // 围栏（注意力衰减），直接吐 raw HTML 开头。如果不前置围栏，markdown-it 会把
+    // <!DOCTYPE>/<html>/<body>/<div>/<svg> 等当 raw HTML 透传，浏览器尝试解析 →
+    // bubble 里既污染样式又显示乱七八糟。这里检测：widget 模式 + 内容不是 ```
+    // 开头 → 前置 "```widget\n" 让 markdown-it 把整段当未闭合 fence 渲染（hljs
+    // 代码块外观，干净）。stream 结束后宿主端会把完整内容包成 ```widget...```，
+    // showPreviewBubble 重建 DOM 时 renderWidgets 再把它变成 iframe。
+    const turn = state.activeTurns.get(turnId);
+    let renderText = text;
+    if (turn && turn.mode === 'widget') {
+      const trimmed = String(text || '').trim();
+      // 还没开始 / 不以反引号开头（说明 AI 直接吐 HTML 或别的）
+      if (trimmed && !/^```/.test(trimmed)) {
+        renderText = '```widget\n' + text;
+      }
+    }
+
+    body.innerHTML = sanitizeRawStyleScript(renderMarkdown(renderText));
     renderMath(body);
     // mermaid 渲染留到 final（每 50ms 重新 render mermaid 太重）
     positionBubble(bubble, bubbleAnchorRect(turnId));
@@ -1461,6 +2046,7 @@ canvas { display: block; max-width: 100%; }
       <div class="bubble-header">
         <span class="bubble-tag">AI 思考中</span>
         <span class="bubble-range">行 ${info.startLine + 1}–${info.endLine}</span>
+        <button type="button" class="bubble-cancel-btn" data-action="cancel-turn" data-turn-id="${turnId}" title="取消这次 AI 生成（中断网络请求）">✕ 取消</button>
       </div>
       <div class="bubble-body bubble-loading">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -1478,13 +2064,21 @@ canvas { display: block; max-width: 100%; }
 
     // intent 优先取后端透传的，其次从 turn 里拿
     const effectiveIntent = intent || turn.mode || 'rewrite';
-    bubble.classList.toggle('ask', effectiveIntent === 'ask');
+    // widget 模式提交时为了避免走 rewrite 写回，复用了 intent='ask' 发给后端，
+    // 但前端 turn.mode 仍然记录的是真实意图 'widget'。UI 文案要优先看 turn.mode，
+    // 否则 widget 模式会跟着 ask 路径显示成 "AI 回答" / "🤖 AI 回答" 的 callout。
+    const isWidget = turn.mode === 'widget';
+    const isAskLike = !isWidget && effectiveIntent === 'ask';
+    bubble.classList.toggle('ask', isAskLike);
+    bubble.classList.toggle('widget', isWidget);
 
     bubble.innerHTML = '';
 
     const header = document.createElement('div');
     header.className = 'bubble-header';
-    const tagLabel = effectiveIntent === 'ask' ? 'AI 回答' : 'AI 建议';
+    const tagLabel = isWidget ? '🎮 互动演示'
+      : isAskLike ? 'AI 回答'
+      : 'AI 建议';
     header.innerHTML = `
       <span class="bubble-tag">${tagLabel}</span>
       <span class="bubble-range">行 ${turn.info.startLine + 1}–${turn.info.endLine}</span>
@@ -1493,7 +2087,9 @@ canvas { display: block; max-width: 100%; }
 
     const body = document.createElement('div');
     body.className = 'bubble-body markdown-body';
-    body.innerHTML = renderMarkdown(suggestion);
+    // 跟 streaming 同样兜底 raw <style>/<script>：AI 偶尔忘写 ```widget 围栏直接吐
+    // raw HTML，markdown-it html:true 会透传 → 浏览器执行 → 污染 webview :root。
+    body.innerHTML = sanitizeRawStyleScript(renderMarkdown(suggestion));
     renderMath(body);
     void renderMermaid(body);
     void renderGraphviz(body);
@@ -1504,11 +2100,14 @@ canvas { display: block; max-width: 100%; }
     actions.className = 'bubble-actions';
 
     if (effectiveIntent === 'ask') {
-      // 提问模式：不写文件。提供"作为想法保存"和"关闭"两个按钮
+      // 提问模式（或 widget 模式 —— widget 复用 ask 不走 rewrite 写回）：
+      // 提供"存到讲义"和"关闭"两个按钮。widget 和真 ask 文案区分。
       const btnSaveAsIdea = document.createElement('button');
       btnSaveAsIdea.className = 'btn-ghost';
-      btnSaveAsIdea.textContent = '把回答存到讲义';
-      btnSaveAsIdea.title = '把 AI 回答作为引用块追加到选区下方';
+      btnSaveAsIdea.textContent = isWidget ? '保存到讲义' : '把回答存到讲义';
+      btnSaveAsIdea.title = isWidget
+        ? '把互动演示作为可折叠块追加到选区下方'
+        : '把 AI 回答作为引用块追加到选区下方';
       const btnClose = document.createElement('button');
       btnClose.className = 'btn-primary';
       btnClose.textContent = '收到，关闭';
@@ -1521,7 +2120,8 @@ canvas { display: block; max-width: 100%; }
         // 表格 / 列表都不会再被 `>` 前缀破坏）。
         // 去掉 instruction 里的"【模式：...】"前缀，让 summary 显示真正的问题
         const rawQuestion = String((turn && turn.instruction) || '').replace(/^【[^】]*】/, '').trim();
-        const note = wrapAsCallout('🤖 AI 回答', suggestion, { summary: rawQuestion });
+        const calloutLabel = isWidget ? '🎮 互动演示' : '🤖 AI 回答';
+        const note = wrapAsCallout(calloutLabel, suggestion, { summary: rawQuestion });
         vscode.postMessage({
           type: 'inlineApply',
           request: {
@@ -1646,6 +2246,207 @@ canvas { display: block; max-width: 100%; }
     }, 3200);
   }
 
+  // ===== 多模态：粘贴图 / 拖入图 / 粘贴 URL =====
+  // 设计：webview 监听全局 paste / drop，识别剪贴板/拖入数据：
+  //   - 图片 blob → 读 dataURL → 发宿主 pasteMedia { kind:'image-blob' }
+  //   - URL 字符串 → 识别图/YouTube/Bilibili → 发宿主 pasteMedia { kind:'url' }
+  // 宿主端写到 assets/ 或生成视频卡片 markdown，插到 targetLine 或末尾。
+
+  /** 从 URL 识别出多模态类型 + 元数据。 */
+  function detectMediaUrl(url) {
+    const s = String(url || '').trim();
+    if (!s) return null;
+    // YouTube：youtu.be/<ID>?t=N 或 youtube.com/watch?v=<ID>&t=Ns
+    let m = s.match(/^https?:\/\/(?:www\.|m\.)?youtu(?:be\.com\/watch\?[^#\s]*v=|\.be\/)([A-Za-z0-9_-]{6,})/i);
+    if (m) {
+      const id = m[1];
+      const tMatch = s.match(/[?&]t=(\d+)(?:h(\d+))?m?(\d+)?s?/i) || s.match(/[?&]t=(\d+)m(\d+)s/i) || s.match(/[?&]start=(\d+)/i);
+      let t = 0;
+      if (tMatch) {
+        // 简单：只接受纯秒数（?t=120），更复杂的 1h2m30s 留给用户后续手改
+        const raw = String(s).match(/[?&](?:t|start)=(\d+)/);
+        if (raw) t = parseInt(raw[1], 10) || 0;
+      }
+      return { kind: 'video', platform: 'youtube', id, t, url: s };
+    }
+    // Bilibili：bilibili.com/video/BVxxx 或 av123，?t=N 秒
+    m = s.match(/^https?:\/\/(?:www\.|m\.)?bilibili\.com\/video\/(BV[a-zA-Z0-9]+|av\d+)/i);
+    if (m) {
+      const id = m[1];
+      const tMatch = s.match(/[?&]t=(\d+)/);
+      const t = tMatch ? parseInt(tMatch[1], 10) || 0 : 0;
+      return { kind: 'video', platform: 'bilibili', id, t, url: s };
+    }
+    // 普通图片：扩展名结尾，或带常见图床路径
+    if (/\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?|#|$)/i.test(s) && /^https?:\/\//i.test(s)) {
+      return { kind: 'image-url', url: s };
+    }
+    return null;
+  }
+
+  /** 从 File / Blob 读出 dataURL，给宿主发图片字节。 */
+  function readBlobAsDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /** 决定插入位置：有选区 → 选区结束行；无选区 → 末尾（'end'）。 */
+  function pickInsertLine() {
+    if (currentSelectionInfo && !currentSelectionInfo.isFullDoc
+        && Number.isFinite(currentSelectionInfo.endLine)) {
+      return currentSelectionInfo.endLine;
+    }
+    return 'end';
+  }
+
+  async function handlePastedFile(file) {
+    if (!vscode) return false;
+    if (!file || !/^image\//i.test(file.type || '')) return false;
+    try {
+      const dataUrl = await readBlobAsDataUrl(file);
+      vscode.postMessage({
+        type: 'pasteMedia',
+        media: { kind: 'image-blob', dataUrl, name: file.name || 'image.png', mime: file.type },
+        targetLine: pickInsertLine(),
+      });
+      toast('已粘贴图片，正在保存…', 'info');
+      return true;
+    } catch (err) {
+      toast('读取图片失败：' + (err && err.message ? err.message : err), 'error');
+      return false;
+    }
+  }
+
+  function handlePastedUrl(url) {
+    if (!vscode) return false;
+    const info = detectMediaUrl(url);
+    if (!info) return false;
+    vscode.postMessage({
+      type: 'pasteMedia',
+      media: info,
+      targetLine: pickInsertLine(),
+    });
+    const label = info.kind === 'video'
+      ? (info.platform === 'youtube' ? 'YouTube' : 'Bilibili') + ' 视频'
+      : '图片 URL';
+    toast(`已识别 ${label}，正在嵌入…`, 'info');
+    return true;
+  }
+
+  // paste 事件：剪贴板里有图就拦截走我们的流程；否则放行（让 textarea 等正常粘贴）
+  document.addEventListener('paste', (e) => {
+    // 在 input / textarea / contentEditable 内不拦截，让原生粘贴生效
+    const t = e.target;
+    const tag = (t && t.tagName) ? t.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+
+    const cd = e.clipboardData;
+    if (!cd) return;
+    // 优先找图片
+    for (let i = 0; i < cd.items.length; i++) {
+      const item = cd.items[i];
+      if (item.kind === 'file' && /^image\//i.test(item.type)) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          void handlePastedFile(file);
+          return;
+        }
+      }
+    }
+    // 没图片：尝试当 URL 处理
+    const text = cd.getData('text/plain') || '';
+    if (text && /^https?:\/\//i.test(text.trim())) {
+      const handled = handlePastedUrl(text.trim());
+      if (handled) e.preventDefault();
+    }
+  });
+
+  // dragover + drop：拖入图片文件
+  document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();  // 必须 preventDefault 才能触发 drop
+    }
+  });
+  document.addEventListener('drop', (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    const file = e.dataTransfer.files[0];
+    if (file && /^image\//i.test(file.type || '')) {
+      e.preventDefault();
+      void handlePastedFile(file);
+    }
+  });
+
+  // ===== 视频卡片渲染 =====
+  // 讲义 md 里的视频用如下 markdown 表示（pasteMedia 宿主端生成）：
+  //   <div class="cc-video" data-platform="youtube" data-id="xxx" data-t="120"
+  //        data-url="https://..."><a href="https://...">视频标题</a></div>
+  // 这里把它替换成卡片 UI：缩略图 + 标题 + 时间戳 + 平台徽章，点击发消息让宿主用
+  // vscode.env.openExternal 打开（webview 不能直接打开外链）。
+  function renderVideoCards(root) {
+    if (!root) return;
+    const blocks = root.querySelectorAll('.cc-video[data-platform][data-id]');
+    blocks.forEach((wrap) => {
+      if (wrap.dataset.rendered === '1') return;
+      const platform = wrap.dataset.platform;
+      const id = wrap.dataset.id;
+      const t = parseInt(wrap.dataset.t || '0', 10) || 0;
+      const url = wrap.dataset.url || (
+        platform === 'youtube'
+          ? 'https://www.youtube.com/watch?v=' + id + (t ? '&t=' + t + 's' : '')
+          : platform === 'bilibili'
+            ? 'https://www.bilibili.com/video/' + id + (t ? '?t=' + t : '')
+            : '#'
+      );
+      // YouTube 的 hqdefault 缩略图 URL 是固定模板；B 站官方缩略图需要 API，
+      // 暂时用一个占位 SVG（深灰底 + 平台 logo 字符），后续可换 oEmbed 抓真图。
+      const thumbUrl = platform === 'youtube'
+        ? 'https://i.ytimg.com/vi/' + helpers.escapeHtml(id) + '/hqdefault.jpg'
+        : '';
+      // 时间戳：120 秒 → "2:00"
+      const tStr = t > 0
+        ? Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0')
+        : '';
+      const platformLabel = platform === 'youtube' ? 'YouTube'
+        : platform === 'bilibili' ? 'Bilibili'
+        : '视频';
+      // 取卡片内现有的 <a> 文本（如果有）作为标题；否则用 URL 当标题
+      const existingLink = wrap.querySelector('a');
+      const title = (existingLink && existingLink.textContent.trim()) || url;
+      wrap.innerHTML = `
+        <a class="cc-video-card" href="#" data-open-external="${helpers.escapeHtml(url)}">
+          <div class="cc-video-thumb"${thumbUrl ? ' style="background-image:url(' + thumbUrl + ')"' : ''}>
+            ${thumbUrl ? '' : '<span class="cc-video-thumb-fallback">' + platformLabel + '</span>'}
+            <span class="cc-video-play">▶</span>
+          </div>
+          <div class="cc-video-meta">
+            <div class="cc-video-title">${helpers.escapeHtml(title)}</div>
+            <div class="cc-video-sub">
+              <span class="cc-video-platform">📺 ${platformLabel}</span>
+              ${tStr ? '<span class="cc-video-t">⏱ ' + helpers.escapeHtml(tStr) + ' 起</span>' : ''}
+            </div>
+          </div>
+        </a>
+      `;
+      wrap.dataset.rendered = '1';
+    });
+  }
+
+  // 全局接管视频卡片点击 → 让宿主用 vscode.env.openExternal 打开
+  document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest && e.target.closest('[data-open-external]');
+    if (!a) return;
+    e.preventDefault();
+    const url = a.getAttribute('data-open-external');
+    if (url && vscode) {
+      vscode.postMessage({ type: 'openExternalUrl', url });
+    }
+  });
+
   // ===== undo pill =====
   // 写回成功后，右下角浮出一个"↶ 撤回上次写入"小药丸。点击后让宿主用 .bak
   // 还原。10 秒不点自动隐藏（再次写回时会重新显示）。
@@ -1680,6 +2481,59 @@ canvas { display: block; max-width: 100%; }
     }, 12000);
   }
 
+  // ===== 右键菜单：打开源文件 =====
+  // 用动态创建的轻量菜单，不污染 index.html。
+  let _contextMenuEl = null;
+
+  function ensureContextMenu() {
+    if (_contextMenuEl) return _contextMenuEl;
+    const el = document.createElement('div');
+    el.className = 'lecture-context-menu';
+    el.hidden = true;
+    el.innerHTML = '<button type="button" data-action="open-source-file">📄 打开源文件</button>';
+    document.body.appendChild(el);
+    el.addEventListener('mousedown', (e) => {
+      // 阻止 button mousedown 偷 focus / 折叠 selection（虽然这里不依赖 selection，保险起见）
+      e.preventDefault();
+    });
+    el.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-action]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-action');
+      hideContextMenu();
+      if (act === 'open-source-file') {
+        if (vscode) vscode.postMessage({ type: 'openSourceFile' });
+      }
+    });
+    _contextMenuEl = el;
+    return el;
+  }
+
+  function showContextMenu(x, y) {
+    const el = ensureContextMenu();
+    el.hidden = false;
+    // 先放出来再测尺寸，做边界裁剪避免菜单超出视口
+    const rect = el.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 8;
+    const maxY = window.innerHeight - rect.height - 8;
+    el.style.left = Math.max(8, Math.min(x, maxX)) + 'px';
+    el.style.top = Math.max(8, Math.min(y, maxY)) + 'px';
+  }
+
+  function hideContextMenu() {
+    if (_contextMenuEl) _contextMenuEl.hidden = true;
+  }
+
+  document.addEventListener('contextmenu', (e) => {
+    // textarea / input / contentEditable 留默认菜单（粘贴 / 复制等）
+    const t = e.target;
+    const tag = (t && t.tagName) ? t.tagName.toLowerCase() : '';
+    if (tag === 'textarea' || tag === 'input' || (t && t.isContentEditable)) return;
+    // widget iframe 内的右键拿不到（跨源），这里不会被触发，无需特殊处理
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY);
+  });
+
   // ===== events =====
   // 旧实现用 mouseup/selectionchange/keyup 监听选区变化来 show/hide chip——
   // 这在代码块 / 跨块选区 / 没选区时全部失败（用户能选中但 chip 召不出来）。
@@ -1691,12 +2545,24 @@ canvas { display: block; max-width: 100%; }
     if (e.target.closest && e.target.closest('#chip')) return;
     // 点评论框 / 气泡内部不收
     if (e.target.closest && (e.target.closest('#popover') || e.target.closest('.lecture-suggestion-bubble'))) return;
+    // 点浮层菜单内部不关菜单；点别处关菜单。
+    // .lecture-context-menu 覆盖：右键菜单 + widget ⋯ 菜单（两者共用 class）
+    // .cc-widget-btn-more 是 widget toolbar 上的 ⋯ 按钮自身，点它不应被 mousedown 关掉
+    // （否则 click 才能再开起来 → 行为正确但 toggle 不直观）
+    const inMenu = e.target.closest && e.target.closest('.lecture-context-menu');
+    const onMoreBtn = e.target.closest && e.target.closest('.cc-widget-btn-more');
+    if (!inMenu && !onMoreBtn) {
+      hideContextMenu();
+      hideWidgetMoreMenu();
+    }
     hidePopover();
   });
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       hidePopover();
+      hideContextMenu();
+      hideWidgetMoreMenu();
     }
     // Ctrl/Cmd + Z → 撤回上次 AI 写入。仅在 undo pill 可见时生效，
     // 用 .visible class 判断（写入后 12s 内）。不在 input/textarea/可编辑节点里。
@@ -1725,17 +2591,40 @@ canvas { display: block; max-width: 100%; }
     }
   });
 
-  // Ctrl+滚轮 整体缩放（讲义阅读器独立 panel，本地缩放）
-  let _lectureFontScale = 1;
+  // Ctrl+滚轮 整体缩放（讲义阅读器独立 panel，本地缩放）。
+  // 治根策略：body.zoom 整体缩放 + widget container 反向 zoom 抵消。
+  // 这样 widget iframe 不被父 zoom 拉伸，内部 viewport 稳定，vh 元素永远不会
+  // 因为 zoom 触发增长循环。代价：缩放时 widget 视觉不跟字号缩——值得换稳定性。
+  let _zoomEndTimer = null;
   document.addEventListener('wheel', (e) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.05 : 0.05;
     _lectureFontScale = Math.max(0.7, Math.min(2.0, _lectureFontScale + delta));
     document.body.style.zoom = String(_lectureFontScale);
+    // 同步给所有 widget container 反向 zoom，抵消父 body.zoom。
+    // 净视觉效果：widget 不跟随父页缩放 → iframe 内部 viewport 不变 → vh 元素不变 → 无循环。
+    const inverseZoom = _lectureFontScale === 1 ? '' : String(1 / _lectureFontScale);
+    document.querySelectorAll('.cc-widget-container').forEach((wrap) => {
+      wrap.style.zoom = inverseZoom;
+    });
+    _isZooming = true;
+    if (_zoomEndTimer) clearTimeout(_zoomEndTimer);
+    _zoomEndTimer = setTimeout(() => {
+      _isZooming = false;
+      _zoomEndTimer = null;
+    }, 400);
   }, { passive: false });
 
   if (els.chip) {
+    // 关键：阻止 <button> 在 mousedown 时偷走 document focus / 折叠 selection。
+    // 没这一行的话，用户"先选中代码块源码 → 点蓝按钮"时，浏览器会在 mousedown 那一刻
+    // 把 selection collapse 掉 → getSelectionLineRange 里 sel.isCollapsed 直接 return
+    // null → pickContextInfo 掉到"全文 fallback"。这是标准 toolbar 按钮模式。
+    // preventDefault 只阻止 focus/select 行为，不影响 click 事件触发。
+    els.chip.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
     els.chip.addEventListener('click', () => {
       // 每次点击都重新取一次 selection：用户可能在打开 popover 前选好了一段，
       // 也可能什么都没选；pickContextInfo 处理两种情况。
@@ -1768,6 +2657,13 @@ canvas { display: block; max-width: 100%; }
         state.filePath = msg.filePath || '';
         state.applyMode = msg.applyMode || 'preview-confirm';
         state.highlightChangesMs = msg.highlightChangesMs || 5000;
+        // 讲义所在目录的 webview URI 前缀，用于把 ![](assets/xxx.png) 相对路径
+        // 重写成 webview 能加载的绝对 URI（renderLecture 后期处理）
+        state.assetBaseUri = msg.assetBaseUri || '';
+        // 学科 / 章节 / 讲义标题：智能搜图等场景给 Claude Code 当 context
+        state.subject = msg.subject || '';
+        state.topicTitle = msg.topicTitle || '';
+        state.lessonTitle = msg.lessonTitle || '';
         setHeader(msg);
         renderLecture(msg.content || '');
         flashStatus('已加载', 'info');
@@ -1832,10 +2728,26 @@ canvas { display: block; max-width: 100%; }
         // 后续 inlineSuggestResult preview 会重新构建 bubble 加 采纳/丢弃 按钮
         break;
       }
+      case 'inlineCancelled': {
+        // 用户点 ✕ 取消后，宿主端 AbortController.abort() 把 chatCompletion 中断，
+        // 在 abort 错误分支发了这个消息。这里清理 bubble + streaming buf + 提示。
+        if (!msg.turnId) break;
+        const entry = state.streamingTurns.get(msg.turnId);
+        if (entry?.trailingTimer) clearTimeout(entry.trailingTimer);
+        state.streamingTurns.delete(msg.turnId);
+        state.activeTurns.delete(msg.turnId);
+        removeBubble(msg.turnId);
+        toast('已取消 AI 生成', 'info');
+        break;
+      }
       case 'inlineSuggestResult': {
         const result = msg.result || {};
         const { turnId, status, suggestion, errorMessage, appliedRange, intent } = result;
         if (!turnId) return;
+        // 用户已经主动取消（cancelTurn 立即清 activeTurns）？
+        // 忽略 abort 没拦住的"晚到"消息：宿主端 chatCompletion 可能在 abort 调用前
+        // 已经接近完成，会回 preview/applied/failed；这些后续消息不该让 bubble 再冒出来。
+        if (!state.activeTurns.has(turnId)) return;
         if (status === 'preview') {
           showPreviewBubble(turnId, suggestion || '', intent);
         } else if (status === 'applied') {

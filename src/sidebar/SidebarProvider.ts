@@ -3227,6 +3227,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'webview', 'style.css')
     );
+    const designSystemUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'src', 'sidebar', 'shared', 'design-system.css')
+    );
     const katexStyleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'node_modules', 'katex', 'dist', 'katex.min.css')
     );
@@ -3253,6 +3256,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     try {
       const fs = require('fs');
       let html = fs.readFileSync(htmlPath, 'utf-8');
+      html = html.replace('{{designSystemUri}}', designSystemUri.toString());
       html = html.replace('{{styleUri}}', styleUri.toString());
       html = html.replace('{{katexStyleUri}}', katexStyleUri.toString());
       html = html.replace('{{markdownItUri}}', markdownItUri.toString());

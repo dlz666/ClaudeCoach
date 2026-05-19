@@ -940,10 +940,22 @@ export class AIClient {
 
   private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
     let lastError: unknown;
+    // 外部传入的 abort signal（来自 chatCompletion options.signal → 让 webview 端
+    // 用户点"✕ 取消"能真正中断 fetch）。之前 fetch 调用里 `...init` 展开后立即被
+    // 后面的 `signal: controller.signal` 覆盖（对象字面量后写覆盖前写），外部
+    // signal 等于完全没接 → controller.abort() 没效果 → AI 继续跑完。这里显式
+    // 把外部 signal 转发到每次重试的内部 controller。
+    const externalSignal = (init as any).signal as AbortSignal | undefined;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+      // 内部 controller 同时承担"请求超时"和"外部 abort 转发"两个职责
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const forwardAbort = () => controller.abort();
+      if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener('abort', forwardAbort);
+      }
 
       try {
         const resp = await fetch(url, {
@@ -951,6 +963,7 @@ export class AIClient {
           signal: controller.signal,
         });
         clearTimeout(timeout);
+        if (externalSignal) externalSignal.removeEventListener('abort', forwardAbort);
 
         if (!resp.ok && RETRYABLE_STATUS_CODES.has(resp.status) && attempt < MAX_RETRIES) {
           await this.delay(this.retryDelayMs(attempt));
@@ -960,7 +973,10 @@ export class AIClient {
         return resp;
       } catch (error) {
         clearTimeout(timeout);
+        if (externalSignal) externalSignal.removeEventListener('abort', forwardAbort);
         lastError = error;
+        // 外部 abort：立即放弃重试，不要再让用户等下一轮 attempt
+        if (externalSignal?.aborted) break;
         if (attempt >= MAX_RETRIES || !this.isRetryableFetchError(error)) {
           break;
         }
@@ -968,6 +984,12 @@ export class AIClient {
       }
     }
 
+    // 错误归类：外部 abort 优先于超时（同样抛 AbortError，便于上层识别"用户主动取消"）
+    if (externalSignal?.aborted) {
+      const abortErr = new Error('已取消');
+      (abortErr as any).name = 'AbortError';
+      throw abortErr;
+    }
     if (lastError instanceof Error && lastError.name === 'AbortError') {
       throw new Error(`API 请求超时（${REQUEST_TIMEOUT_MS / 1000}s），请稍后重试或检查代理 / Base URL。`);
     }

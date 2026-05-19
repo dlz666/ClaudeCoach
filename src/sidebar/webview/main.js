@@ -3,6 +3,37 @@
   const vscode = acquireVsCodeApi();
   const saved = vscode.getState() || {};
 
+  // ============================================================
+  // 全局 toast：之前主 sidebar 11 处调用 showToast 但没定义函数 → 静默崩溃。
+  // 现在 design-system.css 的 .ds-toast-* 提供视觉，这里给 main.js 定义全局函数。
+  // level: 'success' | 'error' | 'warn' | 'info'（默认 info）
+  // ============================================================
+  function _ensureToastContainer() {
+    let el = document.getElementById('ds-toast-container');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'ds-toast-container';
+    el.className = 'ds-toast-container';
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+    return el;
+  }
+  function showToast(message, level, options) {
+    if (!message) return;
+    const container = _ensureToastContainer();
+    const el = document.createElement('div');
+    el.className = 'ds-toast ds-toast--' + (level || 'info');
+    el.textContent = String(message);
+    container.appendChild(el);
+    const duration = (options && options.duration) || 2400;
+    setTimeout(() => {
+      el.classList.add('fading');
+      setTimeout(() => el.remove(), 320);
+    }, duration);
+  }
+  // 暴露给 window 方便 webview 调试 / 跨函数调用
+  window.showToast = showToast;
+
   // 课程教学法 Tag 元数据（与 types.ts 的 COURSE_TAG_LABELS/DESCRIPTIONS 同步）
   const COURSE_TAGS = [
     { value: 'cs-skill', label: '计算机技能', desc: '编程语言、框架、工具（如 React、Python、SQL、Git）' },
@@ -1911,6 +1942,7 @@
     // Hybrid RAG embedding
     const emb = merged.retrieval?.embedding || {};
     if (els.embeddingEnabled) els.embeddingEnabled.checked = !!emb.enabled;
+    _syncRagEngineCard('rag-card-embedding', 'embedding-status-chip', !!emb.enabled);
     if (els.embeddingBaseUrl) els.embeddingBaseUrl.value = emb.baseUrl || 'https://api.siliconflow.cn/v1';
     if (els.embeddingToken) els.embeddingToken.value = emb.apiToken || '';
     if (els.embeddingModel) els.embeddingModel.value = emb.model || 'BAAI/bge-m3';
@@ -1922,6 +1954,7 @@
     // Vision API
     const vis = merged.retrieval?.vision || {};
     if (els.visionEnabled) els.visionEnabled.checked = !!vis.enabled;
+    _syncRagEngineCard('rag-card-vision', 'vision-status-chip', !!vis.enabled);
     if (els.visionBaseUrl) els.visionBaseUrl.value = vis.baseUrl || 'https://api.siliconflow.cn/v1';
     if (els.visionToken) els.visionToken.value = vis.apiToken || '';
     if (els.visionModel) els.visionModel.value = vis.model || 'Qwen/Qwen3-VL-8B-Instruct';
@@ -2095,15 +2128,31 @@
     };
   }
 
-  // ===== 偏好自动保存（debounce 300ms） =====
+  // ===== 偏好自动保存（debounce 300ms） + 保存状态指示 =====
   let prefsSaveTimer = null;
+  function _setSaveStatus(state) {
+    document.querySelectorAll('.cc-settings-savebar, .cc-save-hint').forEach((el) => {
+      el.classList.remove('is-saving', 'is-saved', 'is-error');
+      if (state) el.classList.add('is-' + state);
+    });
+    // 给 hint 文字加新文案（如果 element 是 .cc-save-hint）
+    document.querySelectorAll('.cc-save-hint').forEach((el) => {
+      el.textContent = state === 'saving' ? '正在保存…'
+        : state === 'error' ? '保存失败'
+        : '已保存';
+    });
+  }
   function schedulePreferenceSave() {
     if (prefsSaveTimer) clearTimeout(prefsSaveTimer);
+    // 立即显示 "saving"（让用户知道改动被捕获）
+    _setSaveStatus('saving');
     prefsSaveTimer = setTimeout(() => {
       prefsSaveTimer = null;
       const preferences = collectPreferences();
       state.preferences = preferences;
       vscode.postMessage({ type: 'savePreferences', preferences });
+      // 200ms 后回 "saved"（后端处理快，且 webview 没有保存确认消息，所以乐观更新）
+      setTimeout(() => _setSaveStatus('saved'), 200);
     }, 300);
   }
 
@@ -2144,17 +2193,34 @@
   function renderSettingsNav() {
     const nav = document.getElementById('settings-nav');
     if (!nav) return;
-    const sections = Array.from(document.querySelectorAll('.cc-settings-section'));
-    if (!sections.length) return;
+    const allSections = Array.from(document.querySelectorAll('.cc-settings-section'));
+    if (!allSections.length) return;
 
-    // 决定默认 active section
-    if (!state.settingsActiveSection) {
+    // 决定默认一级 cluster
+    if (!state.settingsActiveCluster) {
       const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
       const hasActive = profiles.length > 0 && state.activeProfileId;
-      state.settingsActiveSection = hasActive ? 'pace' : 'aiConfig';
+      // 没配过 AI 的话默认跳到系统簇让用户先配 Profile；否则学习簇
+      state.settingsActiveCluster = hasActive ? 'learn' : 'system';
+    }
+    // 按当前 cluster 过滤
+    const sections = allSections.filter((sec) =>
+      (sec.getAttribute('data-cluster') || 'learn') === state.settingsActiveCluster
+    );
+
+    // 决定默认 active section（必须在当前 cluster 内）
+    const validSectionIds = sections.map((s) => s.getAttribute('data-section'));
+    if (!state.settingsActiveSection || !validSectionIds.includes(state.settingsActiveSection)) {
+      state.settingsActiveSection = validSectionIds[0] || null;
     }
 
-    // 渲染 chip
+    // 同步一级 segmented 的 aria-pressed
+    document.querySelectorAll('#settings-cluster-nav [data-cluster]').forEach((btn) => {
+      const c = btn.getAttribute('data-cluster');
+      btn.setAttribute('aria-pressed', c === state.settingsActiveCluster ? 'true' : 'false');
+    });
+
+    // 渲染二级 chip（只渲染当前 cluster 内的）
     nav.innerHTML = sections.map((sec) => {
       const id = sec.getAttribute('data-section');
       const label = sec.getAttribute('data-section-title') || id;
@@ -2162,16 +2228,23 @@
       return `<button class="cc-chip" type="button" data-settings-nav="${escapeHtml(id)}" aria-pressed="${active}" title="${escapeHtml(sec.getAttribute('data-section-sub') || '')}">${escapeHtml(label)}</button>`;
     }).join('');
 
-    // 同步 section 的 active 状态
-    sections.forEach((sec) => {
+    // 同步 section 的可见性 + active 状态：当前 cluster 外的 section 隐藏
+    allSections.forEach((sec) => {
       const id = sec.getAttribute('data-section');
-      sec.setAttribute('data-active', id === state.settingsActiveSection ? 'true' : 'false');
+      const inCluster = (sec.getAttribute('data-cluster') || 'learn') === state.settingsActiveCluster;
+      sec.style.display = inCluster ? '' : 'none';
+      sec.setAttribute('data-active', (inCluster && id === state.settingsActiveSection) ? 'true' : 'false');
     });
 
     // 绑定 chip click
     nav.querySelectorAll('[data-settings-nav]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        state.settingsActiveSection = btn.getAttribute('data-settings-nav');
+        const newSection = btn.getAttribute('data-settings-nav');
+        // 离开 aiConfig 时自动关闭编辑器子页，避免回来时还停留在编辑态
+        if (state.settingsActiveSection === 'aiConfig' && newSection !== 'aiConfig') {
+          try { closeAIProfileEditor(); } catch {}
+        }
+        state.settingsActiveSection = newSection;
         renderSettingsNav();
         persist();
         // 切 section 后清空搜索（语义重置 + 避免 "搜出空" 的迷惑）
@@ -2184,6 +2257,23 @@
         }
       });
     });
+
+    // 一级 cluster segmented 按钮的 click（用 dataset.bound 防重复绑）
+    const clusterNav = document.getElementById('settings-cluster-nav');
+    if (clusterNav && !clusterNav.dataset.bound) {
+      clusterNav.dataset.bound = '1';
+      clusterNav.querySelectorAll('[data-cluster]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const c = btn.getAttribute('data-cluster');
+          if (!c || c === state.settingsActiveCluster) return;
+          state.settingsActiveCluster = c;
+          // 切簇时清掉旧 section（让 renderSettingsNav 自动跳到新簇的第一个）
+          state.settingsActiveSection = null;
+          renderSettingsNav();
+          persist();
+        });
+      });
+    }
   }
   // 兼容旧调用点
   function applyDefaultSettingsOpen() {
@@ -2282,28 +2372,35 @@
     if (!els.aiProfilesList) return;
     const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
     if (!profiles.length) {
-      els.aiProfilesList.innerHTML = '<p class="muted">还没有 AI Profile，点击"新建 Profile"创建一个。</p>';
+      els.aiProfilesList.innerHTML = '<div class="ds-card"><p class="muted">还没有 AI Profile，点击下方"新建"创建一个。</p></div>';
     } else {
       els.aiProfilesList.innerHTML = profiles.map((profile) => {
         const isActive = profile.id === state.activeProfileId;
+        const providerIcon = profile.provider === 'anthropic' ? '🤖'
+          : profile.provider === 'openai' ? '🟢'
+          : profile.provider === 'claude_code_cli' ? '⌨️'
+          : '✨';
         return `
-          <div class="ai-profile-card${isActive ? ' active' : ''}" data-profile-id="${escapeHtml(profile.id)}">
-            <div class="ai-profile-card-head">
-              <strong>${escapeHtml(profile.name || '未命名')}</strong>
-              ${isActive ? '<span class="pill ok">激活中</span>' : ''}
+          <article class="ds-card${isActive ? ' ds-card--active' : ''} ai-profile-card" data-profile-id="${escapeHtml(profile.id)}">
+            <div class="ds-card__header">
+              <div class="ds-card__title">
+                <span class="ai-profile-icon" aria-hidden="true">${providerIcon}</span>
+                <span class="ds-truncate">${escapeHtml(profile.name || '未命名')}</span>
+                ${isActive ? '<span class="ds-status-chip ds-status-chip--on"><span class="ds-status-dot"></span>激活中</span>' : ''}
+              </div>
+              <div class="ds-card__actions">
+                <button class="ds-btn ds-btn--icon" type="button" data-action="profile-menu" data-profile-id="${escapeHtml(profile.id)}" title="更多操作（复制 / 测试 / 导出 / 删除）" aria-haspopup="true">⋯</button>
+              </div>
             </div>
-            <div class="ai-profile-card-meta muted">
-              ${escapeHtml(profile.provider || '-')} / ${escapeHtml(profile.model || '-')}
+            <div class="ai-profile-meta">
+              <span class="ai-profile-meta__provider">${escapeHtml(profile.provider || '-')}</span>
+              <span class="ai-profile-meta__model ds-truncate" title="${escapeHtml(profile.model || '')}">${escapeHtml(profile.model || '-')}</span>
             </div>
-            <div class="ai-profile-card-actions">
-              <button class="btn small" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}">${isActive ? '已激活' : '激活'}</button>
-              <button class="btn small ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
-              <button class="btn small ghost" type="button" data-action="duplicate" data-profile-id="${escapeHtml(profile.id)}">复制</button>
-              <button class="btn small ghost" type="button" data-action="test" data-profile-id="${escapeHtml(profile.id)}">测试</button>
-              <button class="btn small ghost" type="button" data-action="export" data-profile-id="${escapeHtml(profile.id)}">导出</button>
-              <button class="btn small danger-btn" type="button" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">删除</button>
+            <div class="ds-card__actions ai-profile-primary-actions">
+              <button class="ds-btn ${isActive ? '' : 'ds-btn--primary'}" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}" ${isActive ? 'disabled' : ''}>${isActive ? '✓ 已激活' : '激活'}</button>
+              <button class="ds-btn ds-btn--ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
             </div>
-          </div>
+          </article>
         `;
       }).join('');
 
@@ -2314,6 +2411,10 @@
           const profileId = btn.getAttribute('data-profile-id');
           const profile = state.aiProfiles.find((p) => p.id === profileId);
           if (!profile) return;
+          if (action === 'profile-menu') {
+            _openProfileMenu(btn, profile);
+            return;
+          }
           handleAIProfileAction(action, profile);
         });
       });
@@ -2326,6 +2427,59 @@
         `<option value="${escapeHtml(p.id)}"${p.id === current ? ' selected' : ''}>${escapeHtml(p.name || p.id)}</option>`
       ).join('');
     }
+  }
+
+  /**
+   * Profile 卡片的 ⋯ 菜单：浮在按钮下方的 popover，含 4 个次要操作。
+   * 全局只允许一个打开；点其他地方 / Esc 关闭。
+   */
+  let _profileMenuEl = null;
+  function _closeProfileMenu() {
+    if (_profileMenuEl) { _profileMenuEl.remove(); _profileMenuEl = null; }
+  }
+  function _openProfileMenu(anchorBtn, profile) {
+    _closeProfileMenu();
+    const el = document.createElement('div');
+    el.className = 'ds-profile-menu';
+    el.innerHTML = [
+      '<button type="button" data-act="duplicate">📋 复制 Profile</button>',
+      '<button type="button" data-act="test">🔌 测试连通性</button>',
+      '<button type="button" data-act="export">📤 导出</button>',
+      '<button type="button" data-act="delete" class="danger">🗑 删除</button>',
+    ].join('');
+    document.body.appendChild(el);
+    _profileMenuEl = el;
+    // 定位在按钮下方右对齐
+    const rect = anchorBtn.getBoundingClientRect();
+    el.style.position = 'fixed';
+    el.style.zIndex = '60';
+    // 先放出来再测尺寸做边界裁剪
+    const elRect = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.right - elRect.width, window.innerWidth - elRect.width - 8));
+    const top = Math.min(rect.bottom + 4, window.innerHeight - elRect.height - 8);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    // 按钮 click
+    el.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest && e.target.closest('[data-act]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-act');
+      _closeProfileMenu();
+      handleAIProfileAction(act, profile);
+    });
+    // 点外部 / Esc 关菜单
+    setTimeout(() => {
+      const onDoc = (ev) => {
+        if (!_profileMenuEl) return;
+        if (_profileMenuEl.contains(ev.target)) return;
+        _closeProfileMenu();
+        document.removeEventListener('mousedown', onDoc);
+        document.removeEventListener('keydown', onKey);
+      };
+      const onKey = (ev) => { if (ev.key === 'Escape') { _closeProfileMenu(); document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); } };
+      document.addEventListener('mousedown', onDoc);
+      document.addEventListener('keydown', onKey);
+    }, 0);
   }
 
   function handleAIProfileAction(action, profile) {
@@ -2360,8 +2514,12 @@
 
   function openAIProfileEditor(profile) {
     state.editingProfileId = profile?.id || null;
+    // 子页切换：把整个 ai-config-subpage 切到 editor 视图
+    const subpage = document.getElementById('ai-config-subpage');
+    if (subpage) subpage.setAttribute('data-view', 'editor');
+    // 兼容旧调用点的 hidden 类（虽然现在 ds-subpage CSS 已经接管显隐）
     if (els.aiProfileEditor) els.aiProfileEditor.classList.remove('hidden');
-    if (els.aiProfileEditorTitle) els.aiProfileEditorTitle.textContent = profile ? `编辑 Profile：${profile.name || ''}` : '新建 Profile';
+    if (els.aiProfileEditorTitle) els.aiProfileEditorTitle.textContent = profile ? `编辑：${profile.name || ''}` : '新建 Profile';
     if (els.aiProfileName) els.aiProfileName.value = profile?.name || '';
     if (els.aiProfileProvider) els.aiProfileProvider.value = profile?.provider || 'anthropic';
     if (els.aiProfileBaseUrl) els.aiProfileBaseUrl.value = profile?.baseUrl || '';
@@ -2373,11 +2531,18 @@
     if (els.aiProfileMaxTokens) els.aiProfileMaxTokens.value = profile?.maxTokens ? String(profile.maxTokens) : '';
     if (els.aiProfileReasoningEffort) els.aiProfileReasoningEffort.value = profile?.reasoningEffort || '';
     if (els.aiProfileNotes) els.aiProfileNotes.value = profile?.notes || '';
-    requestAnimationFrame(() => els.aiProfileEditor?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    // 切完滚到顶
+    requestAnimationFrame(() => {
+      const editorEl = document.querySelector('#ai-config-subpage [data-view="editor"]');
+      editorEl?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
   }
 
   function closeAIProfileEditor() {
     state.editingProfileId = null;
+    const subpage = document.getElementById('ai-config-subpage');
+    if (subpage) subpage.setAttribute('data-view', 'list');
+    // 兼容旧调用点的 hidden 类
     if (els.aiProfileEditor) els.aiProfileEditor.classList.add('hidden');
   }
 
@@ -2399,14 +2564,68 @@
     return profile;
   }
 
+  /** 同步 RAG 引擎卡片的激活态：徽章 on/off + body 显隐（CSS 接管视觉）。 */
+  function _syncRagEngineCard(cardId, chipId, enabled) {
+    const card = document.getElementById(cardId);
+    const chip = document.getElementById(chipId);
+    if (card) card.setAttribute('data-engine-on', enabled ? 'true' : 'false');
+    if (chip) {
+      chip.classList.remove('ds-status-chip--on', 'ds-status-chip--off');
+      chip.classList.add(enabled ? 'ds-status-chip--on' : 'ds-status-chip--off');
+      const label = chip.querySelector('.ds-status-chip__label');
+      if (label) label.textContent = enabled ? '已启用' : '未启用';
+    }
+  }
+
+  // toggle 实时联动（user 拨动 toggle 立即看到 body 显隐）
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'embedding-enabled') {
+      _syncRagEngineCard('rag-card-embedding', 'embedding-status-chip', !!e.target.checked);
+    }
+    if (e.target && e.target.id === 'vision-enabled') {
+      _syncRagEngineCard('rag-card-vision', 'vision-status-chip', !!e.target.checked);
+    }
+  });
+
+  /** 渲染 Embedding 测试结果到 .ds-feedback 卡（替代原来的内联 span 文本）。 */
+  function renderEmbeddingTestFeedback(state, message) {
+    const feedback = document.getElementById('embedding-test-feedback');
+    if (!feedback) return;
+    feedback.classList.remove('hidden', 'ds-feedback--success', 'ds-feedback--error', 'ds-feedback--pending');
+    feedback.classList.add('ds-feedback--' + state);
+    const icon = feedback.querySelector('.ds-feedback__icon');
+    const body = feedback.querySelector('.ds-feedback__body');
+    if (icon) {
+      icon.innerHTML = '';
+      icon.textContent = state === 'success' ? '✓' : state === 'error' ? '✗' : '';
+      if (state === 'pending') {
+        // 加 3 个 dot-pulse 的 <i>
+        icon.innerHTML = '<i></i>';
+      }
+    }
+    if (body) body.textContent = message || (state === 'pending' ? '正在测试连通性…' : '');
+  }
+
   function renderWorkspaceAIOverride() {
     const ov = state.workspaceAIOverride || {};
-    if (els.aiWsOverrideEnabled) els.aiWsOverrideEnabled.checked = !!ov.enabled;
+    const enabled = !!ov.enabled;
+    if (els.aiWsOverrideEnabled) els.aiWsOverrideEnabled.checked = enabled;
     if (els.aiWsProvider) els.aiWsProvider.value = ov.providerOverride || ov.provider || '';
     if (els.aiWsBaseUrl) els.aiWsBaseUrl.value = ov.baseUrlOverride || ov.baseUrl || '';
     if (els.aiWsToken) els.aiWsToken.value = ov.apiTokenOverride || ov.apiToken || '';
     if (els.aiWsModel) els.aiWsModel.value = ov.modelOverride || ov.model || '';
+    // 联动 CSS：data-enabled="true" 时 fieldset 内容正常可点；false 时半透明 disabled
+    const fieldset = document.getElementById('ai-workspace-override');
+    if (fieldset) fieldset.setAttribute('data-enabled', enabled ? 'true' : 'false');
   }
+
+  // toggle 的 change 立即同步禁用态（不等保存）—— 让用户拨动 toggle 就能看到效果
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'ai-ws-override-enabled') {
+      const fieldset = document.getElementById('ai-workspace-override');
+      if (fieldset) fieldset.setAttribute('data-enabled', e.target.checked ? 'true' : 'false');
+    }
+  });
 
   // ===== 数据管理 - 学科选择 =====
   function syncDataSubjectSelect() {
@@ -2986,7 +3205,9 @@
     els.aiChangeMenu?.classList.toggle('hidden');
   });
 
-  els.aiChangeMenu?.querySelectorAll('[data-ai-import-source]').forEach((item) => {
+  // 监听所有 [data-ai-import-source] —— 包括 toolbar 里的 .codex / .claude 快捷按钮
+  // 和 menu 里的 .config / .manual 长尾选项
+  document.querySelectorAll('[data-ai-import-source]').forEach((item) => {
     item.addEventListener('click', (event) => {
       event.stopPropagation();
       const source = item.getAttribute('data-ai-import-source');
@@ -2994,6 +3215,14 @@
       els.aiChangeMenu?.classList.add('hidden');
       vscode.postMessage({ type: 'importAIProfile', source });
     });
+  });
+
+  // Token 字段的 👁 显示 / 隐藏切换
+  document.getElementById('btn-toggle-ai-token')?.addEventListener('click', () => {
+    const input = document.getElementById('ai-profile-token');
+    if (!input) return;
+    const visible = input.getAttribute('type') === 'text';
+    input.setAttribute('type', visible ? 'password' : 'text');
   });
 
   els.subjectInput?.addEventListener('input', () => {
@@ -3594,6 +3823,11 @@
   if (els.btnTestEmbedding) {
     els.btnTestEmbedding.addEventListener('click', () => {
       if (els.embeddingTestStatus) els.embeddingTestStatus.textContent = '测试中...';
+      renderEmbeddingTestFeedback('pending', '正在测试连通性…');
+      // 按钮加 busy spinner
+      els.btnTestEmbedding.classList.add('is-busy');
+      // 收到结果时移除 busy（在 embeddingTestResult handler 处理）
+      setTimeout(() => els.btnTestEmbedding?.classList.remove('is-busy'), 30000); // 兜底 30s
       vscode.postMessage({
         type: 'testEmbedding',
         config: {
@@ -3961,6 +4195,9 @@
       }
       case 'embeddingTestResult': {
         const r = msg.data || {};
+        // 清掉测试按钮的 busy spinner
+        if (els.btnTestEmbedding) els.btnTestEmbedding.classList.remove('is-busy');
+        // 旧 inline span：保留向后兼容（万一别处还用）
         if (els.embeddingTestStatus) {
           const symbol = r.ok ? '✓' : '✗';
           const detail = r.dimension ? ` · ${r.dimension} 维` : '';
@@ -3968,6 +4205,13 @@
           els.embeddingTestStatus.textContent = `${symbol} ${r.message || ''}${detail}${time}`;
           els.embeddingTestStatus.style.color = r.ok ? 'var(--vscode-charts-green, #4ec9b0)' : 'var(--vscode-charts-red, #f48771)';
         }
+        // 新 .ds-feedback 卡：饱和色 + 完整信息一行
+        const detail = r.dimension ? ` · ${r.dimension} 维` : '';
+        const time = r.latencyMs ? ` · ${r.latencyMs}ms` : '';
+        renderEmbeddingTestFeedback(
+          r.ok ? 'success' : 'error',
+          (r.message || (r.ok ? '连通正常' : '测试失败')) + detail + time,
+        );
         break;
       }
       case 'vectorReindexComplete': {

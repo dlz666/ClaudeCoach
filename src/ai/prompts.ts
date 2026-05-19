@@ -893,6 +893,42 @@ export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: 
 【视觉化】${visualHint}
 ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节学生常踩的误区，请在讲义中**主动**澄清（用 "误区警示 / 易错点" 这样的小节标记，避免学生踩坑）：\n${misconceptionsForLesson}\n` : ''}
 
+【可视化建议占位（重要 — 让讲义"知道哪里该有图"）】
+你**不需要**自己画所有图。在以下两种场景，插入一个"建议占位块"让用户后续一键触发：
+1. **学术插图建议**：某概念有公认的标准示意图（如 Transformer 架构、TCP 三次握手、CPU 流水线、内存层次、Cache 组相联结构、感受野、Backprop 计算图等），但你画不出业界顶级质量
+2. **交互演示建议**：某算法/概念用"步进+高亮"演示比静态图好（如 Dijkstra、BFS/DFS、滑动窗口、LRU 替换、归并排序）
+
+**格式（必须独立成块，前后空行）**：
+\`\`\`text
+<div class="cc-suggest" data-kind="image" data-query="搜索描述">
+💡 建议：在这里加一张"<具体描述>"的示意图
+</div>
+\`\`\`
+或：
+\`\`\`text
+<div class="cc-suggest" data-kind="widget" data-query="互动演示描述">
+💡 建议：在这里加一个"<具体描述>"的互动演示
+</div>
+\`\`\`
+
+**\`data-kind\`** 只有 \`image\` 或 \`widget\` 两种。**\`data-query\`** 是 1-2 句具体描述（不是 quotation，是给 Claude 搜图或生成 widget 的 query）。
+
+**插入数量限制**：每节讲义最多 2-3 个 cc-suggest 块，不要每段都塞。优先放在"概念抽象 / 算法过程 / 架构图" 这种**只靠文字读不懂**的地方。
+
+**例子（在 Transformer 那节）**：
+
+\`\`\`text
+<div class="cc-suggest" data-kind="image" data-query="Transformer 完整架构图 含 encoder decoder multi-head attention layer norm">
+💡 建议：在这里加一张 Transformer 完整架构图（论文 Figure 1 风格，标注 encoder / decoder / attention / FFN）
+</div>
+\`\`\`
+
+\`\`\`text
+<div class="cc-suggest" data-kind="widget" data-query="Self-Attention 计算过程演示 Q K^T softmax 矩阵相乘可视化 4 个 token">
+💡 建议：在这里加一个 Self-Attention 计算过程的可视化（4 个 token，按步骤展示 Q·K^T → softmax → 乘 V）
+</div>
+\`\`\`
+
 【公式与推导】
 - 多步推导每一步独立展示，不要把太多推导挤进一个公式块
 - 块级公式用 \`$$...$$\`、内联用 \`$...$\`

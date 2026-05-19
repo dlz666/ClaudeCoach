@@ -1,0 +1,816 @@
+/* ============================================================
+ * ClaudeCoach Design System
+ * 单一来源：sidebar webview + lecture-webview 共享此文件。
+ *
+ * 加载顺序：design-system.css → page.css（page 后写以覆盖默认）。
+ *
+ * 设计原则（学自 lecture-webview 的成功模式）：
+ *   - 饱和语义色（success/warn/danger 不要透明版）
+ *   - ease-out 动画节奏（120/180/280ms）
+ *   - border-left 强调激活态（不是整背景变色）
+ *   - 浮窗 pop-in 干脆进入
+ *   - 配色全用 var(--vscode-*) 自动适配 light/dark 主题
+ * ============================================================ */
+
+/* ============================================================
+ * 1. 设计 Token
+ * ============================================================ */
+:root {
+  /* ---- 间距 (6px 基准) ---- */
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 18px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ---- 圆角 ---- */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  /* ---- 表面 / 边框（依赖 VS Code 主题动态混合）---- */
+  --surface-1: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-sideBar-background));
+  --surface-2: color-mix(in srgb, var(--vscode-sideBar-background) 62%, var(--vscode-editor-background));
+  --surface-3: color-mix(in srgb, var(--vscode-input-background) 80%, var(--vscode-editor-background));
+  --border: color-mix(in srgb, var(--vscode-panel-border, rgba(255,255,255,0.12)) 72%, transparent);
+
+  /* ---- 强调 / accent ---- */
+  --accent: var(--vscode-button-background, #0e639c);
+  --accent-fg: var(--vscode-button-foreground, #ffffff);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-strong: color-mix(in srgb, var(--accent) 92%, white 8%);
+
+  /* ---- 语义色（饱和版 + soft 双层）---- */
+  --success: rgba(76, 175, 80, 0.85);
+  --success-soft: rgba(76, 175, 80, 0.18);
+  --warn: rgba(245, 158, 11, 0.92);
+  --warn-soft: rgba(245, 158, 11, 0.18);
+  --danger: rgba(239, 68, 68, 0.92);
+  --danger-soft: rgba(239, 68, 68, 0.18);
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 16px 34px rgba(0, 0, 0, 0.30);
+  --shadow-popover: 0 18px 38px rgba(0, 0, 0, 0.32);
+
+  /* ---- 动画节奏 ---- */
+  --motion-fast: 120ms ease-out;   /* 交互 hover/active */
+  --motion-enter: 180ms ease-out;  /* 进入 pop-in */
+  --motion-leave: 280ms ease-out;  /* 退出 fade-out */
+
+  /* ---- z-index ---- */
+  --z-header: 20;
+  --z-dropdown: 30;
+  --z-menu: 40;
+  --z-modal: 60;
+  --z-toast: 2000;
+}
+
+/* ============================================================
+ * 2. 通用 keyframes
+ * ============================================================ */
+@keyframes ds-pop-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ds-dot-pulse {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.45; }
+  40% { transform: scale(1); opacity: 1; }
+}
+@keyframes ds-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@keyframes ds-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes ds-heartbeat {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.6; }
+}
+
+/* ============================================================
+ * 3. Stack / Cluster Layout 工具类
+ * ============================================================ */
+.ds-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.ds-stack--tight {
+  gap: var(--space-2);
+}
+.ds-stack--loose {
+  gap: var(--space-4);
+}
+.ds-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+/* ============================================================
+ * 4. Field（表单字段）
+ *   旧 .setting-row、.form-row 一律走这里
+ * ============================================================ */
+.ds-field, .setting-row, .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ds-field__label, .ds-field > label, .setting-row > label, .form-row > label {
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ds-field__hint, .ds-field .hint, .form-hint {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 70%, transparent);
+  line-height: 1.5;
+}
+.ds-field__required::after {
+  content: '*';
+  color: var(--danger);
+  margin-left: 2px;
+}
+
+/* ============================================================
+ * 5. Inputs (input/select/textarea)
+ * ============================================================ */
+.ds-input,
+.text-input,
+.num-input,
+.ds-field input[type="text"],
+.ds-field input[type="number"],
+.ds-field input[type="password"],
+.ds-field input[type="url"],
+.ds-field select,
+.ds-field textarea,
+.setting-row input[type="text"],
+.setting-row input[type="number"],
+.setting-row input[type="password"],
+.setting-row input[type="url"],
+.setting-row select,
+.setting-row textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background, var(--surface-3));
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  font: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+.ds-input:focus,
+.text-input:focus,
+.num-input:focus,
+.ds-field input:focus,
+.ds-field select:focus,
+.ds-field textarea:focus,
+.setting-row input:focus,
+.setting-row select:focus,
+.setting-row textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: var(--vscode-input-background);
+}
+/* 单行 input 文本溢出（统一规则）*/
+input.ds-input,
+input.text-input,
+input.num-input,
+.ds-field input,
+.setting-row input {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+textarea.ds-input,
+.ds-field textarea,
+.setting-row textarea {
+  white-space: pre-wrap;
+  resize: vertical;
+  min-height: 60px;
+}
+.ds-input--mono,
+.ds-field--mono input,
+.ds-field--mono textarea {
+  font-family: ui-monospace, "SF Mono", Consolas, "PingFang SC", monospace;
+  font-size: 12.5px;
+}
+
+/* ============================================================
+ * 6. Buttons (.ds-btn 系列)
+ *   旧 .btn / .btn-primary / .btn-mini / .btn-ghost 全部走这套
+ * ============================================================ */
+.ds-btn, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--motion-fast), border-color var(--motion-fast), opacity var(--motion-fast);
+  min-width: 0;
+}
+.ds-btn:hover:not(:disabled), .btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--vscode-button-background) 16%, transparent);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent);
+}
+.ds-btn:active:not(:disabled), .btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+.ds-btn:disabled, .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* primary */
+.ds-btn--primary, .btn.primary, .btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.ds-btn--primary:hover:not(:disabled),
+.btn.primary:hover:not(:disabled),
+.btn-primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--accent-strong));
+  border-color: var(--vscode-button-hoverBackground, var(--accent-strong));
+}
+
+/* ghost = 默认外观（透明背景），同 .ds-btn 基础样式 */
+.ds-btn--ghost, .btn.ghost, .btn-ghost {
+  background: transparent;
+}
+
+/* danger */
+.ds-btn--danger, .btn.danger {
+  background: transparent;
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.ds-btn--danger:hover:not(:disabled), .btn.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 70%, transparent);
+}
+
+/* icon button (≈ 28×28 方按钮) */
+.ds-btn--icon, .btn-mini, .btn-icon {
+  padding: 5px 8px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+}
+
+/* busy state（带 spinner）*/
+.ds-btn.is-busy, .btn.is-busy {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+.ds-btn.is-busy::after, .btn.is-busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  color: var(--vscode-foreground);
+  animation: ds-spin 0.7s linear infinite;
+}
+.ds-btn--primary.is-busy::after, .btn.primary.is-busy::after, .btn-primary.is-busy::after {
+  color: var(--accent-fg);
+}
+
+/* ============================================================
+ * 7. Card（卡片，单一视觉源头）
+ *   旧 .panel / .card / .profile-card 都走这套
+ * ============================================================ */
+.ds-card, .panel, .card {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-1), var(--surface-2));
+  min-width: 0;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+.ds-card--compact {
+  padding: var(--space-2) var(--space-3);
+}
+/* 激活态：border-left 强调（学自 lecture-bubble.applied）*/
+.ds-card--active, .card.active, .panel.active {
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 60%, var(--surface-1)),
+    color-mix(in srgb, var(--accent-soft) 35%, var(--surface-2))
+  );
+}
+.ds-card--success {
+  border-left: 3px solid var(--success);
+}
+.ds-card--danger {
+  border-left: 3px solid var(--danger);
+}
+.ds-card[disabled],
+.ds-card.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.ds-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  min-width: 0;
+}
+.ds-card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ds-card__subtitle {
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 70%, transparent);
+  margin-top: 2px;
+}
+.ds-card__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+ * 8. Segmented Button Group
+ *   旧 .preset-group / .segmented-group / .chat-mode-group 都走这套
+ * ============================================================ */
+.ds-segmented, .preset-group, .segmented-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.ds-segmented__btn, .preset-group > button, .segmented-group > button {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--vscode-foreground) 75%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.ds-segmented__btn:hover,
+.preset-group > button:hover,
+.segmented-group > button:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  color: var(--vscode-foreground);
+}
+.ds-segmented__btn[aria-pressed="true"],
+.ds-segmented__btn--active,
+.preset-group > button.active,
+.preset-group > button[aria-pressed="true"],
+.segmented-group > button.active,
+.segmented-group > button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 500;
+}
+
+/* ============================================================
+ * 9. Chip (Tag / 标签 / 二级 nav)
+ *   旧 .cc-chip / .tag-chip / .pill 都走这套
+ * ============================================================ */
+.ds-chip, .cc-chip, .tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.ds-chip:hover, .cc-chip:hover, .tag-chip:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+}
+.ds-chip--active, .ds-chip[aria-pressed="true"],
+.cc-chip.active, .cc-chip[aria-pressed="true"],
+.tag-chip.active, .tag-chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  color: var(--accent-fg);
+  color: color-mix(in srgb, var(--accent) 92%, var(--vscode-foreground));
+  font-weight: 500;
+}
+
+/* ============================================================
+ * 10. Status Chip（引擎激活态徽章）
+ * ============================================================ */
+.ds-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+}
+.ds-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.ds-status-chip--on {
+  background: var(--success-soft);
+  color: color-mix(in srgb, var(--success) 92%, white 6%);
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+}
+.ds-status-chip--on .ds-status-dot {
+  animation: ds-heartbeat 1.4s ease-in-out infinite;
+}
+.ds-status-chip--off {
+  background: transparent;
+  color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+}
+.ds-status-chip--off .ds-status-dot {
+  background: color-mix(in srgb, var(--vscode-foreground) 40%, transparent);
+}
+.ds-status-chip--warn {
+  background: var(--warn-soft);
+  color: color-mix(in srgb, var(--warn) 92%, white 6%);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+
+/* ============================================================
+ * 11. Toggle Switch
+ * ============================================================ */
+.ds-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.ds-toggle__input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+  flex-shrink: 0;
+  border: none;
+}
+.ds-toggle__input::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  top: 2px;
+  left: 2px;
+  transition: transform var(--motion-fast);
+}
+.ds-toggle__input:checked {
+  background: var(--accent);
+}
+.ds-toggle__input:checked::before {
+  transform: translateX(14px);
+}
+
+/* ============================================================
+ * 12. Feedback 卡（测试连通性 / 异步操作三态）
+ * ============================================================ */
+.ds-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+}
+.ds-feedback__icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.ds-feedback__body {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.ds-feedback--success {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 50%, var(--border));
+  color: color-mix(in srgb, var(--success) 92%, white 6%);
+}
+.ds-feedback--error {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+}
+.ds-feedback--pending {
+  background: var(--surface-3);
+  color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
+}
+.ds-feedback--pending .ds-feedback__icon {
+  display: inline-flex;
+  gap: 3px;
+}
+.ds-feedback--pending .ds-feedback__icon::before,
+.ds-feedback--pending .ds-feedback__icon::after,
+.ds-feedback--pending .ds-feedback__icon > i {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ds-dot-pulse 1.2s infinite ease-in-out both;
+}
+.ds-feedback--pending .ds-feedback__icon > i { animation-delay: -0.16s; }
+.ds-feedback--pending .ds-feedback__icon::after { animation-delay: 0s; }
+.ds-feedback--pending .ds-feedback__icon::before { animation-delay: -0.32s; }
+
+/* ============================================================
+ * 13. Toast 系统（全局）
+ *   把 lecture-webview 的 .lecture-toast-* 推广到 ds-toast-*
+ *   保留旧选择器作向后兼容
+ * ============================================================ */
+.ds-toast-container, .lecture-toast-container, #toastContainer {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: var(--z-toast);
+  pointer-events: none;
+}
+.ds-toast, .lecture-toast {
+  pointer-events: auto;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--surface-2));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-popover);
+  font-size: 12.5px;
+  max-width: 360px;
+  animation: ds-toast-in var(--motion-enter);
+}
+.ds-toast--success, .lecture-toast.success {
+  border-color: color-mix(in srgb, var(--success) 60%, var(--border));
+  color: color-mix(in srgb, var(--success) 92%, white 6%);
+}
+.ds-toast--error, .lecture-toast.error {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+}
+.ds-toast--warn, .lecture-toast.warn {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+  color: color-mix(in srgb, var(--warn) 92%, white 6%);
+}
+.ds-toast--info, .lecture-toast.info {
+  /* 默认就行 */
+}
+.ds-toast.fading, .lecture-toast.fading {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity var(--motion-leave), transform var(--motion-leave);
+}
+
+/* ============================================================
+ * 14. Skeleton（加载骨架）
+ * ============================================================ */
+.ds-skeleton {
+  background: linear-gradient(90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 50%,
+    var(--surface-2) 100%);
+  background-size: 200% 100%;
+  animation: ds-shimmer 1.4s linear infinite;
+  border-radius: var(--radius-sm);
+  height: 14px;
+  width: 100%;
+}
+.ds-skeleton--line { height: 12px; margin: 4px 0; }
+.ds-skeleton--block { height: 60px; }
+.ds-skeleton--avatar { width: 32px; height: 32px; border-radius: 50%; }
+
+/* ============================================================
+ * 15. Truncate / Overflow 工具
+ * ============================================================ */
+.ds-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ds-truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+/* 防 flex 子项被父级压缩到无限大 */
+.ds-card *, .ds-stack *, .ds-cluster * {
+  min-width: 0;
+}
+
+/* ============================================================
+ * 16. Save Status Indicator
+ * ============================================================ */
+.ds-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+}
+.ds-save-status__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  transition: background var(--motion-fast);
+}
+.ds-save-status--saving .ds-save-status__dot {
+  background: var(--warn);
+  animation: ds-heartbeat 0.9s ease-in-out infinite;
+}
+.ds-save-status--error .ds-save-status__dot {
+  background: var(--danger);
+}
+
+/* ============================================================
+ * 17. Sub-page 切换容器（AI Profile list ↔ editor）
+ * ============================================================ */
+.ds-subpage {
+  min-width: 0;
+}
+.ds-subpage > [data-view] {
+  display: none;
+}
+.ds-subpage[data-view="list"] > [data-view="list"],
+.ds-subpage[data-view="editor"] > [data-view="editor"] {
+  display: block;
+  animation: ds-pop-in var(--motion-enter);
+}
+.ds-subpage__breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+  margin-bottom: var(--space-3);
+}
+.ds-subpage__back {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+}
+.ds-subpage__back:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+}
+
+/* ============================================================
+ * 18. Container query 三档断点
+ *   依赖父级用 .ds-pane（container-type: inline-size）声明
+ * ============================================================ */
+.ds-pane {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+/* < 280px：极窄，强制单列 */
+@container (max-width: 280px) {
+  .ds-segmented, .preset-group, .segmented-group {
+    flex-direction: column;
+    width: 100%;
+  }
+  .ds-segmented__btn,
+  .preset-group > button,
+  .segmented-group > button {
+    width: 100%;
+  }
+  .ds-card__actions {
+    flex-wrap: wrap;
+  }
+  .ds-card__actions .ds-btn,
+  .ds-card__actions .btn {
+    flex: 1 1 100%;
+  }
+}
+
+/* ≥ 381px：稍宽，可选 2 列 */
+@container (min-width: 381px) {
+  .ds-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-2);
+  }
+}
+
+/* ============================================================
+ * 19. @media fallback（不支持 container query 的旧 webview）
+ * ============================================================ */
+@media (max-width: 280px) {
+  .ds-segmented, .preset-group, .segmented-group {
+    flex-direction: column;
+  }
+  /* AI Profile toolbar 极窄宽下堆叠 */
+  .ai-profile-toolbar {
+    flex-direction: column;
+  }
+  .ai-profile-toolbar > .ds-btn {
+    flex: 1 1 100%;
+  }
+  /* settings cluster nav 也堆叠 */
+  .settings-cluster-nav .ds-segmented__btn {
+    width: 100%;
+  }
+}
+@media (max-width: 380px) {
+  /* RAG card actions 窄宽换行 */
+  .rag-card__actions .ds-btn {
+    flex: 1 1 calc(50% - 3px);
+  }
+  /* AI Profile primary actions 极窄宽时单列 */
+  .ai-profile-primary-actions {
+    flex-wrap: wrap;
+  }
+  /* toast 不要顶住边缘 */
+  .ds-toast-container, .lecture-toast-container, #toastContainer {
+    right: 8px;
+    left: 8px;
+    bottom: 8px;
+  }
+  .ds-toast, .lecture-toast {
+    max-width: 100%;
+  }
+}

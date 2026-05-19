@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -15,6 +16,7 @@ import {
   type WritebackInput,
   type WritebackResult,
 } from './inlineWriteback';
+import { runClaudeCode, type ClaudeStreamEvent } from './claudeCodeRunner';
 
 import { PreferencesStore } from '../progress/preferencesStore';
 import { ProgressStore } from '../progress/progressStore';
@@ -60,6 +62,12 @@ const VIEW_TYPE = 'claudeCoach.lectureViewer';
 export class LectureWebviewProvider {
   private readonly panels = new Map<string, PanelContext>();
   private readonly disposables: vscode.Disposable[] = [];
+  /**
+   * 正在进行的 inlineSuggest turn 的 AbortController。webview 发 cancelInlineSuggest
+   * 时按 turnId 查到对应 controller 调 abort()，让 AIClient.chatCompletion 抛出 abort
+   * 错误中断网络请求。handleInlineSuggest 完成（成功或失败）后 delete 自己 entry。
+   */
+  private readonly inflightTurns = new Map<string, AbortController>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -127,8 +135,11 @@ export class LectureWebviewProvider {
         retainContextWhenHidden: true,
         localResourceRoots: [
           vscode.Uri.joinPath(this.extensionUri, 'src', 'sidebar', 'lecture-webview'),
+          vscode.Uri.joinPath(this.extensionUri, 'src', 'sidebar', 'shared'),  // design-system.css
           vscode.Uri.joinPath(this.extensionUri, 'out', 'sidebar', 'lecture-webview'),
           vscode.Uri.joinPath(this.extensionUri, 'node_modules'),
+          // 让 webview 能加载讲义同目录下的 assets/（粘贴/拖入的图片本地化在这里）
+          vscode.Uri.file(path.dirname(args.filePath)),
         ],
       },
     );
@@ -191,6 +202,12 @@ export class LectureWebviewProvider {
     const prefs = await this.deps.preferencesStore.get();
     const applyMode: LectureApplyMode = prefs.coach?.lecture?.applyMode ?? 'preview-confirm';
     const highlightChangesMs = prefs.coach?.lecture?.highlightChangesMs ?? 5000;
+    // assetBaseUri：讲义所在目录的 webview-safe URI 前缀。
+    // 用于 webview 里把 markdown 相对路径 ![](assets/xxx.png) 重写成
+    // <img src="<assetBaseUri>/assets/xxx.png">，让 webview 能加载本地图片。
+    const assetBaseUri = panel.webview
+      .asWebviewUri(vscode.Uri.file(path.dirname(args.filePath)))
+      .toString();
 
     panel.webview.postMessage({
       type: 'init',
@@ -201,6 +218,7 @@ export class LectureWebviewProvider {
       subject: args.subject,
       applyMode,
       highlightChangesMs,
+      assetBaseUri,
     });
   }
 
@@ -247,6 +265,59 @@ export class LectureWebviewProvider {
       case 'revertLastWriteback':
         await this.handleRevertLastWriteback(ctx);
         return;
+      case 'openSourceFile': {
+        // 在讲义阅读器旁边打开 .md 源文件（不覆盖讲义阅读器自身）
+        try {
+          const uri = vscode.Uri.file(ctx.args.filePath);
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc, {
+            viewColumn: vscode.ViewColumn.Beside,
+            preview: false,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.panel.webview.postMessage({
+            type: 'log',
+            level: 'error',
+            message: `打开源文件失败：${message}`,
+          });
+        }
+        return;
+      }
+      case 'deleteLectureRange': {
+        await this.handleDeleteLectureRange(ctx, msg);
+        return;
+      }
+      case 'cancelInlineSuggest': {
+        const turnId = typeof msg?.turnId === 'string' ? msg.turnId : '';
+        if (!turnId) return;
+        const controller = this.inflightTurns.get(turnId);
+        if (controller) {
+          try { controller.abort(); } catch { /* noop */ }
+          // 不在这里 delete —— 留给 handleInlineSuggest 的 finally 统一清理，
+          // 避免和 abort 后 catch 里的清理路径冲突
+        }
+        return;
+      }
+      case 'pasteMedia': {
+        await this.handlePasteMedia(ctx, msg);
+        return;
+      }
+      case 'openExternalUrl': {
+        const url = typeof msg?.url === 'string' ? msg.url : '';
+        if (!url) return;
+        try {
+          await vscode.env.openExternal(vscode.Uri.parse(url));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.panel.webview.postMessage({ type: 'log', level: 'error', message: `打开链接失败：${message}` });
+        }
+        return;
+      }
+      case 'claudeCodeSearchImage': {
+        await this.handleClaudeCodeSearchImage(ctx, msg);
+        return;
+      }
       default:
         return;
     }
@@ -257,6 +328,371 @@ export class LectureWebviewProvider {
    * `<file>.bak`（实现一次"乒乓"，再点一下撤回就回到刚被撤掉的版本，等效 redo）。
    * 没有 .bak 时直接报错给前端。
    */
+  /**
+   * 删除讲义 .md 中 [startLine, endLine) 半开区间的行（markdown-it token.map 风格）。
+   * 写之前先把当前内容存到 .bak，让 Ctrl+Z（讲义阅读器内）能撤回。
+   * 触发场景：widget ⋯ 菜单的"删除这个 widget"。
+   */
+  /**
+   * 多模态粘贴：图片 blob / 图片 URL / 视频 URL。
+   * 图片 → 保存到 <讲义同目录>/assets/<时间戳>-<rand>.<ext> + 插 `![](assets/xxx)`
+   * 视频 → 生成 <div class="cc-video" data-...> 卡片 markdown，前端 renderVideoCards 渲染
+   * 插入位置：msg.targetLine 数字 → 该行后；'end' → 文件末尾
+   * 写之前先 .bak 备份，支持 Ctrl+Z 撤回。
+   */
+  private async handlePasteMedia(ctx: PanelContext, msg: any): Promise<void> {
+    const media = msg?.media;
+    if (!media || typeof media !== 'object') return;
+    const filePath = ctx.args.filePath;
+
+    let markdown: string;
+    try {
+      if (media.kind === 'image-blob') {
+        const { buffer, ext } = parseDataUrl(String(media.dataUrl || ''));
+        const fileName = makeAssetName(guessExtFromName(media.name) || ext || 'png');
+        const relPath = await this.saveAsset(filePath, fileName, buffer);
+        markdown = `![](${relPath})`;
+      } else if (media.kind === 'image-url') {
+        const { buffer, contentType } = await downloadToBuffer(String(media.url));
+        const ext = guessExtFromContentType(contentType) || guessExtFromUrl(String(media.url)) || 'png';
+        const fileName = makeAssetName(ext);
+        const relPath = await this.saveAsset(filePath, fileName, buffer);
+        markdown = `![](${relPath})`;
+      } else if (media.kind === 'video') {
+        markdown = makeVideoCardMarkdown(media);
+      } else {
+        ctx.panel.webview.postMessage({
+          type: 'log', level: 'error',
+          message: `未知多模态类型: ${media.kind}`,
+        });
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({
+        type: 'log', level: 'error',
+        message: `多模态保存失败：${message}`,
+      });
+      return;
+    }
+
+    // 插入到 targetLine 后；'end' 或非数字 → 末尾
+    ctx.ignoreNextChangeUntil = Date.now() + 1500;
+    try {
+      const current = await fs.readFile(filePath, 'utf8');
+      await fs.writeFile(filePath + '.bak', current, 'utf8');
+      const lines = current.split('\n');
+      const targetLine = msg?.targetLine;
+      const insertAt = (targetLine === 'end' || !Number.isFinite(Number(targetLine)))
+        ? lines.length
+        : Math.max(0, Math.min(Math.floor(Number(targetLine)), lines.length));
+      // 前后加空行保证 markdown 块语义
+      const inserted = ['', markdown, ''];
+      const next = [...lines.slice(0, insertAt), ...inserted, ...lines.slice(insertAt)].join('\n');
+      await fs.writeFile(filePath, next, 'utf8');
+      ctx.panel.webview.postMessage({
+        type: 'lectureFileChanged',
+        filePath,
+        content: next,
+      });
+      ctx.panel.webview.postMessage({
+        type: 'inlineApplied',
+        turnId: 'paste-media-' + Date.now(),
+        appliedRange: { startLine: insertAt, endLine: insertAt + inserted.length },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({
+        type: 'log', level: 'error',
+        message: `插入多模态资源失败：${message}`,
+      });
+    }
+  }
+
+  /** 把字节写到 <讲义同目录>/assets/<fileName>，返回相对路径（用于 markdown）。 */
+  private async saveAsset(lectureFilePath: string, fileName: string, buffer: Buffer): Promise<string> {
+    const lectureDir = path.dirname(lectureFilePath);
+    const assetsDir = path.join(lectureDir, 'assets');
+    await fs.mkdir(assetsDir, { recursive: true });
+    await fs.writeFile(path.join(assetsDir, fileName), buffer);
+    return `assets/${fileName}`;
+  }
+
+  /**
+   * 智能搜图：spawn Claude Code CLI 子进程，让 Claude 用 WebSearch/WebFetch/Write
+   * 找+下载相关教学图，落到 <lesson dir>/assets/，然后 ClaudeCoach 自己改讲义。
+   *
+   * 设计细节：
+   *  - Claude 只给 WebSearch/WebFetch/Write/Read（不给 Edit/Bash，避免任意改文件）
+   *  - cwd 限定到讲义所在目录，相对路径自然
+   *  - 流式事件 → 进度文本 → postMessage 给 webview 显示
+   *  - Claude 最后一行 stdout 必须是 {"saved":[{path,caption}...], "reason"?}（约定）
+   *  - 拿到清单后由 ClaudeCoach 后端 readFile + 拼 markdown + 插入指定行（走现有 .bak 链路）
+   */
+  private async handleClaudeCodeSearchImage(ctx: PanelContext, msg: any): Promise<void> {
+    const query = String(msg?.query || '').trim();
+    const turnId = String(msg?.turnId || '');
+    const targetLine = msg?.targetLine;
+    const subject = String(msg?.subject || ctx.args.subject || '');
+    const topicTitle = String(msg?.topic || ctx.args.topicTitle || '');
+    const lessonTitle = String(msg?.lessonTitle || ctx.args.lessonTitle || '');
+    if (!query || !turnId) {
+      this.postCancel(ctx, turnId, '搜图参数缺失');
+      return;
+    }
+
+    const lectureDir = path.dirname(ctx.args.filePath);
+
+    // 进度文本流（拼到 streaming bubble）
+    const pushDelta = (text: string) => {
+      ctx.panel.webview.postMessage({
+        type: 'aiStreamDelta',
+        turnId,
+        channel: 'lecture',
+        delta: text,
+      });
+    };
+
+    pushDelta('🔍 正在让 Claude Code 搜索…\n\n');
+
+    // 注册 abort controller，让 webview 的 ✕ 取消能 kill 子进程
+    const controller = new AbortController();
+    this.inflightTurns.set(turnId, controller);
+
+    const prompt = this.buildSearchImagePrompt({
+      query,
+      subject,
+      topicTitle,
+      lessonTitle,
+      lessonFilePath: ctx.args.filePath,
+    });
+
+    let result;
+    try {
+      result = await runClaudeCode({
+        prompt,
+        cwd: lectureDir,
+        allowedTools: ['WebSearch', 'WebFetch', 'Write', 'Read'],
+        skipPermissions: true,  // 不交互模式，工具调用直接生效
+        timeoutMs: 180000,       // 3 分钟够长（搜+下载 1-3 张图）
+        signal: controller.signal,
+        onEvent: (event: ClaudeStreamEvent) => {
+          // 把工具调用 / 文本片段映射成进度文本
+          if (event.type === 'tool_use' || event.type === 'assistant') {
+            const name = event.name || event.tool_name
+              || (event.message && event.message.content && event.message.content[0] && event.message.content[0].name);
+            const input = event.input || (event.message && event.message.content && event.message.content[0] && event.message.content[0].input);
+            if (name === 'WebSearch') {
+              const q = input?.query || '';
+              pushDelta(`🔎 搜索：${q}\n`);
+            } else if (name === 'WebFetch') {
+              const url = input?.url || '';
+              pushDelta(`📥 抓取：${url}\n`);
+            } else if (name === 'Write') {
+              const p = input?.file_path || input?.path || '';
+              pushDelta(`💾 保存：${p}\n`);
+            }
+          } else if (event.type === 'text' && event.text) {
+            // 助手中间的解释性文字
+            pushDelta(String(event.text));
+          }
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.inflightTurns.delete(turnId);
+      this.postCancel(ctx, turnId, `Claude Code 启动失败：${message}（确认已安装并登录，PATH 里能找到 'claude'）`);
+      return;
+    } finally {
+      this.inflightTurns.delete(turnId);
+    }
+
+    // 处理被取消的情况
+    if (result.aborted) {
+      this.postCancel(ctx, turnId, '搜图已取消');
+      return;
+    }
+    if (result.exitCode !== 0) {
+      pushDelta(`\n\n❌ Claude Code 退出码 ${result.exitCode}\n${result.stderr.slice(0, 500)}`);
+      this.postCancel(ctx, turnId, `Claude Code 异常退出（${result.exitCode}）`);
+      return;
+    }
+
+    // 拿最后一行 JSON 清单
+    const summary = result.finalJson;
+    if (!summary || !Array.isArray(summary.saved) || summary.saved.length === 0) {
+      const reason = summary?.reason || '未找到合适图';
+      pushDelta(`\n\n⚠ ${reason}`);
+      this.postCancel(ctx, turnId, reason);
+      return;
+    }
+
+    // 把找到的图按顺序插入讲义
+    pushDelta(`\n\n✅ 共找到 ${summary.saved.length} 张图，开始插入讲义…\n`);
+    try {
+      const current = await fs.readFile(ctx.args.filePath, 'utf8');
+      await fs.writeFile(ctx.args.filePath + '.bak', current, 'utf8');
+      const lines = current.split('\n');
+      const insertAt = (targetLine === 'end' || !Number.isFinite(Number(targetLine)))
+        ? lines.length
+        : Math.max(0, Math.min(Math.floor(Number(targetLine)), lines.length));
+
+      // 拼图片 markdown，每张图独占一段
+      const imageBlocks: string[] = [];
+      for (const item of summary.saved) {
+        const relPath = String(item.path || '').replace(/^\.\//, '');
+        if (!relPath) continue;
+        const caption = String(item.caption || '').trim();
+        imageBlocks.push('');
+        imageBlocks.push(caption ? `![${caption}](${relPath})` : `![](${relPath})`);
+      }
+      imageBlocks.push('');
+
+      const next = [...lines.slice(0, insertAt), ...imageBlocks, ...lines.slice(insertAt)].join('\n');
+
+      ctx.ignoreNextChangeUntil = Date.now() + 1500;
+      await fs.writeFile(ctx.args.filePath, next, 'utf8');
+
+      // 通知 webview 重渲 + 关闭 bubble
+      ctx.panel.webview.postMessage({
+        type: 'lectureFileChanged',
+        filePath: ctx.args.filePath,
+        content: next,
+      });
+      ctx.panel.webview.postMessage({
+        type: 'inlineApplied',
+        turnId: 'claude-search-' + Date.now(),
+        appliedRange: { startLine: insertAt, endLine: insertAt + imageBlocks.length },
+      });
+      // 关闭 streaming bubble
+      ctx.panel.webview.postMessage({ type: 'inlineCancelled', turnId });
+      ctx.panel.webview.postMessage({
+        type: 'log', level: 'info',
+        message: `Claude Code 已嵌入 ${summary.saved.length} 张图（${(result.durationMs / 1000).toFixed(1)}s）`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.postCancel(ctx, turnId, `插入失败：${message}`);
+    }
+  }
+
+  /** 关闭对应的 streaming bubble + log 错误。 */
+  private postCancel(ctx: PanelContext, turnId: string, reason: string): void {
+    if (turnId) {
+      ctx.panel.webview.postMessage({ type: 'inlineCancelled', turnId });
+    }
+    ctx.panel.webview.postMessage({
+      type: 'log', level: 'warn',
+      message: `[claudeCodeSearchImage] ${reason}`,
+    });
+  }
+
+  /** 拼搜图任务的 Claude Code prompt。 */
+  private buildSearchImagePrompt(args: {
+    query: string;
+    subject: string;
+    topicTitle: string;
+    lessonTitle: string;
+    lessonFilePath: string;
+  }): string {
+    const contextLines = [
+      `- 讲义文件: ${args.lessonFilePath}`,
+      `- 学科: ${args.subject || '未指定'}`,
+      `- 章节: ${args.topicTitle || '未指定'}`,
+      `- 当前讲义: ${args.lessonTitle || '未指定'}`,
+      `- 用户描述要找的图: ${args.query}`,
+    ].join('\n');
+
+    return [
+      '你是 ClaudeCoach 的图片搜索助手。任务：为讲义找 1-3 张高质量教学示意图，',
+      '下载到讲义同目录下的 assets/ 文件夹（不存在就 mkdir），不要修改讲义文件本身。',
+      '',
+      '## 上下文',
+      contextLines,
+      '',
+      '## 工作步骤',
+      '1. 用 WebSearch 搜 1-3 个不同搜索 query（构造时把"学科 + 章节 + 用户描述"组合，加 diagram/illustration/figure 等关键词）',
+      '2. 从结果挑 1-3 张候选图。优先来源：',
+      '   - Wikipedia / Wikipedia Commons',
+      '   - Distill.pub / Jay Alammar (jalammar.github.io) / 3Blue1Brown',
+      '   - 教材作者主页 / 公开课讲义',
+      '   - arxiv 论文图（jpg/png 直链）',
+      '3. WebFetch 取每个候选页面的 HTML（或直接是图 URL），从中提取真实的 <img src=...> 绝对 URL',
+      '4. 用 Write 把图保存到 assets/<safe-name>.<ext>',
+      '   - 文件名格式: `<topic-slug>-<n>.<ext>`，topic-slug 取 topicTitle 简化（小写 + 短横线）',
+      '   - 例如: `tcp-handshake-1.png` `transformer-attention-2.jpg`',
+      '',
+      '## 严格约束',
+      '- **只用工具 WebSearch / WebFetch / Write / Read，绝对不要用 Edit / Bash / 其他**',
+      '- **不要修改讲义 .md 文件** —— 你只负责下载图，插入由 ClaudeCoach 自己做',
+      '- **学术 / 技术示意图**，不要摄影艺术图、营销图、低分辨率图、有大水印的图',
+      '- 如果搜不到合适的，直接输出 `{"saved":[],"reason":"具体原因"}` 然后停止，不要硬塞错图',
+      '',
+      '## 输出格式',
+      '**最后一行 stdout** 必须输出一个独立的 JSON（不要包在代码块里、不要多余文本），格式如下：',
+      '```json',
+      '{"saved":[{"path":"assets/xxx-1.png","caption":"图说"},{"path":"assets/xxx-2.jpg","caption":"图说"}]}',
+      '```',
+      '`path` 是相对于讲义目录的相对路径（assets/ 开头）；`caption` 是简短的图片说明（10-30 字，会成为 markdown alt）。',
+      '',
+      '失败时：',
+      '```json',
+      '{"saved":[],"reason":"具体原因，如：未找到符合学术质量的图"}',
+      '```',
+      '',
+      '开始执行。',
+    ].join('\n');
+  }
+
+  private async handleDeleteLectureRange(ctx: PanelContext, msg: any): Promise<void> {
+    const startLine = Number(msg?.startLine);
+    const endLine = Number(msg?.endLine);
+    if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine <= startLine) {
+      ctx.panel.webview.postMessage({
+        type: 'log',
+        level: 'error',
+        message: `删除范围非法：startLine=${msg?.startLine} endLine=${msg?.endLine}`,
+      });
+      return;
+    }
+
+    const filePath = ctx.args.filePath;
+    let current: string;
+    try {
+      current = await fs.readFile(filePath, 'utf8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({ type: 'log', level: 'error', message: `读取讲义失败：${message}` });
+      return;
+    }
+
+    // 让 onDidChangeTextDocument 让路，避免自家写回引发重复刷新
+    ctx.ignoreNextChangeUntil = Date.now() + 1500;
+
+    try {
+      await fs.writeFile(filePath + '.bak', current, 'utf8');
+      const lines = current.split('\n');
+      const safeStart = Math.max(0, Math.min(Math.floor(startLine), lines.length));
+      const safeEnd = Math.max(safeStart, Math.min(Math.floor(endLine), lines.length));
+      const next = [...lines.slice(0, safeStart), ...lines.slice(safeEnd)].join('\n');
+      await fs.writeFile(filePath, next, 'utf8');
+      ctx.panel.webview.postMessage({
+        type: 'lectureFileChanged',
+        filePath,
+        content: next,
+      });
+      // 显示 undo pill 让用户能 Ctrl+Z 撤回（appliedRange 走零长度区间表"光删了"）
+      ctx.panel.webview.postMessage({
+        type: 'inlineApplied',
+        turnId: 'delete-range-' + Date.now(),
+        appliedRange: { startLine: safeStart, endLine: safeStart },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.panel.webview.postMessage({ type: 'log', level: 'error', message: `删除失败：${message}` });
+    }
+  }
+
   private async handleRevertLastWriteback(ctx: PanelContext): Promise<void> {
     const filePath = ctx.args.filePath;
     const backupPath = filePath + '.bak';
@@ -407,10 +843,14 @@ export class LectureWebviewProvider {
     }
 
     let suggestion = '';
+    // 注册 AbortController 让 webview 的 ✕ 取消按钮能中断网络请求。
+    const controller = new AbortController();
+    this.inflightTurns.set(request.turnId, controller);
     try {
       // 流式：每个 token 立即 post 给 webview，前端在 preview bubble 里逐字累加渲染。
       suggestion = await this.deps.ai.chatCompletion(messages, {
         temperature: 0.4,
+        signal: controller.signal,
         onDelta: (chunk) => {
           ctx.panel.webview.postMessage({
             type: 'aiStreamDelta',
@@ -422,24 +862,51 @@ export class LectureWebviewProvider {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const isAbort = controller.signal.aborted
+        || (error as any)?.name === 'AbortError'
+        || /\baborted?\b/i.test(message);
+      // 不论是不是 abort，先发 aiStreamEnd 让 webview 关掉 streaming 节流 timer
       ctx.panel.webview.postMessage({
         type: 'aiStreamEnd',
         turnId: request.turnId,
         channel: 'lecture',
-        error: message,
+        error: isAbort ? 'cancelled' : message,
       });
-      ctx.panel.webview.postMessage({
-        type: 'inlineSuggestResult',
-        result: {
+      if (isAbort) {
+        // 取消是用户主动行为，不走 failed bubble（会显红色"AI 失败"误导用户），
+        // 走专用 inlineCancelled：webview 清掉 bubble + 显示"已取消"toast
+        ctx.panel.webview.postMessage({
+          type: 'inlineCancelled',
           turnId: request.turnId,
-          status: 'failed',
-          errorMessage: `AI 调用失败：${message}`,
-        } satisfies InlineSuggestResult,
-      });
+        });
+      } else {
+        ctx.panel.webview.postMessage({
+          type: 'inlineSuggestResult',
+          result: {
+            turnId: request.turnId,
+            status: 'failed',
+            errorMessage: `AI 调用失败：${message}`,
+          } satisfies InlineSuggestResult,
+        });
+      }
       return;
+    } finally {
+      this.inflightTurns.delete(request.turnId);
     }
 
-    const cleaned = stripFenceWrapper(suggestion).trim();
+    let cleaned = stripFenceWrapper(suggestion).trim();
+    // widget 模式兜底：AI 偶尔不写 ```widget 围栏直接 dump raw HTML（违反 prompt 规则 1）。
+    // 这种内容写回讲义后会被 markdown-it 当 raw HTML 透传 → 浏览器执行（污染 webview，
+    // 而不是渲染成 widget iframe）。这里检测：widget 模式 + 内容看起来是 HTML 但无围栏 →
+    // 自动补上 ```widget...``` 围栏。
+    const isWidgetMode = /^【模式：互动演示生成】/.test(request.instruction || '');
+    if (isWidgetMode && !/^```widget\b/i.test(cleaned)) {
+      const looksLikeHtml = /^<!DOCTYPE\s+html\b|^<html\b|^<style\b|^<script\b|^<div\b|^<svg\b|^<head\b|^<body\b/i
+        .test(cleaned);
+      if (looksLikeHtml) {
+        cleaned = '```widget\n' + cleaned + '\n```';
+      }
+    }
 
     // 流式收尾：通知前端"finalText 是这个，可以采纳/丢弃"
     ctx.panel.webview.postMessage({
@@ -611,6 +1078,9 @@ export class LectureWebviewProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'sidebar', 'lecture-webview', 'style.css'),
     );
+    const designSystemUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'src', 'sidebar', 'shared', 'design-system.css'),
+    );
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'src', 'sidebar', 'lecture-webview', 'main.js'),
     );
@@ -678,6 +1148,7 @@ export class LectureWebviewProvider {
     return html
       .replace(/{{csp}}/g, csp)
       .replace(/{{nonce}}/g, nonce)
+      .replace(/{{designSystemUri}}/g, designSystemUri.toString())
       .replace(/{{styleUri}}/g, styleUri.toString())
       .replace(/{{scriptUri}}/g, scriptUri.toString())
       .replace(/{{renderHelpersUri}}/g, renderHelpersUri.toString())
@@ -698,6 +1169,112 @@ function stripFenceWrapper(text: string): string {
   const fenceMatch = trimmed.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i);
   if (fenceMatch) return fenceMatch[1];
   return trimmed;
+}
+
+// ===== 多模态辅助函数（handlePasteMedia 用）=====
+
+/** dataURL → buffer + mime + ext。失败抛 Error。 */
+function parseDataUrl(dataUrl: string): { mime: string; buffer: Buffer; ext: string } {
+  const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) throw new Error('Invalid dataURL');
+  const mime = m[1];
+  const buffer = Buffer.from(m[2], 'base64');
+  const ext = (mime.split('/')[1] || 'png').toLowerCase().replace('jpeg', 'jpg');
+  return { mime, buffer, ext };
+}
+
+function guessExtFromName(name?: string): string | null {
+  if (!name) return null;
+  const m = String(name).match(/\.([a-z0-9]+)$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function guessExtFromUrl(url: string): string | null {
+  const m = String(url).match(/\.([a-z0-9]+)(?:\?|#|$)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function guessExtFromContentType(ct?: string): string | null {
+  if (!ct) return null;
+  const m = String(ct).match(/^image\/([a-z0-9]+)/i);
+  return m ? m[1].toLowerCase().replace('jpeg', 'jpg') : null;
+}
+
+function makeAssetName(ext: string): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const rand = crypto.randomBytes(3).toString('hex');
+  return `${ts}-${rand}.${ext}`;
+}
+
+/**
+ * 用 Node 标准库 https/http 下载远程图片。不用全局 fetch，因为 tsconfig
+ * lib=["ES2022"] 不含 DOM → 编译期没有 fetch 类型；require 形式跟本文件
+ * fsSync 那段一致 pattern，绕过类型问题。运行时是同一个 Node 进程没区别。
+ * 跟随 3 次重定向（Location 头）。
+ */
+function downloadToBuffer(
+  url: string,
+  redirectsLeft: number = 3,
+): Promise<{ buffer: Buffer; contentType?: string }> {
+  return new Promise((resolve, reject) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const lib: any = url.startsWith('https://') ? require('https') : require('http');
+    const req = lib.get(
+      url,
+      { headers: { 'User-Agent': 'Mozilla/5.0 ClaudeCoach' } },
+      (res: any) => {
+        // 3xx 重定向：递归下载新 URL（避免 URL 类型依赖，手工拼绝对路径）
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          const loc = String(res.headers.location);
+          const next = /^https?:\/\//i.test(loc)
+            ? loc
+            : (() => {
+                const m = url.match(/^(https?:\/\/[^/]+)/i);
+                const origin = m ? m[1] : '';
+                return origin + (loc.startsWith('/') ? loc : '/' + loc);
+              })();
+          downloadToBuffer(next, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            buffer: Buffer.concat(chunks),
+            contentType: res.headers['content-type'],
+          });
+        });
+        res.on('error', reject);
+      },
+    );
+    req.on('error', reject);
+  });
+}
+
+function escHtmlAttr(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** 生成视频卡片的 markdown（嵌入式 div，data-* 属性保留信息，前端 renderVideoCards 渲染卡片）。 */
+function makeVideoCardMarkdown(media: { platform?: string; id?: string; t?: number; url?: string }): string {
+  const platform = String(media.platform || 'video');
+  const id = String(media.id || '');
+  const t = Number(media.t || 0);
+  const url = String(media.url || '');
+  // div 单独成块（前后空行让 markdown-it 当 raw HTML block 处理）
+  return `<div class="cc-video" data-platform="${escHtmlAttr(platform)}" data-id="${escHtmlAttr(id)}" data-t="${t}" data-url="${escHtmlAttr(url)}"><a href="${escHtmlAttr(url)}">${escHtmlAttr(url)}</a></div>`;
 }
 
 // 防御：避免 isLecturePath 还没实现时整个文件爆掉。

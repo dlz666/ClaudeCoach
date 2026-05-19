@@ -1,3 +1,21 @@
+/* ============================================================
+ * ClaudeCoach 主 Sidebar - style.css
+ *
+ * 注意：核心 design token + 通用组件（.ds-* / .btn / .panel / .card /
+ *   .cc-chip / .ds-segmented / .ds-toast / .ds-card / .ds-field 等）现在
+ *   由 src/sidebar/shared/design-system.css 统一定义。
+ *
+ * 本文件**只保留 sidebar 专属的复杂结构样式**：
+ *   - 5 个 tab 的页面布局
+ *   - 课程树 / 资料库 / 聊天 / 日志的复杂组件
+ *   - AI Profile 卡 / RAG 卡 / 设置导航 的 sidebar 专属微调
+ *
+ * 未来清理路径（暂未做以避免视觉回归）：
+ *   - 删除本文件里跟 design-system.css 重复定义的 .btn / .panel /
+ *     .setting-row 等基础组件 CSS（约 600-900 行可减）
+ *   - 这次保留双重定义是为了零回归风险，cascade 后写覆盖，新 ds-* 优先
+ * ============================================================ */
+
 :root {
   --radius-sm: 8px;
   --radius-md: 14px;
@@ -3183,4 +3201,266 @@ button.cc-chip[aria-pressed="true"],
   content: '●';
   color: var(--vscode-charts-green, #4ec9b0);
   font-size: 9px;
+  margin-right: 4px;
+  transition: color var(--motion-fast);
+}
+/* Step 9: 保存状态机 */
+.cc-save-hint.is-saving::before {
+  color: var(--warn);
+  animation: ds-heartbeat 0.9s ease-in-out infinite;
+}
+.cc-save-hint.is-saved::before {
+  color: var(--success);
+  animation: none;
+}
+.cc-save-hint.is-error::before {
+  color: var(--danger);
+  animation: none;
+}
+
+/* ============================================================
+ * AI Profile 卡（Step 3 重设计）
+ * .ds-card 提供主体外观，这里只补 sidebar 专属的微调
+ * ============================================================ */
+.ai-profile-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.ai-profile-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground, var(--vscode-foreground)) 75%, transparent);
+  margin: 6px 0 10px;
+  min-width: 0;
+}
+.ai-profile-meta__provider {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ai-profile-meta__model {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  flex: 1;
+  min-width: 0;
+}
+.ai-profile-primary-actions {
+  margin-top: 4px;
+  gap: 6px;
+}
+.ai-profile-primary-actions .ds-btn {
+  flex: 1;
+}
+
+/* AI Profile 卡 / settings cluster nav 容器 */
+#aiProfilesList, .ai-profiles-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.settings-cluster-nav {
+  margin-bottom: var(--space-2);
+  width: 100%;
+}
+.settings-cluster-nav .ds-segmented__btn {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+/* ⋯ 菜单浮层 */
+.ds-profile-menu {
+  min-width: 160px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--border));
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popover);
+  animation: ds-pop-in var(--motion-enter);
+  font-size: 12.5px;
+}
+.ds-profile-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ds-profile-menu button:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, var(--accent-soft)));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)));
+}
+.ds-profile-menu button.danger {
+  color: color-mix(in srgb, var(--danger) 92%, white 6%);
+}
+.ds-profile-menu button.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ============================================================
+ * AI Profile 编辑器子页（Step 4）
+ * ============================================================ */
+.ai-profile-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: var(--space-3) 0 var(--space-2);
+  align-items: center;
+}
+.ai-profile-toolbar > .ds-btn {
+  flex: 1;
+  min-width: 0;
+}
+.ai-profile-toolbar > .ds-btn--primary {
+  flex: 1.4;
+}
+.ai-profile-toolbar > .custom-dropdown {
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* fieldset 视觉 */
+.ds-fieldset {
+  border: 1px solid var(--border);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+.ds-fieldset > legend {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--vscode-foreground) 65%, transparent);
+  padding: 0 6px;
+}
+.ds-fieldset .setting-row,
+.ds-fieldset .ds-field {
+  margin-top: var(--space-2);
+}
+.ds-fieldset .setting-row:first-of-type,
+.ds-fieldset .ds-field:first-of-type {
+  margin-top: 0;
+}
+
+/* 可折叠 fieldset (用 details 实现) */
+details.ds-fieldset--collapsible {
+  padding: 0;
+}
+details.ds-fieldset--collapsible > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+details.ds-fieldset--collapsible > summary::-webkit-details-marker { display: none; }
+details.ds-fieldset--collapsible > summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform var(--motion-fast);
+}
+details[open].ds-fieldset--collapsible > summary::before {
+  transform: rotate(90deg);
+}
+details.ds-fieldset--collapsible > :not(summary) {
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* 编辑器的"保存"按钮单独行 */
+.ai-profile-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin: var(--space-3) 0;
+}
+.ai-profile-editor-actions .ds-btn--primary {
+  flex: 1;
+}
+
+/* Token / sensitive input 带 👁 切换 */
+.ds-input-with-toggle {
+  position: relative;
+  display: flex;
+}
+.ds-input-with-toggle input {
+  flex: 1;
+  padding-right: 36px;
+}
+.ds-input-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none !important;
+  background: transparent !important;
+  padding: 4px 6px !important;
+  opacity: 0.6;
+  font-size: 13px;
+}
+.ds-input-toggle:hover {
+  opacity: 1;
+}
+
+/* Workspace Override fieldset：未启用时半透明禁用 */
+.ai-workspace-override > legend .ds-toggle {
+  margin: 0;
+}
+.ai-workspace-override:not([data-enabled="true"]) .ds-fieldset__body {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ============================================================
+ * RAG 控制台（Step 6）
+ * ============================================================ */
+.rag-console {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.rag-card {
+  /* .ds-card 已经给了 padding/radius/border/bg，这里只补特殊态 */
+}
+.rag-card .ds-card__title {
+  font-size: 13.5px;
+}
+/* 引擎激活态：开了显示完整字段；关了 .rag-card__body 隐藏 */
+.rag-card--engine[data-engine-on="false"] .rag-card__body {
+  display: none;
+}
+.rag-card--engine[data-engine-on="true"] {
+  border-left: 3px solid var(--success);
+}
+.rag-card__body {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  animation: ds-pop-in var(--motion-enter);
+}
+.rag-card__actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.rag-card__actions .ds-btn {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
 }
