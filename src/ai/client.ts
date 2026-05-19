@@ -1086,6 +1086,13 @@ export class AIClient {
     if (config.model && config.model.trim()) {
       args.push('--model', config.model.trim());
     }
+    // 关键：禁用所有内置工具。否则 Claude Code 默认处于 agent 模式，看到"写讲义"
+    // 这种任务会想用 Write 工具创建文件 → 在 --print 模式下没法弹 permission 窗
+    // → 输出"请授权后即可查看"的状态摘要，而不是真讲义内容。
+    // 我们要的就是单轮 chat 输出文本，不需要任何工具能力。
+    args.push('--disallowedTools',
+      'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit,Skill,SlashCommand,SendUserMessage');
+
     // Windows cmd.exe 单条命令行最大 8191 字符。讲义生成 system prompt 长 ~9K-12K，
     // 作为 --append-system-prompt 参数传过去就触发 "命令行太长" (exit 1)。
     // 策略：短 system 继续走 flag（保留 CLI 语义），长 system 拼到 stdin。
