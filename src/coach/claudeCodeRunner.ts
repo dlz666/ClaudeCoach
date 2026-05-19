@@ -78,7 +78,12 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
   const cli = opts.cliPath || 'claude';
   const timeoutMs = opts.timeoutMs ?? 120000;
 
-  const args: string[] = ['-p', opts.prompt, '--output-format', 'stream-json'];
+  // 关键：prompt 不通过 -p <prompt> 命令行参数传，改走 stdin。
+  // 原因：Windows shell:true 下 spawn 把 args 拼成 cmd.exe 单条命令行字符串，
+  // 长 prompt（含中文 / 换行 / 引号）会被错误转义甚至截断 → Claude 收到的 prompt
+  // 残缺或为空 → 它当成"无 prompt 默认行为"回个自我介绍。实测 stdin pipe 长中文
+  // prompt 完美工作。
+  const args: string[] = ['-p', '--output-format', 'stream-json'];
   if (opts.allowedTools && opts.allowedTools.length) {
     // Claude Code 的 --allowedTools 接受空格或逗号分隔
     args.push('--allowedTools', opts.allowedTools.join(' '));
@@ -109,8 +114,11 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
         cwd: opts.cwd,
         shell: isWindows,  // Windows 下 .cmd 需要 shell
         env: { ...process.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],  // stdin pipe 给我们写 prompt
       });
+      // 把 prompt 通过 stdin 传，避开 Windows cmd.exe 命令行字符 / 长度问题
+      proc.stdin.write(opts.prompt, 'utf-8');
+      proc.stdin.end();
     } catch (err) {
       reject(err);
       return;
