@@ -898,35 +898,43 @@ ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节�
 1. **学术插图建议**：某概念有公认的标准示意图（如 Transformer 架构、TCP 三次握手、CPU 流水线、内存层次、Cache 组相联结构、感受野、Backprop 计算图等），但你画不出业界顶级质量
 2. **交互演示建议**：某算法/概念用"步进+高亮"演示比静态图好（如 Dijkstra、BFS/DFS、滑动窗口、LRU 替换、归并排序）
 
-**格式（必须独立成块，前后空行）**：
-\`\`\`text
+**格式（直接写 raw HTML，**不要包代码围栏**，必须独立成块，前后空行）**：
+
 <div class="cc-suggest" data-kind="image" data-query="搜索描述">
 💡 建议：在这里加一张"<具体描述>"的示意图
 </div>
-\`\`\`
+
 或：
-\`\`\`text
+
 <div class="cc-suggest" data-kind="widget" data-query="互动演示描述">
 💡 建议：在这里加一个"<具体描述>"的互动演示
 </div>
-\`\`\`
 
 **\`data-kind\`** 只有 \`image\` 或 \`widget\` 两种。**\`data-query\`** 是 1-2 句具体描述（不是 quotation，是给 Claude 搜图或生成 widget 的 query）。
 
-**插入数量限制**：每节讲义最多 2-3 个 cc-suggest 块，不要每段都塞。优先放在"概念抽象 / 算法过程 / 架构图" 这种**只靠文字读不懂**的地方。
+**⚠️ 绝不要把这个 \`<div class="cc-suggest">\` 包在 \`\`\`text 或任何代码围栏里**——它必须作为 raw HTML 直接出现在 markdown 中，前后空行让 markdown-it 当 html_block 解析。包了围栏就会变成代码块字面量，前端识别不了，用户看到的是一个奇怪的代码块。
 
-**例子（在 Transformer 那节）**：
+**何时用 image vs widget**：
+- **image**：静态结构图、概念示意图、架构总览（如 Transformer 整体架构、CPU 流水线、内存层次结构）。这类用真实教学资源（教材插图、Jay Alammar 等）比 AI 重画好得多。
+- **widget**：算法过程演示、参数可视化、状态变化（如 Self-Attention 的 Q·K^T 矩阵计算、Dijkstra 单步演示、softmax 温度调节、可调 head 数的 attention pattern）。**只要有"下一步 / 重置 / 拖滑块" 价值的就用 widget**。
+- **优先 widget**：算法 / 数据结构 / DP / 注意力计算 / 流水线 / 调度等"过程性"内容 → 几乎必用 widget。
 
-\`\`\`text
+**插入数量限制**：每节讲义最多 2-3 个 cc-suggest 块，不要每段都塞。优先放在"概念抽象 / 算法过程 / 架构图" 这种**只靠文字读不懂**的地方。算法主题至少 1 个 widget 占位。
+
+**正面例子**（在 Transformer 那节，注意是 raw HTML 直接写在讲义里，没有围栏）：
+
 <div class="cc-suggest" data-kind="image" data-query="Transformer 完整架构图 含 encoder decoder multi-head attention layer norm">
 💡 建议：在这里加一张 Transformer 完整架构图（论文 Figure 1 风格，标注 encoder / decoder / attention / FFN）
 </div>
-\`\`\`
 
-\`\`\`text
-<div class="cc-suggest" data-kind="widget" data-query="Self-Attention 计算过程演示 Q K^T softmax 矩阵相乘可视化 4 个 token">
+<div class="cc-suggest" data-kind="widget" data-query="Self-Attention 计算过程演示 Q K^T softmax 矩阵相乘可视化 4 个 token 步进 高亮">
 💡 建议：在这里加一个 Self-Attention 计算过程的可视化（4 个 token，按步骤展示 Q·K^T → softmax → 乘 V）
 </div>
+
+**反例**（千万不要这么写）：
+
+\`\`\`text  ← ❌ 错：包了围栏，会变代码块
+<div class="cc-suggest" ...>...</div>
 \`\`\`
 
 【公式与推导】
