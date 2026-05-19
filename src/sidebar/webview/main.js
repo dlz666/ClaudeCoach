@@ -2498,6 +2498,10 @@
     if (action === 'test') {
       vscode.postMessage({ type: 'testAIProfile', profile });
       addLog(`正在测试 AI Profile：${profile.name}`, 'info');
+      // 立即用 toast 给用户反馈（不光写日志）
+      showToast(`🔌 正在测试 ${profile.name || 'Profile'}…`, 'info', { duration: 8000 });
+      // 记下当前测试的 profile 名，等 aiTestResult 回来时拼到 toast 文案里
+      state.testingProfileName = profile.name || 'Profile';
       return;
     }
     if (action === 'export') {
@@ -4531,6 +4535,11 @@
       case 'aiTestResult': {
         const m = msg.message || (msg.success ? '测试成功' : '测试失败');
         addLog(m, msg.success ? 'info' : 'error');
+        // 弹 toast 让用户一眼看到结果（不只藏日志里）
+        const who = state.testingProfileName || 'Profile';
+        const icon = msg.success ? '✓' : '✗';
+        showToast(`${icon} ${who}：${m}`, msg.success ? 'success' : 'error', { duration: 4000 });
+        state.testingProfileName = null;
         break;
       }
       case 'workspaceAIOverride': {
