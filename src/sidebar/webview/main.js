@@ -2400,6 +2400,11 @@
               <button class="ds-btn ${isActive ? '' : 'ds-btn--primary'}" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}" ${isActive ? 'disabled' : ''}>${isActive ? '✓ 已激活' : '激活'}</button>
               <button class="ds-btn ds-btn--ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
             </div>
+            <!-- 测试连通性 / 其他操作的就近反馈区（默认隐藏，测试时显示）-->
+            <div class="ds-feedback hidden" data-profile-feedback="${escapeHtml(profile.id)}" role="status" aria-live="polite">
+              <span class="ds-feedback__icon"></span>
+              <div class="ds-feedback__body"></div>
+            </div>
           </article>
         `;
       }).join('');
@@ -2498,10 +2503,10 @@
     if (action === 'test') {
       vscode.postMessage({ type: 'testAIProfile', profile });
       addLog(`正在测试 AI Profile：${profile.name}`, 'info');
-      // 立即用 toast 给用户反馈（不光写日志）
-      showToast(`🔌 正在测试 ${profile.name || 'Profile'}…`, 'info', { duration: 8000 });
-      // 记下当前测试的 profile 名，等 aiTestResult 回来时拼到 toast 文案里
+      // 就近反馈：在对应 profile 卡内渲染 pending 状态（pending 不自动隐藏，等结果回来覆盖）
+      state.testingProfileId = profile.id;
       state.testingProfileName = profile.name || 'Profile';
+      renderProfileFeedback(profile.id, 'pending', `正在测试 ${profile.name || ''} 的连通性…`);
       return;
     }
     if (action === 'export') {
@@ -2591,6 +2596,39 @@
     }
   });
 
+  /**
+   * 渲染 AI Profile 卡内的就近反馈（点测试连通性等场景）。
+   * profileId 标识哪张卡；state = 'pending'|'success'|'error'；message 显示文字。
+   * autoHideMs > 0 会自动隐藏（success/error 用，pending 不用）。
+   */
+  function renderProfileFeedback(profileId, state, message, autoHideMs) {
+    if (!profileId) return;
+    const fb = document.querySelector(`[data-profile-feedback="${CSS.escape(profileId)}"]`);
+    if (!fb) return;
+    fb.classList.remove('hidden', 'ds-feedback--success', 'ds-feedback--error', 'ds-feedback--pending');
+    fb.classList.add('ds-feedback--' + state);
+    const icon = fb.querySelector('.ds-feedback__icon');
+    const body = fb.querySelector('.ds-feedback__body');
+    if (icon) {
+      icon.innerHTML = '';
+      icon.textContent = state === 'success' ? '✓' : state === 'error' ? '✗' : '';
+      if (state === 'pending') icon.innerHTML = '<i></i>';
+    }
+    if (body) body.textContent = message || '';
+    // 滚动到可见区，让用户立即看到（profile 卡可能在 viewport 外）
+    requestAnimationFrame(() => {
+      fb.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+    if (autoHideMs && autoHideMs > 0) {
+      // 取消上一个 timer（同一张卡反复触发时）
+      if (fb._hideTimer) clearTimeout(fb._hideTimer);
+      fb._hideTimer = setTimeout(() => {
+        fb.classList.add('hidden');
+        fb._hideTimer = null;
+      }, autoHideMs);
+    }
+  }
+
   /** 渲染 Embedding 测试结果到 .ds-feedback 卡（替代原来的内联 span 文本）。 */
   function renderEmbeddingTestFeedback(state, message) {
     const feedback = document.getElementById('embedding-test-feedback');
@@ -2608,6 +2646,10 @@
       }
     }
     if (body) body.textContent = message || (state === 'pending' ? '正在测试连通性…' : '');
+    // 滚动到可见区，让用户立即看到（embedding 卡可能在 viewport 外）
+    requestAnimationFrame(() => {
+      feedback.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
   }
 
   function renderWorkspaceAIOverride() {
@@ -4535,10 +4577,16 @@
       case 'aiTestResult': {
         const m = msg.message || (msg.success ? '测试成功' : '测试失败');
         addLog(m, msg.success ? 'info' : 'error');
-        // 弹 toast 让用户一眼看到结果（不只藏日志里）
-        const who = state.testingProfileName || 'Profile';
-        const icon = msg.success ? '✓' : '✗';
-        showToast(`${icon} ${who}：${m}`, msg.success ? 'success' : 'error', { duration: 4000 });
+        // 就近反馈：渲染到对应 profile 卡内的 ds-feedback 区，6s 后自动收起
+        if (state.testingProfileId) {
+          renderProfileFeedback(
+            state.testingProfileId,
+            msg.success ? 'success' : 'error',
+            m,
+            6000,
+          );
+        }
+        state.testingProfileId = null;
         state.testingProfileName = null;
         break;
       }
