@@ -203,15 +203,17 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
         } catch { /* noop */ }
       }
       // 解析最后一行 JSON 作为最终结果（约定：Claude 完成任务必须最后一行输出 JSON 清单）
+      // 业务字段：images（搜图新格式）/ saved（搜图旧格式，已废弃但兼容）/ reason（失败时给）
       let finalJson: any | null = null;
       for (let i = stdoutLines.length - 1; i >= 0; i--) {
         const line = stdoutLines[i];
         try {
           const parsed = JSON.parse(line);
           // 跳过 type=text/tool_use/system 这些中间事件，找真正的最终 result
-          // 我们的约定：用户 prompt 要求 Claude 最后输出 {"saved":[...]} 之类，
+          // 我们的约定：用户 prompt 要求 Claude 最后输出 {"images":[...]} 之类的业务 JSON，
           // 这一条没有 "type" 字段（或 type 不在标准事件集里）
-          if (parsed && (parsed.saved || parsed.result || (!parsed.type && Object.keys(parsed).length))) {
+          if (parsed && (parsed.images || parsed.saved || parsed.result
+                         || (!parsed.type && Object.keys(parsed).length))) {
             // 但跳过 stream-json 的 wrapper（type=result 是 Claude Code 自己的总结）
             if (parsed.type === 'result' && parsed.result && typeof parsed.result === 'string') {
               // Claude Code 的 final result 事件，result 字段是文本
@@ -222,7 +224,7 @@ export async function runClaudeCode(opts: ClaudeCodeRunOptions): Promise<ClaudeC
               }
               continue;
             }
-            if (parsed.saved || parsed.reason) {
+            if (parsed.images || parsed.saved || parsed.reason) {
               finalJson = parsed;
               break;
             }

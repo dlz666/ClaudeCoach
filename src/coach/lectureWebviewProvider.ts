@@ -419,15 +419,18 @@ export class LectureWebviewProvider {
   }
 
   /**
-   * 智能搜图：spawn Claude Code CLI 子进程，让 Claude 用 WebSearch/WebFetch/Write
-   * 找+下载相关教学图，落到 <lesson dir>/assets/，然后 ClaudeCoach 自己改讲义。
+   * 智能搜图：spawn Claude Code CLI 子进程，让 Claude 用 WebSearch/WebFetch
+   * 找到相关教学图的真实 URL，然后由 ClaudeCoach 宿主端 HTTP 下载 + 落盘到 assets/。
    *
-   * 设计细节：
-   *  - Claude 只给 WebSearch/WebFetch/Write/Read（不给 Edit/Bash，避免任意改文件）
-   *  - cwd 限定到讲义所在目录，相对路径自然
+   * 设计细节（关键根因）：
+   *  - Claude Code 的 Write 工具内部强制文本编码，**无法写二进制 PNG/JPG** —— 之前让
+   *    Claude 自己下载保存的版本，每次都失败回 fallback "Write工具无法写入二进制PNG"。
+   *    所以分工反转：Claude 只搜+给 URL，宿主端用 https.get 下载（pasteMedia 已验证）。
+   *  - Claude 只给 WebSearch / WebFetch（不给 Write/Read/Edit/Bash/Task）
+   *  - cwd 限定到讲义所在目录
    *  - 流式事件 → 进度文本 → postMessage 给 webview 显示
-   *  - Claude 最后一行 stdout 必须是 {"saved":[{path,caption}...], "reason"?}（约定）
-   *  - 拿到清单后由 ClaudeCoach 后端 readFile + 拼 markdown + 插入指定行（走现有 .bak 链路）
+   *  - Claude 最后一行 stdout 必须是 {"images":[{url,caption}...], "reason"?}（约定）
+   *  - 拿到 URL 清单后宿主 downloadToBuffer + saveAsset + 拼 markdown + 插入指定行
    */
   private async handleClaudeCodeSearchImage(ctx: PanelContext, msg: any): Promise<void> {
     const query = String(msg?.query || '').trim();
@@ -472,11 +475,15 @@ export class LectureWebviewProvider {
       result = await runClaudeCode({
         prompt,
         cwd: lectureDir,
-        allowedTools: ['WebSearch', 'WebFetch', 'Write', 'Read'],
-        // 显式禁掉所有可能让 Claude 分散注意力的工具（Task 会让它 spawn 子 agent 反复思考，
-        // TodoWrite 会让它先 plan、Edit/Bash 跟搜图无关）
-        disallowedTools: ['Task', 'TodoWrite', 'Edit', 'Bash', 'Glob', 'Grep', 'NotebookEdit',
-          'Skill', 'SlashCommand', 'SendUserMessage'],
+        // 只给 WebSearch / WebFetch —— Write 工具无法处理二进制 PNG/JPG，给了反而让 Claude 误用
+        allowedTools: ['WebSearch', 'WebFetch'],
+        // 显式禁掉所有可能让 Claude 分散注意力或误用的工具：
+        //  - Write/Read: 跟搜图无关，且 Write 无法处理二进制让 Claude 卡死
+        //  - Task: 会让它 spawn 子 agent 反复思考
+        //  - TodoWrite: 会让它先 plan
+        //  - Edit/Bash/Glob/Grep/NotebookEdit: 跟搜图无关
+        disallowedTools: ['Write', 'Read', 'Task', 'TodoWrite', 'Edit', 'Bash', 'Glob', 'Grep',
+          'NotebookEdit', 'Skill', 'SlashCommand', 'SendUserMessage'],
         skipPermissions: true,  // 不交互模式，工具调用直接生效
         effort: 'low',           // 关键：Claude 4 默认 Extended Thinking 占 output 配额 →
                                   // Claude 思考完没 token 输出"实际搜图"，直接输出 fallback
@@ -495,9 +502,6 @@ export class LectureWebviewProvider {
             } else if (name === 'WebFetch') {
               const url = input?.url || '';
               pushDelta(`📥 抓取：${url}\n`);
-            } else if (name === 'Write') {
-              const p = input?.file_path || input?.path || '';
-              pushDelta(`💾 保存：${p}\n`);
             }
           } else if (event.type === 'text' && event.text) {
             // 助手中间的解释性文字
@@ -525,9 +529,13 @@ export class LectureWebviewProvider {
       return;
     }
 
-    // 拿最后一行 JSON 清单
+    // 拿最后一行 JSON 清单：新格式 {"images":[{url,caption}]} —— Claude 只给 URL，宿主端下载
+    // 兼容老格式 {"saved":[{path,caption}]} 万一 Claude 没读到新 prompt 仍按旧格式输出
     const summary = result.finalJson;
-    if (!summary || !Array.isArray(summary.saved) || summary.saved.length === 0) {
+    const urlItems: Array<{ url: string; caption?: string }> = Array.isArray(summary?.images)
+      ? summary.images.filter((it: any) => it && typeof it.url === 'string' && /^https?:\/\//i.test(it.url))
+      : [];
+    if (!summary || urlItems.length === 0) {
       const reason = summary?.reason || '未找到合适图';
       pushDelta(`\n\n⚠ ${reason}`);
 
@@ -557,27 +565,45 @@ export class LectureWebviewProvider {
       return;
     }
 
-    // 把找到的图按顺序插入讲义
-    pushDelta(`\n\n✅ 共找到 ${summary.saved.length} 张图，开始插入讲义…\n`);
+    // 把找到的 URL 列表下载到 assets/ 并按顺序插入讲义
+    pushDelta(`\n\n✅ 共找到 ${urlItems.length} 个 URL，开始下载…\n`);
     try {
+      // 先全部下载到 assets/（失败的跳过），最后再写讲义 —— 避免讲义已改但下载失败
+      const imageBlocks: string[] = [];
+      const downloadErrors: string[] = [];
+      for (const item of urlItems) {
+        try {
+          pushDelta(`⬇ 下载：${item.url}\n`);
+          const { buffer, contentType } = await downloadToBuffer(item.url);
+          const ext = guessExtFromContentType(contentType) || guessExtFromUrl(item.url) || 'png';
+          const fileName = makeAssetName(ext);
+          const relPath = await this.saveAsset(ctx.args.filePath, fileName, buffer);
+          const caption = String(item.caption || '').trim();
+          imageBlocks.push('');
+          imageBlocks.push(caption ? `![${caption}](${relPath})` : `![](${relPath})`);
+        } catch (err) {
+          const dlMsg = err instanceof Error ? err.message : String(err);
+          downloadErrors.push(`${item.url}: ${dlMsg}`);
+          pushDelta(`✕ 下载失败：${dlMsg}\n`);
+        }
+      }
+      if (imageBlocks.length === 0) {
+        this.postCancel(
+          ctx,
+          turnId,
+          `所有候选 URL 都下载失败：${downloadErrors.join('; ').slice(0, 400)}`,
+        );
+        return;
+      }
+      imageBlocks.push('');
+      const savedCount = imageBlocks.filter((line) => line.startsWith('![')).length;
+
       const current = await fs.readFile(ctx.args.filePath, 'utf8');
       await fs.writeFile(ctx.args.filePath + '.bak', current, 'utf8');
       const lines = current.split('\n');
       const insertAt = (targetLine === 'end' || !Number.isFinite(Number(targetLine)))
         ? lines.length
         : Math.max(0, Math.min(Math.floor(Number(targetLine)), lines.length));
-
-      // 拼图片 markdown，每张图独占一段
-      const imageBlocks: string[] = [];
-      for (const item of summary.saved) {
-        const relPath = String(item.path || '').replace(/^\.\//, '');
-        if (!relPath) continue;
-        const caption = String(item.caption || '').trim();
-        imageBlocks.push('');
-        imageBlocks.push(caption ? `![${caption}](${relPath})` : `![](${relPath})`);
-      }
-      imageBlocks.push('');
-
       const next = [...lines.slice(0, insertAt), ...imageBlocks, ...lines.slice(insertAt)].join('\n');
 
       ctx.ignoreNextChangeUntil = Date.now() + 1500;
@@ -598,7 +624,7 @@ export class LectureWebviewProvider {
       ctx.panel.webview.postMessage({ type: 'inlineCancelled', turnId });
       ctx.panel.webview.postMessage({
         type: 'log', level: 'info',
-        message: `Claude Code 已嵌入 ${summary.saved.length} 张图（${(result.durationMs / 1000).toFixed(1)}s）`,
+        message: `Claude Code 已嵌入 ${savedCount} 张图（${(result.durationMs / 1000).toFixed(1)}s）`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -634,8 +660,8 @@ export class LectureWebviewProvider {
     ].join('\n');
 
     return [
-      '你是 ClaudeCoach 的图片搜索助手。任务：为讲义找 1-3 张高质量教学示意图，',
-      '下载到讲义同目录下的 assets/ 文件夹（不存在就 mkdir），不要修改讲义文件本身。',
+      '你是 ClaudeCoach 的图片搜索助手。任务：为讲义找出 1-3 张高质量教学示意图的**真实 URL**。',
+      '**你不负责下载也不负责保存** —— 下载和落盘由 ClaudeCoach 宿主端完成，你只需要给 URL。',
       '',
       '## 上下文',
       contextLines,
@@ -647,27 +673,28 @@ export class LectureWebviewProvider {
       '   - Distill.pub / Jay Alammar (jalammar.github.io) / 3Blue1Brown',
       '   - 教材作者主页 / 公开课讲义',
       '   - arxiv 论文图（jpg/png 直链）',
-      '3. WebFetch 取每个候选页面的 HTML（或直接是图 URL），从中提取真实的 <img src=...> 绝对 URL',
-      '4. 用 Write 把图保存到 assets/<safe-name>.<ext>',
-      '   - 文件名格式: `<topic-slug>-<n>.<ext>`，topic-slug 取 topicTitle 简化（小写 + 短横线）',
-      '   - 例如: `tcp-handshake-1.png` `transformer-attention-2.jpg`',
+      '3. 必要时用 WebFetch 取候选页面 HTML，从中提取真正的 `<img src="...">` 绝对 URL',
+      '   （要的是图的直接 URL，不是缩略图、不是 logo、不是 og:image 占位图）',
+      '4. 直接输出这 1-3 个 URL 的 JSON 清单，**结束**',
       '',
-      '## 严格约束',
-      '- **只用工具 WebSearch / WebFetch / Write / Read，绝对不要用 Edit / Bash / 其他**',
-      '- **不要修改讲义 .md 文件** —— 你只负责下载图，插入由 ClaudeCoach 自己做',
+      '## 严格约束（重要）',
+      '- **只用工具 WebSearch 和 WebFetch，绝对不要用其他工具**',
+      '- **不要尝试用 Write 工具下载或保存图片** —— Write 只能写文本，无法处理 PNG/JPG 二进制，一定会失败。你只需要给 URL，宿主端自己 HTTP 下载。',
+      '- **不要修改讲义 .md 文件** —— 你只负责给 URL，插入由 ClaudeCoach 自己做',
       '- **学术 / 技术示意图**，不要摄影艺术图、营销图、低分辨率图、有大水印的图',
-      '- 如果搜不到合适的，直接输出 `{"saved":[],"reason":"具体原因"}` 然后停止，不要硬塞错图',
+      '- URL 必须是图片直链（以 .png / .jpg / .jpeg / .gif / .webp / .svg 结尾，或来源页明确是图片资源）',
+      '- 如果搜不到合适的，直接输出 `{"images":[],"reason":"具体原因"}` 然后停止，不要硬塞错图',
       '',
       '## 输出格式',
       '**最后一行 stdout** 必须输出一个独立的 JSON（不要包在代码块里、不要多余文本），格式如下：',
       '```json',
-      '{"saved":[{"path":"assets/xxx-1.png","caption":"图说"},{"path":"assets/xxx-2.jpg","caption":"图说"}]}',
+      '{"images":[{"url":"https://example.com/figure.png","caption":"图说"},{"url":"https://example.com/figure2.jpg","caption":"图说2"}]}',
       '```',
-      '`path` 是相对于讲义目录的相对路径（assets/ 开头）；`caption` 是简短的图片说明（10-30 字，会成为 markdown alt）。',
+      '`url` 是图片真实直链（http/https）；`caption` 是简短的图片说明（10-30 字，会成为 markdown alt）。',
       '',
       '失败时：',
       '```json',
-      '{"saved":[],"reason":"具体原因，如：未找到符合学术质量的图"}',
+      '{"images":[],"reason":"具体原因，如：未找到符合学术质量的图"}',
       '```',
       '',
       '开始执行。',

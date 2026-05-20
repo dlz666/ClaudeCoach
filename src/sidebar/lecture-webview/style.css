@@ -101,11 +101,24 @@ html, body {
   cursor: pointer;
   font-size: 14px;
   transition: 120ms ease;
+  /* SVG 子元素居中（也对文字按钮无副作用） */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.btn-mini svg {
+  display: block;       /* 消除 inline 行高造成的偏移 */
+  stroke: currentColor; /* 跟随主题色 */
 }
 
 .btn-mini:hover {
   background: var(--accent-soft);
   transform: rotate(90deg);
+}
+/* 撤回按钮：rotate 对 undo 语义不自然，改成轻微放大反馈 */
+.btn-mini--icon:hover {
+  transform: scale(1.1);
 }
 
 /* ===== body / markdown ===== */
@@ -205,6 +218,74 @@ html, body {
 }
 
 .markdown-body a:hover { border-bottom-style: solid; }
+
+/* 讲义内嵌图：透明 PNG（如 Wikipedia / Jay Alammar / arxiv 图）在深色主题下，
+ * 透明区域被深色背景渗透 → 黑色线条/文字被"吞掉"。给所有讲义图加白底 + 圆角内边距
+ * 兜底（GitHub README 同款方案）。浅色主题多包一层白也无视觉副作用。 */
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  padding: 8px;
+  border-radius: 8px;
+  /* 给一个微妙的描边让白底跟讲义深色背景边界更柔和 */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  display: block;
+  margin: 0.8em auto;
+}
+
+/* ===== 图片删除按钮（hover 浮现的 ✕） =====
+ * <span class="lecture-img-wrap"> 包裹 <img>，X 按钮 absolute 浮右上角。
+ * 用 span（不是 div）是因为 markdown-it 把图片渲染到 <p> 里，<p> 内只能放
+ * inline / phrasing content；span 是合法的。span 设 display:block 仍是有效 HTML5。 */
+.lecture-img-wrap {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.8em auto;   /* 移植自 .markdown-body img 原来的居中 margin */
+  line-height: 0;        /* 消除 inline 行高造成的 img 下方空隙 */
+}
+.lecture-img-wrap img {
+  display: block;
+  max-width: 100%;
+  margin: 0;             /* 被 wrap 接管居中，img 自身 margin 归零 */
+}
+
+.lecture-img-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: rgba(239, 68, 68, 0.92);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+  z-index: 2;            /* 浮在 img 白底 padding 之上 */
+}
+.lecture-img-wrap:hover .lecture-img-delete-btn,
+.lecture-img-delete-btn:focus-visible {
+  opacity: 1;
+}
+.lecture-img-delete-btn:hover {
+  transform: scale(1.08);
+  background: rgb(239, 68, 68);
+}
+.lecture-img-delete-btn:active {
+  transform: scale(0.95);
+}
 
 /* 公式溢出滚动而不撑大页面 */
 .markdown-body .katex-display {

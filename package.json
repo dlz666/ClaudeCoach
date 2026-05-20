@@ -2,7 +2,7 @@
   "name": "claude-coach",
   "displayName": "ClaudeCoach",
   "description": "AI 学习助手，支持课程生成、练习批改和自适应学习。",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.85.0"
   },

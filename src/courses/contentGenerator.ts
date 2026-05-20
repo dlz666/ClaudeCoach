@@ -254,7 +254,10 @@ export class ContentGenerator {
       : ctx;
 
     const messages = lessonPrompt(subject, topicTitle, lessonTitle, difficulty, enrichedCtx);
-    const content = await this.ai.chatCompletion(messages);
+    // 讲义是长输出（典型 8000-15000 tokens），不传 maxTokens 走默认 4096 会被截断。
+    // 16000 兼顾 GPT-4o (max_output=16384) 和 Claude 4 (max_output=64000)，对超出
+    // 的模型 API 一般会自动 cap 而非报错。
+    const content = await this.ai.chatCompletion(messages, { maxTokens: 16000 });
 
     const filePath = this.courseManager.getLessonPath(subject, topicId, lessonId);
     await writeMarkdownAndPreview(filePath, content);

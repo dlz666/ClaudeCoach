@@ -560,11 +560,12 @@
         const inner = document.createElement('div');
         inner.className = 'graphviz-rendered';
         inner.innerHTML = svg;
-        // 让 SVG 自适应宽度
+        // SVG 尺寸：保留 GraphViz 输出的自然 pt 尺寸（例如 width="200pt" ≈ 266px），
+        // **不要删 width/height** —— 一旦删了浏览器会按 viewBox 把 svg 撑满父容器宽度，
+        // 简单 2-3 节点图会被放大成跟讲义同宽，节点跟文字比例严重失调（用户实测反馈）。
+        // CSS 的 max-width: 100%（见 .graphviz-rendered svg）兜底超大图溢出。
         const svgEl = inner.querySelector('svg');
         if (svgEl) {
-          svgEl.removeAttribute('width');
-          svgEl.removeAttribute('height');
           svgEl.style.maxWidth = '100%';
           svgEl.style.height = 'auto';
           // GraphViz 默认给 text / 节点 / 边输出 inline fill="black" stroke="black"，
@@ -1262,6 +1263,7 @@ canvas { display: block; max-width: 100%; }
     popover: document.getElementById('popover'),
     toastContainer: document.getElementById('toastContainer'),
     btnReload: document.getElementById('btnReload'),
+    btnRevert: document.getElementById('btnRevert'),
   };
 
   let currentSelectionInfo = null;
@@ -1281,6 +1283,66 @@ canvas { display: block; max-width: 100%; }
     renderWidgets(els.body);       // 同步，但 iframe 内部脚本异步加载
     renderVideoCards(els.body);    // 视频卡片（粘贴 YouTube/B 站 URL 后嵌入的）
     renderSuggestPlaceholders(els.body);  // 讲义生成时 AI 输出的可视化建议块
+    attachImageDeleteButtons(els.body);   // 每张图片右上角加 hover 浮现的 ✕ 删除按钮
+  }
+
+  /**
+   * 给讲义里每张图片右上角包一个 hover 时浮现的 ✕ 删除按钮。
+   *
+   * 实现：用 <span class="lecture-img-wrap"> 把 <img> 包起来 → relative 容器；
+   * X 按钮 absolute 浮在右上角；hover 时 opacity 0→1。
+   * 点 ✕ → 找最近 [data-source-line] 祖先（markdown-it 给 <p> 打的）→
+   * postMessage deleteLectureRange → 宿主端写 .bak + 写回（用户可 Ctrl+Z 撤回）。
+   *
+   * 跳过：iframe widget / mermaid SVG / graphviz SVG 内部的图（那些不是讲义直接图）。
+   */
+  function attachImageDeleteButtons(root) {
+    if (!root) return;
+    const imgs = root.querySelectorAll('img');
+    imgs.forEach((img) => {
+      if (img.dataset.deleteBound === '1') return;
+      // 跳过 widget / 图表内部的图（这些被 widget/iframe/mermaid 自己管，不该被讲义删除按钮影响）
+      if (img.closest('.cc-widget') || img.closest('.mermaid-rendered')
+          || img.closest('.graphviz-rendered') || img.closest('iframe')
+          || img.closest('.lecture-img-wrap')) return;
+      img.dataset.deleteBound = '1';
+
+      const wrap = document.createElement('span');
+      wrap.className = 'lecture-img-wrap';
+      img.parentNode.insertBefore(wrap, img);
+      wrap.appendChild(img);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'lecture-img-delete-btn';
+      btn.title = '删除图片（可 Ctrl+Z 撤回）';
+      btn.setAttribute('aria-label', '删除图片');
+      btn.textContent = '×';
+      wrap.appendChild(btn);
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 找最近 [data-source-line] 祖先 —— markdown-it 给 block-level token（通常是 <p>）打的
+        const ancestor = wrap.closest('[data-source-line]');
+        if (!ancestor) {
+          if (vscode) vscode.postMessage({ type: 'log', level: 'warn',
+            message: '图片删除失败：找不到 data-source-line 祖先' });
+          return;
+        }
+        const startLine = parseInt(ancestor.getAttribute('data-source-line'), 10);
+        const endRaw = ancestor.getAttribute('data-source-line-end');
+        const endLine = endRaw ? parseInt(endRaw, 10) : startLine + 1;
+        if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || endLine <= startLine) {
+          if (vscode) vscode.postMessage({ type: 'log', level: 'warn',
+            message: `图片删除失败：行号非法 start=${startLine} end=${endLine}` });
+          return;
+        }
+        if (vscode) {
+          vscode.postMessage({ type: 'deleteLectureRange', startLine, endLine });
+        }
+      });
+    });
   }
 
   /**
@@ -2641,6 +2703,13 @@ canvas { display: block; max-width: 100%; }
   if (els.btnReload && vscode) {
     els.btnReload.addEventListener('click', () => {
       vscode.postMessage({ type: 'requestReload' });
+    });
+  }
+
+  // 左上角撤回按钮：恢复 .bak 备份（Ctrl+Z 在 webview 内不可靠，给个显式入口）
+  if (els.btnRevert && vscode) {
+    els.btnRevert.addEventListener('click', () => {
+      vscode.postMessage({ type: 'revertLastWriteback' });
     });
   }
 
