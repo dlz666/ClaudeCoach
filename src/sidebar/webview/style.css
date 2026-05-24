@@ -3743,3 +3743,38 @@ details.ds-fieldset--collapsible > :not(summary) {
   font-size: 11px;
   padding: 4px 10px;
 }
+
+/* 知识点备注 inline 编辑器（替代 VSCode webview 禁用的 prompt()）*/
+.keypoint-note-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 6px 22px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--surface-1) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vscode-button-background) 30%, var(--border));
+  border-radius: 6px;
+  animation: cc-keypoints-in 140ms ease-out;
+}
+.keypoint-note-editor input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-foreground);
+  font-size: 11.5px;
+}
+.keypoint-note-editor input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--vscode-button-background) 60%, var(--border));
+}
+.keypoint-note-editor .tree-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.kp-note-save {
+  background: color-mix(in srgb, var(--vscode-button-background) 20%, transparent);
+}

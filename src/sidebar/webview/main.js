@@ -931,7 +931,7 @@
             data-subject="${escapeHtml(course.subject)}"
             data-topic-id="${escapeHtml(topic.id)}"
             data-topic-title="${escapeHtml(topic.title)}"
-          >＋ 添加讲义</button>
+          >＋ 添加章节</button>
         </div>` : '';
       return `
         <div class="tree-node">
@@ -955,7 +955,10 @@
     els.courseTree.querySelectorAll('.tree-topic').forEach((topicEl) => {
       topicEl.addEventListener('click', () => {
         topicEl.classList.toggle('open');
-        topicEl.nextElementSibling?.classList.toggle('collapsed');
+        // 折叠目标是 .tree-node 内的 .tree-children —— 现在 .tree-topic 被
+        // .tree-topic-row 包了（旁边是 ⋯ 按钮），nextElementSibling 不再是 .tree-children
+        const node = topicEl.closest('.tree-node');
+        node?.querySelector(':scope > .tree-children')?.classList.toggle('collapsed');
       });
     });
 
@@ -1204,8 +1207,9 @@
     els.courseTree.querySelectorAll('.btn-delete-lesson').forEach((btn) => {
       btn.addEventListener('click', (event) => {
         event.stopPropagation();
+        // 直接删 —— 编辑模式本身已是二次操作，且 VSCode webview 默认禁 confirm()（静默
+        // 返回 false 会让按钮看似无反应）。误删可在讲义阅读器 .bak 撤回 / 重新生成。
         const d = btn.dataset;
-        if (!confirm(`删除讲义 "${d.lessonTitle}"？\n关联的 .md / 知识点 / 练习都会一起删除。`)) return;
         vscode.postMessage({
           type: 'deleteLesson',
           subject: d.subject,
@@ -1219,14 +1223,14 @@
     els.courseTree.querySelectorAll('.btn-add-lesson').forEach((btn) => {
       btn.addEventListener('click', (event) => {
         event.stopPropagation();
+        // 直接添加默认标题 —— VSCode webview 禁 prompt()（静默返回 null）。
+        // 后端创建后用户在编辑模式输入框里立即改名即可。
         const d = btn.dataset;
-        const title = prompt('新讲义标题：', '新讲义');
-        if (!title || !title.trim()) return;
         vscode.postMessage({
           type: 'addLesson',
           subject: d.subject,
           topicId: d.topicId,
-          title: title.trim(),
+          title: '新章节',
         });
       });
     });
@@ -1359,11 +1363,34 @@
         const id = btn.dataset.id;
         const item = kp.items.find((x) => x.id === id);
         if (!item) return;
-        const next = prompt('备注（清空则删除）：', item.note || '');
-        if (next === null) return;
-        item.note = next.trim() || undefined;
-        saveKeyPoints(lessonId);
-        renderKeyPointsPanel(lessonId);
+        // 替代 prompt()（VSCode webview 禁用）—— 在 keypoint-item 下方插一个 inline editor
+        panel.querySelectorAll('.keypoint-note-editor').forEach((ed) => ed.remove());
+        const itemEl = panel.querySelector(`.keypoint-item[data-id="${CSS.escape(id)}"]`);
+        if (!itemEl) return;
+        const editor = document.createElement('div');
+        editor.className = 'keypoint-note-editor';
+        editor.innerHTML = `
+          <input type="text" placeholder="备注（清空则删除，例如：教材 P127 / 易错 / 超纲跳过）" value="${escapeHtml(item.note || '')}" />
+          <button type="button" class="tree-btn kp-note-save">保存</button>
+          <button type="button" class="tree-btn kp-note-cancel">取消</button>
+        `;
+        itemEl.insertAdjacentElement('afterend', editor);
+        const input = editor.querySelector('input');
+        input.focus();
+        input.select();
+        const cleanup = () => editor.remove();
+        const save = () => {
+          item.note = input.value.trim() || undefined;
+          cleanup();
+          saveKeyPoints(lessonId);
+          renderKeyPointsPanel(lessonId);
+        };
+        editor.querySelector('.kp-note-save').addEventListener('click', save);
+        editor.querySelector('.kp-note-cancel').addEventListener('click', cleanup);
+        input.addEventListener('keydown', (ke) => {
+          if (ke.key === 'Enter') { ke.preventDefault(); save(); }
+          if (ke.key === 'Escape') cleanup();
+        });
       });
     });
 
