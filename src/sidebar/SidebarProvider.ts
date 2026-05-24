@@ -1884,7 +1884,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             const [profile, prefs, diag] = await Promise.all([
               this.progressStore.getProfile(),
               this.prefsStore.get(),
-              this.progressStore.getLatestDiagnosis(msg.subject),
+              this.adaptiveEngine.getLatestDiagnosis(msg.subject),
             ]);
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             const result = await this.contentGen.generateTopicKeyPoints(

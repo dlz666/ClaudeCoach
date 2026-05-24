@@ -1266,6 +1266,9 @@ export type SidebarResponse =
   | { type: 'gradingProgress'; current: number; total: number; lessonTitle?: string }
   | { type: 'autoDiagnosisRan'; subject: Subject; reason: AdaptiveTriggerReason }
   | { type: 'groundingSources'; turnId: string; sources: GroundingSource[] }
+  // ===== Lesson 知识点响应 =====
+  | { type: 'keyPointsLoaded'; subject: Subject; topicId: string; lessonId: string; keyPoints: LessonKeyPoints | null }
+  | { type: 'keyPointsGenerated'; subject: Subject; topicId: string; generated: number; lessons: Array<{ lessonId: string; count: number }> }
   // ===== Inline 内联编辑响应 =====
   | { type: 'inlineSuggestResult'; result: InlineSuggestResult }
   | { type: 'inlineApplied'; turnId: string; appliedRange?: { startLine: number; endLine: number } }
