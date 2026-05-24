@@ -1675,15 +1675,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               }),
             ]);
             const lessonMaxExcerpts = await this._resolveMaxExcerpts('normal');
+            // 方案 A + C 协同：先读 keypoints（如果用户预先生成过）→ 把 keypoint titles
+            // 也加进 RAG query，让教材检索更精准（不只检索 lesson 标题）→
+            // 同时把 keypoints 塞进 ctx，让 lessonPrompt 注入"必讲清单"约束 AI 范围。
+            const lessonKeyPoints = await this.courseManager.readKeyPoints(msg.subject, msg.topicId, msg.lessonId);
+            const kpQuery = lessonKeyPoints?.items?.map(it => it.title).filter(Boolean).join(' ') ?? '';
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
-              [msg.topicTitle, msg.lessonTitle, '讲义'].filter(Boolean).join(' '),
+              [msg.topicTitle, msg.lessonTitle, kpQuery, '讲义'].filter(Boolean).join(' '),
               { maxExcerpts: lessonMaxExcerpts },
             );
             const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
             await this.contentGen.generateLesson(
               msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle, msg.difficulty,
-              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext, ...grounding },
+              { profile, preferences: prefs, diagnosis: diag, lessonKeyPoints, ...courseProfileContext, ...grounding },
               lessonWrongs,
             );
             this._rememberLessonTarget(msg.subject, msg.topicId, msg.topicTitle, msg.lessonId, msg.lessonTitle);
@@ -1800,6 +1805,106 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           await this.courseManager.markLessonCompleted(msg.subject, msg.topicId, msg.lessonId);
           await this._refreshCourses();
           this._post({ type: 'log', message: `已标记完成：${msg.lessonTitle}`, level: 'info' });
+          break;
+        }
+
+        // ===== Lesson 编辑（topic 三点菜单"编辑模式"触发的增删改/重排）=====
+        case 'renameLesson': {
+          try {
+            await this.courseManager.renameLesson(msg.subject, msg.topicId, msg.lessonId, String(msg.newTitle || ''));
+            await this._refreshCourses();
+          } catch (err) {
+            this._post({ type: 'log', message: `重命名失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'addLesson': {
+          try {
+            const added = await this.courseManager.addLesson(msg.subject, msg.topicId, String(msg.title || '新讲义'));
+            await this._refreshCourses();
+            this._post({ type: 'log', message: `已添加讲义：${added.title}`, level: 'info' });
+          } catch (err) {
+            this._post({ type: 'log', message: `添加讲义失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'deleteLesson': {
+          try {
+            await this.courseManager.deleteLesson(msg.subject, msg.topicId, msg.lessonId);
+            await this._refreshCourses();
+            this._post({ type: 'log', message: `已删除：${msg.lessonTitle || msg.lessonId}`, level: 'info' });
+          } catch (err) {
+            this._post({ type: 'log', message: `删除失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'reorderLesson': {
+          try {
+            const dir = msg.dir === -1 ? -1 : 1;
+            await this.courseManager.reorderLesson(msg.subject, msg.topicId, msg.lessonId, dir as -1 | 1);
+            await this._refreshCourses();
+          } catch (err) {
+            this._post({ type: 'log', message: `重排序失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        // ===== 知识点（每个 lesson 一份 .keypoints.json）=====
+        case 'loadKeyPoints': {
+          const kp = await this.courseManager.readKeyPoints(msg.subject, msg.topicId, msg.lessonId);
+          this._post({
+            type: 'keyPointsLoaded',
+            subject: msg.subject,
+            topicId: msg.topicId,
+            lessonId: msg.lessonId,
+            keyPoints: kp,
+          });
+          break;
+        }
+
+        case 'saveKeyPoints': {
+          try {
+            const items = Array.isArray(msg.items) ? msg.items : [];
+            await this.courseManager.writeKeyPoints(msg.subject, msg.topicId, msg.lessonId, {
+              lessonId: msg.lessonId,
+              version: 1,
+              items,
+            });
+          } catch (err) {
+            this._post({ type: 'log', message: `保存知识点失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'generateKeyPointsForTopic': {
+          this._startTask(`生成知识点：${msg.topicTitle || msg.topicId}`, async () => {
+            const [profile, prefs, diag] = await Promise.all([
+              this.progressStore.getProfile(),
+              this.prefsStore.get(),
+              this.progressStore.getLatestDiagnosis(msg.subject),
+            ]);
+            const courseProfileContext = await this._buildCourseProfileContext(msg.subject, msg.topicId);
+            const result = await this.contentGen.generateTopicKeyPoints(
+              msg.subject,
+              msg.topicId,
+              { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext },
+            );
+            this._post({
+              type: 'keyPointsGenerated',
+              subject: msg.subject,
+              topicId: msg.topicId,
+              generated: result.generated,
+              lessons: result.lessons,
+            });
+            this._post({
+              type: 'log',
+              message: `已为 ${result.generated} 个 lesson 生成知识点（${msg.topicTitle || msg.topicId}）`,
+              level: 'info',
+            });
+          });
           break;
         }
 

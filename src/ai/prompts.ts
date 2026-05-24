@@ -12,6 +12,8 @@ import {
   COURSE_TAG_PLAYBOOK,
   FeedbackStrengthTag,
   FeedbackWeaknessTag,
+  KeyPointItem,
+  LessonKeyPoints,
   subjectLabel,
 } from '../types';
 import { PromptContextScope } from '../types';
@@ -242,6 +244,12 @@ export interface PromptContext {
   outlineSize?: 'ai-decide' | 'quick' | 'half-semester' | 'full-semester';
   /** 偏重风格（多选）：practice=实战 / theory=理论 / drill=题型熟练 / intuition=概念直觉。 */
   styleEmphasis?: Array<'practice' | 'theory' | 'drill' | 'intuition'>;
+  /**
+   * 当前 lesson 的知识点清单（仅讲义生成时注入）。
+   * 治"标准学科讲义不全面"的核心机制：AI 拿到具体知识点 + ⭐ 重点标记 +
+   * 用户备注，就知道哪些必讲、哪些详尽、哪些按用户指示处理。
+   */
+  lessonKeyPoints?: import('../types').LessonKeyPoints | null;
 }
 
 type PromptInjectField =
@@ -843,6 +851,87 @@ ${normalizedInstruction ? `本次额外要求：${normalizedInstruction}\n\n` : 
   ];
 }
 
+/**
+ * 把扁平 KeyPointItem[] 按 parentId/order 渲染为层级缩进的 markdown bullet。
+ * 注入到讲义生成 prompt 里时使用，给 AI 一个清晰的"必讲清单"。
+ */
+function formatKeyPointsForPrompt(kp: LessonKeyPoints): string {
+  const byParent = new Map<string | null, KeyPointItem[]>();
+  for (const it of kp.items) {
+    const parent = it.parentId || null;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent)!.push(it);
+  }
+  for (const list of byParent.values()) {
+    list.sort((a, b) => (a.order || 0) - (b.order || 0));
+  }
+  const lines: string[] = [];
+  const walk = (parent: string | null, depth: number) => {
+    const children = byParent.get(parent) || [];
+    for (const it of children) {
+      const indent = '  '.repeat(depth);
+      const star = it.core ? '⭐ ' : '';
+      const noteSeg = it.note ? `（备注：${it.note}）` : '';
+      lines.push(`${indent}- ${star}${it.title}${noteSeg}`);
+      walk(it.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return lines.join('\n');
+}
+
+/**
+ * AI 一次性生成 topic 内所有 lessons 的初始知识点清单。
+ * 输出严格 JSON 数组，每项 { lessonId, items: KeyPointItem[] }。
+ */
+export function keyPointsPrompt(
+  subject: Subject,
+  topicTitle: string,
+  lessons: Array<{ id: string; title: string }>,
+  ctx: PromptContext,
+): ChatMessage[] {
+  const scopedCtx: PromptContext = { ...ctx, scope: 'lesson-gen' };
+  const lessonsList = lessons.map((l, i) => `${i + 1}. (id="${l.id}") ${l.title}`).join('\n');
+  return [
+    {
+      role: 'system',
+      content: buildSystemBase(scopedCtx) + `\n你的任务：为"${topicTitle}"这一章内的每个 lesson 生成知识点清单。
+
+【lessons 列表】
+${lessonsList}
+
+【输出格式】严格 JSON 数组（不要包代码围栏、不要前后多余文字），每个元素对应一个 lesson：
+
+[
+  {
+    "lessonId": "上面列表里的 lesson id 原值",
+    "items": [
+      { "id": "kp-1", "title": "知识点标题", "parentId": null, "order": 0, "core": true },
+      { "id": "kp-2", "title": "子知识点", "parentId": "kp-1", "order": 0 },
+      { "id": "kp-3", "title": "另一个根级", "parentId": null, "order": 1 }
+    ]
+  }
+]
+
+【字段说明】
+- \`lessonId\`：必须用上面 lessons 列表里给的 id 原值（不要自己另起）
+- \`id\`：每个知识点在该 lesson 内的唯一 id（前缀 "kp-" + 数字即可）
+- \`title\`：10-30 字，描述**具体**知识点。不要 "...的定义"、"...的应用" 这种水内容；要 "导数定义的 ε-δ 表达"、"复合函数链式法则" 这样
+- \`parentId\`：null 是根级；填另一个 item 的 id 表示是它的子点。**最多 2 层嵌套**（根 + 子，不要更深）
+- \`order\`：同 parent 下的顺序，0 起步
+- \`core\`：可选，true = 重点掌握。**每个 lesson 只标 1-3 个 core**（全标等于没标）
+- \`note\`：留空 / 不写。这是给用户后续自己填的备注字段
+
+【质量要求】
+- 每个 lesson 生成 4-8 个知识点（含子点）
+- 标准学科（数学/数据结构/操作系统/算法）按公认教学顺序：定义 → 性质 → 定理 → 典型应用 → 易错
+- 学科：${subjectLabel(subject)}；当前章节：${topicTitle}
+`,
+    },
+    { role: 'user', content: `请为"${topicTitle}"这一章内的 ${lessons.length} 个 lessons 生成知识点清单 JSON。直接输出 JSON 数组，不要任何解释文字。` },
+  ];
+}
+
 export function lessonPrompt(subject: Subject, topicTitle: string, lessonTitle: string, difficulty: number, ctx: PromptContext): ChatMessage[] {
   const scopedCtx: PromptContext = { ...ctx, scope: 'lesson-gen' };
 
@@ -958,7 +1047,22 @@ ${misconceptionsForLesson ? `\n【常见误区前置防御】下面是这一节�
 - 这是独立的教材页面，不是聊天对话
 - ❌ 不要写"我下一条可以..."、"如果你愿意，我可以..."、"接下来我会..."、"作为 AI"、"我建议你"
 - ✅ 用第二人称"你"或不指定主语，像优秀网课讲师那样直接讲
-- ✅ 末尾"本节小结" 5 句话即收，不寒暄、不导航`,
+- ✅ 末尾"本节小结" 5 句话即收，不寒暄、不导航
+
+${ctx.lessonKeyPoints && ctx.lessonKeyPoints.items.length ? `
+【必讲知识点（用户已锁定本节范围）】
+这节讲义**必须 cover** 以下知识点（按用户给的层级和顺序展开）：
+
+${formatKeyPointsForPrompt(ctx.lessonKeyPoints)}
+
+规则（优先级高于上面所有规则）：
+- **带 ⭐ 的是用户标记的"重点掌握"**：详尽展开（定义 + 例子 + 证明/推导 + 易错点）
+- 不带 ⭐ 的：覆盖到，简明扼要即可
+- **带"（备注：...）"的**：严格按用户备注处理。如"教材 P127"→ 与教材对齐；"超纲不要展开"→ 一句话带过；"易错"→ 重点澄清
+- 知识点的层级和顺序就是讲义内部小节的层级和顺序（一级 → H2，二级 → H3）
+- 不要随意添加用户清单之外的大块内容（小例子可以加，但不要新加 H2 章节）
+- 用户的清单是"考点对齐"信号 —— 标准学科（数学/数据结构等）的全面性靠这个保证
+` : ''}`,
     },
     { role: 'user', content: `请为"${subjectLabel(subject)}"课程中"${topicTitle}"主题下的"${lessonTitle}"编写讲义。` },
   ];

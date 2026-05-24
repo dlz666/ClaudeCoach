@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { CourseOutline, GradeResult, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
+import { CourseOutline, GradeResult, LessonKeyPoints, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
 import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver } from '../storage/pathResolver';
 
@@ -393,6 +393,98 @@ export class CourseManager {
 
   getLessonPath(subject: Subject, topicId: string, lessonId: string): string {
     return this.paths.courseLessonPath(subject, topicId, lessonId);
+  }
+
+  // ===== Lesson key points (one JSON per lesson) =====
+
+  /** keypoints 文件跟 lesson .md 同目录，扩展名 .keypoints.json。 */
+  getKeyPointsPath(subject: Subject, topicId: string, lessonId: string): string {
+    return path.join(this.paths.courseLessonsDir(subject, topicId), `${lessonId}.keypoints.json`);
+  }
+
+  async readKeyPoints(subject: Subject, topicId: string, lessonId: string): Promise<LessonKeyPoints | null> {
+    return await readJson<LessonKeyPoints>(this.getKeyPointsPath(subject, topicId, lessonId));
+  }
+
+  async writeKeyPoints(subject: Subject, topicId: string, lessonId: string, data: LessonKeyPoints): Promise<void> {
+    const filePath = this.getKeyPointsPath(subject, topicId, lessonId);
+    await ensureDir(path.dirname(filePath));
+    await writeJson(filePath, data);
+  }
+
+  // ===== Lesson CRUD（topic 内的增删改/重排，不动 topic 本身）=====
+  // 关键：lessonCode（如 "01-02-foo"）在 normalizeOutline 里 candidate-preservation
+  // —— 现有 lesson.code 合规就保留，因此重命名 / 删除 / 重排都不会改 lessonCode →
+  // .md 文件路径不变 → 不需要文件迁移。只有 addLesson 新建的 lesson 会由 normalize 生成新 code。
+
+  /** 重命名 lesson 标题（lessonCode 不变，对应的 .md 文件不动）。 */
+  async renameLesson(subject: Subject, topicId: string, lessonId: string, newTitle: string): Promise<void> {
+    const outline = await this.getCourseOutline(subject);
+    if (!outline) throw new Error('找不到课程大纲');
+    const topic = outline.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+    const lesson = topic.lessons.find(l => l.id === lessonId);
+    if (!lesson) throw new Error(`找不到 lesson: ${lessonId}`);
+    const trimmed = newTitle.trim();
+    if (!trimmed) throw new Error('lesson 标题不能为空');
+    lesson.title = trimmed;
+    await this.saveCourseOutline(subject, outline);
+  }
+
+  /** 在 topic 末尾追加一个 lesson。code 由 normalizeOutline 自动生成。返回新 lesson。 */
+  async addLesson(subject: Subject, topicId: string, title: string): Promise<LessonMeta> {
+    const outline = await this.getCourseOutline(subject);
+    if (!outline) throw new Error('找不到课程大纲');
+    const topic = outline.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+    const draft: LessonMeta = {
+      id: '',  // normalizeLesson 会重新算 lessonCode 当 id
+      title: title.trim() || '新讲义',
+      difficulty: 1,
+      status: 'not-started',
+      filePath: '',
+    };
+    topic.lessons.push(draft);
+    await this.saveCourseOutline(subject, outline);
+    const newOutline = await this.getCourseOutline(subject);
+    const newTopic = newOutline?.topics.find(t => t.id === topicId);
+    const added = newTopic?.lessons[newTopic.lessons.length - 1];
+    if (!added) throw new Error('lesson 创建失败');
+    return added;
+  }
+
+  /** 删除 lesson + 关联文件（.md / .md.bak / .keypoints.json / 练习）。best-effort 删除。 */
+  async deleteLesson(subject: Subject, topicId: string, lessonId: string): Promise<void> {
+    const outline = await this.getCourseOutline(subject);
+    if (!outline) throw new Error('找不到课程大纲');
+    const topic = outline.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+    const idx = topic.lessons.findIndex(l => l.id === lessonId);
+    if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
+    topic.lessons.splice(idx, 1);
+    await this.saveCourseOutline(subject, outline);
+
+    const lessonPath = this.getLessonPath(subject, topicId, lessonId);
+    const keypointsPath = this.getKeyPointsPath(subject, topicId, lessonId);
+    const exercisePath = this.getExercisePath(subject, topicId, lessonId);
+    const exerciseJsonPath = this.getExerciseJsonPath(subject, topicId, lessonId);
+    for (const p of [lessonPath, lessonPath + '.bak', keypointsPath, exercisePath, exerciseJsonPath]) {
+      await fs.rm(p, { force: true }).catch(() => { /* 文件可能不存在，忽略 */ });
+    }
+  }
+
+  /** 上下移动 lesson 顺序（dir: -1 上移, +1 下移）。lessonCode 保留 → 不动文件。 */
+  async reorderLesson(subject: Subject, topicId: string, lessonId: string, dir: -1 | 1): Promise<void> {
+    const outline = await this.getCourseOutline(subject);
+    if (!outline) throw new Error('找不到课程大纲');
+    const topic = outline.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+    const idx = topic.lessons.findIndex(l => l.id === lessonId);
+    if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
+    const target = idx + dir;
+    if (target < 0 || target >= topic.lessons.length) return;
+    [topic.lessons[idx], topic.lessons[target]] = [topic.lessons[target], topic.lessons[idx]];
+    await this.saveCourseOutline(subject, outline);
   }
 
   getExercisePath(subject: Subject, topicId: string, sessionId: string): string {

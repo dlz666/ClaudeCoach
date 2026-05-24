@@ -157,6 +157,10 @@
     lastChatTurnId: null,
     answerSubmitContext: null,
     lastOpenedLesson: saved.lastOpenedLesson || null,
+    // === 知识点 + lesson 编辑（不持久化，每次 webview 重载重置）===
+    editingTopics: new Set(),       // 处于"编辑模式"的 topic ids（lesson 变输入框 + 增删按钮）
+    expandedLessons: new Set(),     // 已展开知识点 inline 面板的 lesson ids
+    keyPointsCache: {},             // { [lessonId]: LessonKeyPoints | null } 后端 loadKeyPoints 返回缓存
     aiProfiles: [],
     activeProfileId: null,
     workspaceAIOverride: null,
@@ -880,52 +884,68 @@
     els.courseTitleText.innerHTML = `${escapeHtml(course.title)}${tagsHtml ? ' ' + tagsHtml : ''}`;
     els.courseTree.classList.remove('hidden');
 
-    // 主题/课时 + 课程附带项目提案（outline.projects）
-    const topicsHtml = course.topics.map((topic, topicIndex) => `
-      <div class="tree-node">
-        <div class="tree-topic open">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
-        <div class="tree-children">
-          ${(topic.lessons || []).map((lesson) => `
-            <div
-              class="tree-lesson tree-lesson-open"
-              role="button"
-              tabindex="0"
-              data-subject="${escapeHtml(course.subject)}"
-              data-topic-id="${escapeHtml(topic.id)}"
-              data-topic-title="${escapeHtml(topic.title)}"
-              data-lesson-id="${escapeHtml(lesson.id)}"
-              data-lesson-title="${escapeHtml(lesson.title)}"
-              data-difficulty="${Number(lesson.difficulty) || 1}"
-            >
-              <span class="tree-lesson-label">
-                <span class="status-dot ${lesson.status || 'not-started'}"></span>
-                ${escapeHtml(lesson.title)}
+    // topic 三点菜单（编辑 lessons / 生成本章知识点）+ lesson 行（编辑模式切换 + 知识点 inline 折叠）
+    const topicsHtml = course.topics.map((topic, topicIndex) => {
+      const editing = state.editingTopics.has(topic.id);
+      const lessonsHtml = (topic.lessons || []).map((lesson) => {
+        const expanded = state.expandedLessons.has(lesson.id);
+        const commonData = `
+          data-subject="${escapeHtml(course.subject)}"
+          data-topic-id="${escapeHtml(topic.id)}"
+          data-topic-title="${escapeHtml(topic.title)}"
+          data-lesson-id="${escapeHtml(lesson.id)}"
+          data-lesson-title="${escapeHtml(lesson.title)}"
+          data-difficulty="${Number(lesson.difficulty) || 1}"`;
+        if (editing) {
+          // 编辑模式：标题→输入框；右侧增删/上下移动按钮；隐藏讲义/练习/...
+          return `
+            <div class="tree-lesson tree-lesson-editing" ${commonData}>
+              <input type="text" class="tree-lesson-input" value="${escapeHtml(lesson.title)}"
+                aria-label="重命名讲义" />
+              <span class="tree-actions tree-edit-actions">
+                <button class="tree-btn btn-move-up" title="上移" ${commonData}>↑</button>
+                <button class="tree-btn btn-move-down" title="下移" ${commonData}>↓</button>
+                <button class="tree-btn btn-delete-lesson" title="删除" ${commonData}>×</button>
               </span>
-              <span class="tree-actions">
-                <button
-                  class="tree-btn btn-lesson"
-                  data-subject="${escapeHtml(course.subject)}"
-                  data-topic-id="${escapeHtml(topic.id)}"
-                  data-topic-title="${escapeHtml(topic.title)}"
-                  data-lesson-id="${escapeHtml(lesson.id)}"
-                  data-lesson-title="${escapeHtml(lesson.title)}"
-                  data-difficulty="${Number(lesson.difficulty) || 1}"
-                >讲义</button>
-                <button
-                  class="tree-btn btn-exercise"
-                  data-subject="${escapeHtml(course.subject)}"
-                  data-topic-id="${escapeHtml(topic.id)}"
-                  data-topic-title="${escapeHtml(topic.title)}"
-                  data-lesson-id="${escapeHtml(lesson.id)}"
-                  data-lesson-title="${escapeHtml(lesson.title)}"
-                  data-difficulty="${Number(lesson.difficulty) || 1}"
-                >练习</button>
-              </span>
-            </div>
-          `).join('')}
+            </div>`;
+        }
+        // 正常模式：左侧 ▸ 知识点展开箭头 + 状态点 + 标题 + 右侧讲义/练习/... + 可选 inline 知识点面板
+        return `
+          <div class="tree-lesson tree-lesson-open" role="button" tabindex="0" ${commonData}>
+            <button class="tree-lesson-toggle ${expanded ? 'open' : ''}" title="知识点" ${commonData}>▸</button>
+            <span class="tree-lesson-label">
+              <span class="status-dot ${lesson.status || 'not-started'}"></span>
+              ${escapeHtml(lesson.title)}
+            </span>
+            <span class="tree-actions">
+              <button class="tree-btn btn-lesson" ${commonData}>讲义</button>
+              <button class="tree-btn btn-exercise" ${commonData}>练习</button>
+            </span>
+          </div>
+          ${expanded ? `<div class="lesson-keypoints-panel" data-lesson-id="${escapeHtml(lesson.id)}" data-topic-id="${escapeHtml(topic.id)}" data-subject="${escapeHtml(course.subject)}"></div>` : ''}
+        `;
+      }).join('');
+      const addLessonRow = editing ? `
+        <div class="tree-lesson-add">
+          <button class="tree-btn btn-add-lesson"
+            data-subject="${escapeHtml(course.subject)}"
+            data-topic-id="${escapeHtml(topic.id)}"
+            data-topic-title="${escapeHtml(topic.title)}"
+          >＋ 添加讲义</button>
+        </div>` : '';
+      return `
+        <div class="tree-node">
+          <div class="tree-topic-row">
+            <div class="tree-topic open" data-topic-id="${escapeHtml(topic.id)}">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
+            <button class="tree-btn btn-topic-more" data-topic-id="${escapeHtml(topic.id)}" data-topic-title="${escapeHtml(topic.title)}" data-subject="${escapeHtml(course.subject)}" title="编辑 / 生成知识点">⋯</button>
+          </div>
+          <div class="tree-children${editing ? ' editing-mode' : ''}">
+            ${lessonsHtml}
+            ${addLessonRow}
+          </div>
         </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
 
     // 注意：outline.projects 的"推荐项目"**不再**渲染在 course-tree 里。
     // 跟"已创建的项目"合并到独立面板 #course-projects-section 的两个 subsection
@@ -1098,6 +1118,335 @@
         });
       });
     });
+
+    // ===== topic 三点菜单（编辑 lessons / 生成本章知识点） =====
+    els.courseTree.querySelectorAll('.btn-topic-more').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = btn.dataset;
+        const topicId = d.topicId;
+        const editing = state.editingTopics.has(topicId);
+        // 关闭已打开的别的 topic 菜单
+        document.querySelectorAll('.topic-menu-popover').forEach((p) => p.remove());
+        const popover = document.createElement('div');
+        popover.className = 'topic-menu-popover';
+        popover.innerHTML = `
+          <button type="button" data-action="toggle-edit">${editing ? '✓ 完成编辑' : '✎ 编辑讲义'}</button>
+          <button type="button" data-action="gen-keypoints">💡 一键生成本章知识点</button>
+        `;
+        btn.parentNode?.appendChild(popover);
+        const closer = (e) => {
+          if (!popover.contains(e.target) && e.target !== btn) {
+            popover.remove();
+            document.removeEventListener('click', closer);
+          }
+        };
+        setTimeout(() => document.addEventListener('click', closer), 0);
+        popover.querySelectorAll('button').forEach((actionBtn) => {
+          actionBtn.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const action = actionBtn.dataset.action;
+            popover.remove();
+            if (action === 'toggle-edit') {
+              if (editing) state.editingTopics.delete(topicId);
+              else state.editingTopics.add(topicId);
+              renderSelectedCourse();
+            } else if (action === 'gen-keypoints') {
+              vscode.postMessage({
+                type: 'generateKeyPointsForTopic',
+                subject: d.subject,
+                topicId,
+                topicTitle: d.topicTitle,
+              });
+            }
+          });
+        });
+      });
+    });
+
+    // ===== 编辑模式：lesson 输入框 rename / 上下移动 / 删除 / 添加 =====
+    els.courseTree.querySelectorAll('.tree-lesson-input').forEach((input) => {
+      const row = input.closest('.tree-lesson-editing');
+      if (!row) return;
+      const d = row.dataset;
+      const commit = () => {
+        const newTitle = input.value.trim();
+        if (!newTitle || newTitle === d.lessonTitle) return;
+        vscode.postMessage({
+          type: 'renameLesson',
+          subject: d.subject,
+          topicId: d.topicId,
+          lessonId: d.lessonId,
+          newTitle,
+        });
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = d.lessonTitle; input.blur(); }
+      });
+    });
+
+    els.courseTree.querySelectorAll('.btn-move-up, .btn-move-down').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = btn.dataset;
+        vscode.postMessage({
+          type: 'reorderLesson',
+          subject: d.subject,
+          topicId: d.topicId,
+          lessonId: d.lessonId,
+          dir: btn.classList.contains('btn-move-up') ? -1 : 1,
+        });
+      });
+    });
+
+    els.courseTree.querySelectorAll('.btn-delete-lesson').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = btn.dataset;
+        if (!confirm(`删除讲义 "${d.lessonTitle}"？\n关联的 .md / 知识点 / 练习都会一起删除。`)) return;
+        vscode.postMessage({
+          type: 'deleteLesson',
+          subject: d.subject,
+          topicId: d.topicId,
+          lessonId: d.lessonId,
+          lessonTitle: d.lessonTitle,
+        });
+      });
+    });
+
+    els.courseTree.querySelectorAll('.btn-add-lesson').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = btn.dataset;
+        const title = prompt('新讲义标题：', '新讲义');
+        if (!title || !title.trim()) return;
+        vscode.postMessage({
+          type: 'addLesson',
+          subject: d.subject,
+          topicId: d.topicId,
+          title: title.trim(),
+        });
+      });
+    });
+
+    // ===== 知识点 inline 折叠展开 =====
+    els.courseTree.querySelectorAll('.tree-lesson-toggle').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = btn.dataset;
+        const lessonId = d.lessonId;
+        if (state.expandedLessons.has(lessonId)) {
+          state.expandedLessons.delete(lessonId);
+        } else {
+          state.expandedLessons.add(lessonId);
+          // 没缓存就 load；缓存有就直接渲染（lazy load）
+          if (!(lessonId in state.keyPointsCache)) {
+            vscode.postMessage({
+              type: 'loadKeyPoints',
+              subject: d.subject,
+              topicId: d.topicId,
+              lessonId,
+            });
+          }
+        }
+        renderSelectedCourse();
+        // 渲染完后填充已缓存的 panel
+        if (state.expandedLessons.has(lessonId) && lessonId in state.keyPointsCache) {
+          renderKeyPointsPanel(lessonId);
+        }
+      });
+    });
+
+    // 渲染已展开 lesson 的知识点面板内容（页面切换/重渲后调用）
+    state.expandedLessons.forEach((lessonId) => {
+      if (lessonId in state.keyPointsCache) {
+        renderKeyPointsPanel(lessonId);
+      }
+    });
+  }
+
+  // ============================================================
+  // 知识点 inline 面板渲染 + 编辑
+  // ============================================================
+
+  /** 渲染指定 lesson 的知识点 panel（按 parentId 分层、按 order 排序）。 */
+  function renderKeyPointsPanel(lessonId) {
+    const panel = document.querySelector(`.lesson-keypoints-panel[data-lesson-id="${CSS.escape(lessonId)}"]`);
+    if (!panel) return;
+    const d = panel.dataset;
+    const kp = state.keyPointsCache[lessonId];
+    if (kp === undefined) {
+      panel.innerHTML = '<div class="keypoints-empty muted">加载中…</div>';
+      return;
+    }
+    if (kp === null || !kp.items || kp.items.length === 0) {
+      panel.innerHTML = `
+        <div class="keypoints-empty">
+          <span class="muted">还没生成知识点。可在 topic ⋯ 菜单"一键生成本章知识点"，或</span>
+          <button class="tree-btn btn-init-keypoint" data-subject="${escapeHtml(d.subject)}" data-topic-id="${escapeHtml(d.topicId)}" data-lesson-id="${escapeHtml(lessonId)}">手动添加</button>
+        </div>
+      `;
+      panel.querySelector('.btn-init-keypoint')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        addKeyPoint(lessonId, null);
+      });
+      return;
+    }
+
+    // 按 parentId 分组、按 order 排
+    const byParent = new Map();
+    kp.items.forEach((it) => {
+      const p = it.parentId || null;
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(it);
+    });
+    byParent.forEach((list) => list.sort((a, b) => (a.order || 0) - (b.order || 0)));
+
+    const renderNode = (item, depth) => {
+      const star = item.core ? '⭐' : '☆';
+      const hasNote = item.note && item.note.trim();
+      return `
+        <div class="keypoint-item" data-id="${escapeHtml(item.id)}" data-depth="${depth}" style="margin-left:${depth * 18}px">
+          <button class="keypoint-star ${item.core ? 'on' : ''}" data-id="${escapeHtml(item.id)}" title="重点掌握">${star}</button>
+          <input type="text" class="keypoint-title" data-id="${escapeHtml(item.id)}" value="${escapeHtml(item.title)}" />
+          <button class="keypoint-note-btn ${hasNote ? 'has-note' : ''}" data-id="${escapeHtml(item.id)}" title="${hasNote ? '备注：' + escapeHtml(item.note) : '加备注'}">📝</button>
+          ${depth < 1 ? `<button class="keypoint-add-child" data-id="${escapeHtml(item.id)}" title="加子点">＋子</button>` : ''}
+          <button class="keypoint-delete" data-id="${escapeHtml(item.id)}" title="删除">×</button>
+        </div>
+        ${(byParent.get(item.id) || []).map((child) => renderNode(child, depth + 1)).join('')}
+      `;
+    };
+
+    const rootItems = byParent.get(null) || [];
+    panel.innerHTML = `
+      <div class="keypoints-list">
+        ${rootItems.map((it) => renderNode(it, 0)).join('')}
+      </div>
+      <button class="tree-btn btn-add-root-kp" title="新增根级知识点">＋ 添加</button>
+    `;
+
+    // 绑定操作
+    panel.querySelectorAll('.keypoint-star').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const item = kp.items.find((x) => x.id === id);
+        if (item) {
+          item.core = !item.core;
+          saveKeyPoints(lessonId);
+          renderKeyPointsPanel(lessonId);
+        }
+      });
+    });
+
+    panel.querySelectorAll('.keypoint-title').forEach((input) => {
+      input.addEventListener('blur', () => {
+        const id = input.dataset.id;
+        const item = kp.items.find((x) => x.id === id);
+        if (item && input.value.trim() && item.title !== input.value.trim()) {
+          item.title = input.value.trim();
+          saveKeyPoints(lessonId);
+        }
+      });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
+    });
+
+    panel.querySelectorAll('.keypoint-note-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const item = kp.items.find((x) => x.id === id);
+        if (!item) return;
+        const next = prompt('备注（清空则删除）：', item.note || '');
+        if (next === null) return;
+        item.note = next.trim() || undefined;
+        saveKeyPoints(lessonId);
+        renderKeyPointsPanel(lessonId);
+      });
+    });
+
+    panel.querySelectorAll('.keypoint-add-child').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        addKeyPoint(lessonId, btn.dataset.id);
+      });
+    });
+
+    panel.querySelectorAll('.keypoint-delete').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        // 删除节点 + 其所有 children
+        const toDelete = new Set([id]);
+        let grew = true;
+        while (grew) {
+          grew = false;
+          kp.items.forEach((it) => {
+            if (toDelete.has(it.parentId) && !toDelete.has(it.id)) {
+              toDelete.add(it.id);
+              grew = true;
+            }
+          });
+        }
+        kp.items = kp.items.filter((it) => !toDelete.has(it.id));
+        saveKeyPoints(lessonId);
+        renderKeyPointsPanel(lessonId);
+      });
+    });
+
+    panel.querySelector('.btn-add-root-kp')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      addKeyPoint(lessonId, null);
+    });
+  }
+
+  /** 添加新知识点（默认空标题，输入框 focus 让用户立刻填）。 */
+  function addKeyPoint(lessonId, parentId) {
+    let kp = state.keyPointsCache[lessonId];
+    if (!kp) {
+      kp = { lessonId, version: 1, items: [] };
+      state.keyPointsCache[lessonId] = kp;
+    }
+    const siblings = kp.items.filter((it) => (it.parentId || null) === parentId);
+    const newItem = {
+      id: 'kp-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+      title: '新知识点',
+      parentId,
+      order: siblings.length,
+      core: false,
+    };
+    kp.items.push(newItem);
+    saveKeyPoints(lessonId);
+    renderKeyPointsPanel(lessonId);
+    // 自动 focus 到新加项
+    setTimeout(() => {
+      const newInput = document.querySelector(`.keypoint-title[data-id="${CSS.escape(newItem.id)}"]`);
+      if (newInput) { newInput.focus(); newInput.select(); }
+    }, 50);
+  }
+
+  /** 把当前缓存的 keypoints 写回后端（防抖：连续编辑只发最后一次）。 */
+  const _saveKpTimers = {};
+  function saveKeyPoints(lessonId) {
+    clearTimeout(_saveKpTimers[lessonId]);
+    _saveKpTimers[lessonId] = setTimeout(() => {
+      const kp = state.keyPointsCache[lessonId];
+      if (!kp) return;
+      // 从 lesson DOM 拿 subject/topicId
+      const panel = document.querySelector(`.lesson-keypoints-panel[data-lesson-id="${CSS.escape(lessonId)}"]`);
+      const subject = panel?.dataset.subject;
+      const topicId = panel?.dataset.topicId;
+      if (!subject || !topicId) return;
+      vscode.postMessage({
+        type: 'saveKeyPoints',
+        subject,
+        topicId,
+        lessonId,
+        items: kp.items,
+      });
+    }, 220);
   }
 
   function formatTopicTitle(topic, topicIndex) {
@@ -4147,6 +4496,35 @@
         onCourseSelected();
         applyOnboardingState();
         applyDisabledStates();
+        break;
+      }
+      case 'keyPointsLoaded': {
+        // 后端响应 loadKeyPoints，缓存进 state 并触发对应 panel 重渲
+        state.keyPointsCache[msg.lessonId] = msg.keyPoints || null;
+        if (typeof renderKeyPointsPanel === 'function') {
+          renderKeyPointsPanel(msg.lessonId);
+        }
+        break;
+      }
+      case 'keyPointsGenerated': {
+        // AI 一键生成完成 —— 清空该 topic 下所有 lessons 的本地缓存，触发重新 load
+        const course = getCourse(msg.subject);
+        const topic = course?.topics?.find((t) => t.id === msg.topicId);
+        (topic?.lessons || []).forEach((l) => {
+          delete state.keyPointsCache[l.id];
+          // 如果当前展开着，立刻 reload
+          if (state.expandedLessons.has(l.id)) {
+            vscode.postMessage({
+              type: 'loadKeyPoints',
+              subject: msg.subject,
+              topicId: msg.topicId,
+              lessonId: l.id,
+            });
+          }
+        });
+        if (typeof showToast === 'function') {
+          showToast(`已生成 ${msg.generated} 个 lesson 的知识点`, 'success');
+        }
         break;
       }
       case 'courseGenerated': {

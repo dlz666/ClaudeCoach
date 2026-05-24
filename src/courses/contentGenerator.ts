@@ -7,11 +7,13 @@ import {
   refineCoursePreviewPrompt,
   lessonPrompt,
   exercisePrompt,
+  keyPointsPrompt,
 } from '../ai/prompts';
 import {
   CourseOutline,
   Subject,
   Exercise,
+  KeyPointItem,
   LearningPreferences,
   LatestDiagnosis,
   OutlineRebuildSelection,
@@ -69,6 +71,11 @@ interface GenerationContext {
    * 不依赖 chapter mastery，直接用刚做完几道的平均分调下一道。
    */
   recentSessionScores?: number[];
+  /**
+   * 当前 lesson 的知识点清单（仅讲义生成时由 SidebarProvider 读出注入）。
+   * lessonPrompt 拿到后会把"必讲清单"放进 system prompt，治标准学科讲义不全面问题。
+   */
+  lessonKeyPoints?: import('../types').LessonKeyPoints | null;
 }
 
 export class ContentGenerator {
@@ -264,6 +271,59 @@ export class ContentGenerator {
     await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
 
     return filePath;
+  }
+
+  /**
+   * 一次性为一个 topic 内的所有 lessons 生成初始知识点清单（AI 调用一次）。
+   * 写入每个 lesson 对应的 .keypoints.json。已有的会被覆盖（用户重新生成时）。
+   *
+   * 用于讲义对齐标准学科考纲 —— 用户在生成讲义前先用这个把每节的知识点
+   * 框架建好，再到前端微调 / 标 ⭐ / 加备注，最后讲义生成时会按这个清单展开。
+   */
+  async generateTopicKeyPoints(
+    subject: Subject,
+    topicId: string,
+    ctx: GenerationContext,
+  ): Promise<{ generated: number; lessons: Array<{ lessonId: string; count: number }> }> {
+    const outline = await this.courseManager.getCourseOutline(subject);
+    if (!outline) throw new Error('找不到课程大纲');
+    const topic = outline.topics.find(t => t.id === topicId);
+    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+    if (!topic.lessons.length) return { generated: 0, lessons: [] };
+
+    const lessonsForPrompt = topic.lessons.map(l => ({ id: l.id, title: l.title }));
+    const messages = keyPointsPrompt(subject, topic.title, lessonsForPrompt, ctx);
+    // chatJson 会自动剥代码围栏 + 容错 → 直接拿数组
+    const raw = await this.ai.chatJson<Array<{ lessonId: string; items: KeyPointItem[] }>>(
+      messages,
+      { temperature: 0.3, maxTokens: 8000 },
+    );
+
+    const now = new Date().toISOString();
+    const results: Array<{ lessonId: string; count: number }> = [];
+    for (const block of raw ?? []) {
+      if (!block?.lessonId || !Array.isArray(block?.items)) continue;
+      // 合法化每个 item（防 AI 输出脏字段）
+      const items: KeyPointItem[] = block.items
+        .filter(it => it && typeof it.id === 'string' && typeof it.title === 'string')
+        .map((it, i) => ({
+          id: it.id,
+          title: String(it.title).trim(),
+          parentId: it.parentId ?? null,
+          order: Number.isFinite(it.order) ? Number(it.order) : i,
+          core: !!it.core,
+          note: typeof it.note === 'string' && it.note.trim() ? it.note.trim() : undefined,
+        }));
+      if (!items.length) continue;
+      await this.courseManager.writeKeyPoints(subject, topicId, block.lessonId, {
+        lessonId: block.lessonId,
+        version: 1,
+        generatedAt: now,
+        items,
+      });
+      results.push({ lessonId: block.lessonId, count: items.length });
+    }
+    return { generated: results.length, lessons: results };
   }
 
   async generateExercises(

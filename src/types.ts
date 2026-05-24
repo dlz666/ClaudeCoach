@@ -325,6 +325,35 @@ export interface LessonMeta {
   filePath: string;
 }
 
+// ===== Lesson Key Points =====
+/**
+ * 单个知识点。扁平存储 + parentId 推算层级（不嵌套 children，方便增删/重排）。
+ * 元数据极简：只有 core（重点标记）+ note（自由文本），其他都不要
+ * （mastered/kind/difficulty 试过都不实用，要么过期要么 enum 太死）。
+ */
+export interface KeyPointItem {
+  id: string;
+  title: string;
+  /** 父知识点 id，根级为 null。用于推算缩进层级。 */
+  parentId: string | null;
+  /** 同 parent 下的排序号（越小越靠前）。 */
+  order: number;
+  /** ⭐ 重点标记。带 ⭐ 的知识点 → AI 讲义生成时详尽展开。 */
+  core?: boolean;
+  /** 自由文本备注（≤ 100 字符，单行）。AI 生成讲义时会按 note 处理这条知识点。 */
+  note?: string;
+}
+
+/** 一个 lesson 对应的知识点清单。1 lesson : 1 keypoints 文件（lessonId 关联）。 */
+export interface LessonKeyPoints {
+  lessonId: string;
+  /** schema 版本号，便于未来加字段做迁移。 */
+  version: 1;
+  /** AI 首次生成的 ISO 时间戳，nullable（用户手动新建的没有这个）。 */
+  generatedAt?: string;
+  items: KeyPointItem[];
+}
+
 // ===== Exercises & Grading =====
 export interface Exercise {
   id: string;
