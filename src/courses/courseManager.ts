@@ -9,8 +9,34 @@ export class CourseManager {
   private static readonly TOPIC_CODE_PATTERN = /^\d{2}-chapter-[a-z0-9-]+$/;
   private static readonly LESSON_CODE_PATTERN = /^\d{2}-\d{2}-[a-z0-9-]+$/;
 
+  /**
+   * 每个 subject 一把 outline 写锁。
+   *
+   * 用途：lesson 增删改重排（read-modify-write outline.json）必须串行，否则
+   * webview 多个消息（rename + reorder）几乎同时到达时，两个 handler 并发
+   * 各自 readOutline → 改 → writeOutline，后写的会覆盖先写的 → 用户感受是
+   * "按钮没反应 / 位置错乱"。saveCourseOutline 本身是全量写盘没有 race，
+   * 但**基于旧快照写**就会丢另一方改动 —— 所以锁必须包整段 read+write。
+   */
+  private _outlineLock = new Map<string, Promise<void>>();
+
   constructor() {
     this.paths = getStoragePathResolver();
+  }
+
+  /** 串行执行 outline read-modify-write。fn 内部任何 throw 都会被向上抛，但不会阻塞后续。 */
+  private _withOutlineLock<T>(subject: Subject, fn: () => Promise<T>): Promise<T> {
+    const prev = this._outlineLock.get(subject) ?? Promise.resolve();
+    const result = prev.then(fn);
+    // 让"下一个等本次完成"，无论成功失败都接着排队
+    const next = result.then(() => {}, () => {});
+    this._outlineLock.set(subject, next);
+    next.finally(() => {
+      if (this._outlineLock.get(subject) === next) {
+        this._outlineLock.delete(subject);
+      }
+    });
+    return result;
   }
 
   private async listDirectoryNames(dirPath: string): Promise<string[]> {
@@ -419,72 +445,80 @@ export class CourseManager {
 
   /** 重命名 lesson 标题（lessonCode 不变，对应的 .md 文件不动）。 */
   async renameLesson(subject: Subject, topicId: string, lessonId: string, newTitle: string): Promise<void> {
-    const outline = await this.getCourseOutline(subject);
-    if (!outline) throw new Error('找不到课程大纲');
-    const topic = outline.topics.find(t => t.id === topicId);
-    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
-    const lesson = topic.lessons.find(l => l.id === lessonId);
-    if (!lesson) throw new Error(`找不到 lesson: ${lessonId}`);
-    const trimmed = newTitle.trim();
-    if (!trimmed) throw new Error('lesson 标题不能为空');
-    lesson.title = trimmed;
-    await this.saveCourseOutline(subject, outline);
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const topic = outline.topics.find(t => t.id === topicId);
+      if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+      const lesson = topic.lessons.find(l => l.id === lessonId);
+      if (!lesson) throw new Error(`找不到 lesson: ${lessonId}`);
+      const trimmed = newTitle.trim();
+      if (!trimmed) throw new Error('lesson 标题不能为空');
+      lesson.title = trimmed;
+      await this.saveCourseOutline(subject, outline);
+    });
   }
 
   /** 在 topic 末尾追加一个 lesson。code 由 normalizeOutline 自动生成。返回新 lesson。 */
   async addLesson(subject: Subject, topicId: string, title: string): Promise<LessonMeta> {
-    const outline = await this.getCourseOutline(subject);
-    if (!outline) throw new Error('找不到课程大纲');
-    const topic = outline.topics.find(t => t.id === topicId);
-    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
-    const draft: LessonMeta = {
-      id: '',  // normalizeLesson 会重新算 lessonCode 当 id
-      title: title.trim() || '新讲义',
-      difficulty: 1,
-      status: 'not-started',
-      filePath: '',
-    };
-    topic.lessons.push(draft);
-    await this.saveCourseOutline(subject, outline);
-    const newOutline = await this.getCourseOutline(subject);
-    const newTopic = newOutline?.topics.find(t => t.id === topicId);
-    const added = newTopic?.lessons[newTopic.lessons.length - 1];
-    if (!added) throw new Error('lesson 创建失败');
-    return added;
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const topic = outline.topics.find(t => t.id === topicId);
+      if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+      const draft: LessonMeta = {
+        id: '',  // normalizeLesson 会重新算 lessonCode 当 id
+        title: title.trim() || '新讲义',
+        difficulty: 1,
+        status: 'not-started',
+        filePath: '',
+      };
+      topic.lessons.push(draft);
+      await this.saveCourseOutline(subject, outline);
+      const newOutline = await this.getCourseOutline(subject);
+      const newTopic = newOutline?.topics.find(t => t.id === topicId);
+      const added = newTopic?.lessons[newTopic.lessons.length - 1];
+      if (!added) throw new Error('lesson 创建失败');
+      return added;
+    });
   }
 
   /** 删除 lesson + 关联文件（.md / .md.bak / .keypoints.json / 练习）。best-effort 删除。 */
   async deleteLesson(subject: Subject, topicId: string, lessonId: string): Promise<void> {
-    const outline = await this.getCourseOutline(subject);
-    if (!outline) throw new Error('找不到课程大纲');
-    const topic = outline.topics.find(t => t.id === topicId);
-    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
-    const idx = topic.lessons.findIndex(l => l.id === lessonId);
-    if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
-    topic.lessons.splice(idx, 1);
-    await this.saveCourseOutline(subject, outline);
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const topic = outline.topics.find(t => t.id === topicId);
+      if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+      const idx = topic.lessons.findIndex(l => l.id === lessonId);
+      if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
+      topic.lessons.splice(idx, 1);
+      await this.saveCourseOutline(subject, outline);
 
-    const lessonPath = this.getLessonPath(subject, topicId, lessonId);
-    const keypointsPath = this.getKeyPointsPath(subject, topicId, lessonId);
-    const exercisePath = this.getExercisePath(subject, topicId, lessonId);
-    const exerciseJsonPath = this.getExerciseJsonPath(subject, topicId, lessonId);
-    for (const p of [lessonPath, lessonPath + '.bak', keypointsPath, exercisePath, exerciseJsonPath]) {
-      await fs.rm(p, { force: true }).catch(() => { /* 文件可能不存在，忽略 */ });
-    }
+      const lessonPath = this.getLessonPath(subject, topicId, lessonId);
+      const keypointsPath = this.getKeyPointsPath(subject, topicId, lessonId);
+      const exercisePath = this.getExercisePath(subject, topicId, lessonId);
+      const exerciseJsonPath = this.getExerciseJsonPath(subject, topicId, lessonId);
+      for (const p of [lessonPath, lessonPath + '.bak', keypointsPath, exercisePath, exerciseJsonPath]) {
+        await fs.rm(p, { force: true }).catch(() => { /* 文件可能不存在，忽略 */ });
+      }
+    });
   }
 
   /** 上下移动 lesson 顺序（dir: -1 上移, +1 下移）。lessonCode 保留 → 不动文件。 */
   async reorderLesson(subject: Subject, topicId: string, lessonId: string, dir: -1 | 1): Promise<void> {
-    const outline = await this.getCourseOutline(subject);
-    if (!outline) throw new Error('找不到课程大纲');
-    const topic = outline.topics.find(t => t.id === topicId);
-    if (!topic) throw new Error(`找不到 topic: ${topicId}`);
-    const idx = topic.lessons.findIndex(l => l.id === lessonId);
-    if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
-    const target = idx + dir;
-    if (target < 0 || target >= topic.lessons.length) return;
-    [topic.lessons[idx], topic.lessons[target]] = [topic.lessons[target], topic.lessons[idx]];
-    await this.saveCourseOutline(subject, outline);
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const topic = outline.topics.find(t => t.id === topicId);
+      if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+      const idx = topic.lessons.findIndex(l => l.id === lessonId);
+      if (idx < 0) throw new Error(`找不到 lesson: ${lessonId}`);
+      const target = idx + dir;
+      if (target < 0 || target >= topic.lessons.length) return;
+      [topic.lessons[idx], topic.lessons[target]] = [topic.lessons[target], topic.lessons[idx]];
+      await this.saveCourseOutline(subject, outline);
+    });
   }
 
   getExercisePath(subject: Subject, topicId: string, sessionId: string): string {
