@@ -1087,17 +1087,22 @@ export class LectureWebviewProvider {
     ctx.ignoreNextChangeUntil = Date.now() + 1500;
     try {
       const result = await applyInlineWriteback(input);
-      // 写回后主动 push 一份新内容到 webview（不依赖 onDidChangeTextDocument，因为某些场景下 fs 写不会触发）
-      try {
-        const content = await fs.readFile(ctx.args.filePath, 'utf8');
-        ctx.panel.webview.postMessage({
-          type: 'lectureFileChanged',
-          filePath: ctx.args.filePath,
-          content,
-          appliedRange: result.appliedRange,
-          turnId,
-        });
-      } catch { /* ignore */ }
+      // 关键：**只在写回成功时**推 lectureFileChanged（带 turnId）。
+      // 失败时不能推 —— 前端 case 'lectureFileChanged' 看到 turnId 会 removeBubble +
+      // toast '已写回讲义' success + 清 activeTurns，紧接着的 inlineSuggestResult failed
+      // 因为 activeTurns 已被清而被静默吞掉 → 用户看到"假成功 + 没报错 + 讲义没变"。
+      if (result.ok) {
+        try {
+          const content = await fs.readFile(ctx.args.filePath, 'utf8');
+          ctx.panel.webview.postMessage({
+            type: 'lectureFileChanged',
+            filePath: ctx.args.filePath,
+            content,
+            appliedRange: result.appliedRange,
+            turnId,
+          });
+        } catch { /* ignore */ }
+      }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
