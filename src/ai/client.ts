@@ -35,6 +35,14 @@ export interface ChatOptions {
   maxTokens?: number;
   onDelta?: (chunk: string) => void;
   signal?: AbortSignal;
+  /**
+   * 期望响应是纯 JSON。仅 Claude Code CLI 路径消费此标志：
+   * CLI 把我们的"输出 JSON"指令 append 到 Claude Code 自带的 agent system prompt
+   * 之后会被降权，模型常返回 markdown 文档。命中此标志时会在 user message（stdin）
+   * 末尾追加一条高显著度的"只输出 JSON"硬指令来压过 agent 倾向。
+   * OpenAI / Anthropic 路径不需要（system prompt 完全归我们控制），忽略此字段。
+   */
+  responseFormat?: 'json';
 }
 
 /** 当前使用的 model 是否支持视觉？用于在调多模态前给前端友好报错。 */
@@ -325,6 +333,7 @@ export class AIClient {
     const raw = await this.chatCompletion(messages, {
       ...options,
       temperature: options?.temperature ?? 0.3,
+      responseFormat: 'json',
     });
 
     const parsed = this.tryParseJsonText<T>(raw);
@@ -342,6 +351,7 @@ export class AIClient {
     ], {
       temperature: 0,
       maxTokens: options?.maxTokens,
+      responseFormat: 'json',
     });
 
     const repaired = this.tryParseJsonText<T>(repairedRaw);
@@ -1080,6 +1090,16 @@ export class AIClient {
       promptText = turns
         .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         .join('\n\n');
+    }
+
+    // JSON 调用（chatJson）：我们的"输出 JSON"指令只在 system prompt 里，而 CLI 把它
+    // append 到 Claude Code 自带 agent system prompt 之后会被降权 → 模型常返回 markdown
+    // 文档（如课程大纲表格）。这里在 user message（stdin，最高显著度、最后被读到）末尾
+    // 再钉一条硬指令，压过 agent 的"产出可读文档"倾向，逼出纯 JSON。
+    if (options?.responseFormat === 'json') {
+      promptText += '\n\n———\n【输出格式 · 强制】只输出 JSON 本身。第一个字符必须是 { 或 [，'
+        + '最后一个字符必须是 } 或 ]。禁止任何 markdown 标题 / 表格 / 代码围栏（```），'
+        + '禁止任何解释、前言、后记。整个回复必须能被 JSON.parse 直接解析。';
     }
 
     const args = ['--print', '--output-format', 'json'];
