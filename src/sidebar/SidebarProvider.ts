@@ -1376,15 +1376,50 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     try {
       switch (msg.type) {
         case 'confirmDeleteCourse': {
+          const DELETE_ALL = '删除课程及全部文件';
+          const DELETE_CONTENT = '删讲义和练习，保留资料';
+          const REMOVE_ONLY = '仅移除课程，保留文件';
           const choice = await vscode.window.showWarningMessage(
-            `移除课程 "${msg.title}"（讲义和练习文件不会被删除）`,
-            '移除', '取消'
+            `移除课程 "${msg.title}"`,
+            {
+              modal: true,
+              detail:
+                '请选择删除范围（"导入资料" = 你为这门课导入的参考 PDF / 文档 + 向量索引）：\n\n' +
+                '· 删除课程及全部文件：永久删除讲义、练习、知识点 + 导入资料，不可恢复。\n' +
+                '· 删讲义和练习，保留资料：删除讲义 / 练习 / 知识点，但保留导入的参考资料。\n' +
+                '· 仅移除课程，保留文件：只从列表移除，磁盘上所有文件都保留。',
+            },
+            DELETE_ALL,
+            DELETE_CONTENT,
+            REMOVE_ONLY,
           );
-          if (choice === '移除') {
+          // undefined = 用户点了 modal 的 Cancel 或关闭弹窗 → 什么都不做
+          if (!choice) break;
+
+          if (choice === DELETE_ALL) {
+            // 课程内容 + 诊断 + 导入资料 全删
+            await this.courseManager.deleteCourseCompletely(msg.subject);
+            const removedMaterials = await this.materialManager.deleteAllMaterialsForSubject(msg.subject);
+            this._post({
+              type: 'log',
+              message: `已彻底删除课程 "${msg.title}"（讲义 / 练习 + ${removedMaterials} 份资料）`,
+              level: 'info',
+            });
+            await this._refreshMaterials();
+          } else if (choice === DELETE_CONTENT) {
+            // 只删课程内容（讲义 / 练习 / 知识点 / 诊断），保留导入资料
+            await this.courseManager.deleteCourseCompletely(msg.subject);
+            this._post({
+              type: 'log',
+              message: `已删除课程 "${msg.title}" 的讲义和练习（导入资料已保留）`,
+              level: 'info',
+            });
+          } else {
+            // 仅移除：保持原行为（只删 outline，所有文件保留）
             await this.courseManager.deleteCourse(msg.subject);
-            this._post({ type: 'log', message: `课程已移除：${msg.title}`, level: 'info' });
-            await this._refreshCourses();
+            this._post({ type: 'log', message: `已移除课程：${msg.title}（文件已保留）`, level: 'info' });
           }
+          await this._refreshCourses();
           break;
         }
 

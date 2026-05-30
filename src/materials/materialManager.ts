@@ -447,6 +447,46 @@ export class MaterialManager {
     this.processingEntries.delete(materialId);
   }
 
+  /**
+   * 删除某个 subject 导入的全部资料（提取文本 / 摘要 / 向量索引）+ 从全局
+   * index.json 摘除该 subject 的所有条目。用于"移除课程并删除资料"。
+   *
+   * 关键：index.json 是多 subject 共享的全局文件，必须 read-modify-write **只**
+   * 摘除目标 subject 的条目，保留其他 subject。删完 saveIndex 会 fire
+   * onDidChangeIndex → UI 自动刷新资料库。
+   *
+   * 返回删除的资料份数（供日志展示）。
+   */
+  async deleteAllMaterialsForSubject(subject: Subject): Promise<number> {
+    // 防御：空 subject 会让 materialSubjectDir('') 塌缩到 materials 根目录 →
+    // 下面的 fs.rm 会核灭所有学科的资料。subject 来自已存在课程理论上不为空，但后果太重。
+    if (!subject || !subject.trim()) return 0;
+    const index = await this.getIndex();
+    const target = index.materials.filter(m => m.subject === subject);
+
+    for (const entry of target) {
+      if (entry.storageDir) {
+        await fs.rm(entry.storageDir, { recursive: true, force: true }).catch(() => { /* 忽略 */ });
+      } else {
+        // legacy：物理文件分散存放，逐个删
+        for (const p of [entry.filePath, entry.textPath, entry.summaryPath]) {
+          if (p) await fs.unlink(p).catch(() => { /* 忽略 */ });
+        }
+      }
+      this.processingEntries.delete(entry.id);
+    }
+
+    // 兜底：递归删整个 subject 资料目录，清理 index 没记录到的孤儿文件
+    await fs.rm(this.paths.materialSubjectDir(subject), { recursive: true, force: true })
+      .catch(() => { /* 忽略 */ });
+
+    // 只在确有条目被摘除时 write（避免无谓 emit）
+    if (target.length) {
+      await this.saveIndex({ materials: index.materials.filter(m => m.subject !== subject) });
+    }
+    return target.length;
+  }
+
   /** Get material summaries relevant to a topic, for prompt injection. */
   async getRelevantSummary(subject: Subject, topicTitle: string, options?: { materialId?: string; materialIds?: string[] }): Promise<string> {
     const subjectMaterials = await this._getIndexedMaterials(subject, options);

@@ -413,6 +413,40 @@ export class CourseManager {
     }
   }
 
+  /**
+   * 彻底删除一个 subject 的全部课程内容（讲义 / 练习 / 知识点）。
+   *
+   * 删除范围：
+   *  - courseSubjectDir 整目录（outline / summary / profile / wrong-questions /
+   *    adaptive-trigger / 所有 topics 下的讲义.md / .keypoints.json / 练习 / 批改）
+   *  - legacy 残留（老路径的 course-outline.json / course-summary.md）
+   *
+   * **不**触碰：
+   *  - 导入资料（由 MaterialManager.deleteAllMaterialsForSubject 负责）
+   *  - 学科级诊断 diagnosisSubjectDir：**故意不删**。sanitizeSegment 对纯中文学科名
+   *    （如"微积分"/"数据结构"）会塌缩成同一个 fallback 'course' 目录 → 删一个会误删
+   *    所有中文学科的共享诊断目录（跨 subject 数据丢失）。诊断是小元数据，下次批改会
+   *    重写，留着无害；删它风险远大于收益。
+   *  - 全局诊断、全局用户 profile / preferences、该学科下的项目（projects，独立概念）。
+   *
+   * 全用 courseSubjectDir（raw subject key，与创建时 saveCourseOutline 一致）→ 域内对称。
+   *
+   * 包在 _outlineLock 内串行：避免删除时恰好有 lesson rename/reorder 在跑，
+   * 后者基于已删的快照写回又把目录创建回来。
+   */
+  async deleteCourseCompletely(subject: Subject): Promise<void> {
+    // 防御：空 subject 会让 courseSubjectDir('') 塌缩到 courses 根目录 → 核灭所有学科。
+    if (!subject || !subject.trim()) return;
+    return this._withOutlineLock(subject, async () => {
+      // 1. 整个课程内容目录
+      await this.clearCourseContent(subject);
+      // 2. legacy 残留文件
+      for (const p of [this.paths.legacyCourseOutlinePath(subject), this.paths.legacyCourseSummaryPath(subject)]) {
+        await fs.rm(p, { force: true }).catch(() => { /* 不存在忽略 */ });
+      }
+    });
+  }
+
   getCourseSummaryPath(subject: Subject): string {
     return this.paths.courseSummaryPath(subject);
   }
