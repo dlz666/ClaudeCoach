@@ -1092,14 +1092,26 @@ export class AIClient {
         .join('\n\n');
     }
 
-    // JSON 调用（chatJson）：我们的"输出 JSON"指令只在 system prompt 里，而 CLI 把它
-    // append 到 Claude Code 自带 agent system prompt 之后会被降权 → 模型常返回 markdown
-    // 文档（如课程大纲表格）。这里在 user message（stdin，最高显著度、最后被读到）末尾
-    // 再钉一条硬指令，压过 agent 的"产出可读文档"倾向，逼出纯 JSON。
-    if (options?.responseFormat === 'json') {
-      promptText += '\n\n———\n【输出格式 · 强制】只输出 JSON 本身。第一个字符必须是 { 或 [，'
-        + '最后一个字符必须是 } 或 ]。禁止任何 markdown 标题 / 表格 / 代码围栏（```），'
-        + '禁止任何解释、前言、后记。整个回复必须能被 JSON.parse 直接解析。';
+    // JSON 调用（chatJson）：把 system prompt（含 JSON schema）**直接拼进 stdin 的 user
+    // message**，不再走 --append-system-prompt。
+    //
+    // 原因：CLI 的 --append-system-prompt 是把内容追加到 Claude Code 自带 agent system
+    // prompt 之后 → 被降权。我们的"输出 JSON + schema"埋在那里，模型只模糊知道"要输出
+    // JSON"但不照 schema 的字段名/嵌套，于是：第一版返回 markdown 文档；加了 stdin 末尾的
+    // "只输出JSON"硬指令后变成"是 JSON 了但形状不对"（topics 空）。根因一直是 schema 被
+    // 降权。改成把完整要求（含 schema）放进最高显著度的 stdin，模型当主任务严格照 schema 出。
+    //
+    // 仅 responseFormat:'json' 生效；讲义生成（chatCompletion 无此标志）保持 append-file
+    // 行为不变（长 prose 拼进 stdin 会被误当"已有内容"，见下方 append 注释）。
+    const wantJson = options?.responseFormat === 'json';
+    if (wantJson) {
+      const jsonDirective = '\n\n———\n【输出格式 · 强制】只输出 JSON 本身。第一个字符必须是 { 或 [，'
+        + '最后一个字符必须是 } 或 ]。严格按上面要求的 JSON 结构输出（字段名 / 嵌套层级一字不差）。'
+        + '禁止 markdown 标题 / 表格 / 代码围栏（```）、禁止任何解释 / 前言 / 后记。'
+        + '整个回复必须能被 JSON.parse 直接解析。';
+      promptText = systemPrompt
+        ? `${systemPrompt}\n\n———— 以上是输出要求，请严格遵守 ————\n\n${promptText}${jsonDirective}`
+        : `${promptText}${jsonDirective}`;
     }
 
     const args = ['--print', '--output-format', 'json'];
@@ -1125,9 +1137,13 @@ export class AIClient {
     // 误认为前面那段是讲义内容的一部分，只补充输出"五、六、小结"部分讲义残废。
     // 正确方案：用 --append-system-prompt-file <路径> 传文件路径（CLI 提供此 flag）。
     // 命令行参数短，Claude 仍认知为 system instructions，不会跟 user message 混淆。
+    // wantJson 时 system prompt 已经拼进 stdin（上面），这里不再用 append flag，避免重复
+    // 且确保 schema 走高显著度通道。
     const APPEND_FLAG_MAX_LEN = 3500;  // 留充足 buffer 给其他 args + claude.cmd 包装
     let tempSystemPromptFile: string | null = null;
-    if (systemPrompt && systemPrompt.length < APPEND_FLAG_MAX_LEN) {
+    if (wantJson) {
+      // system 已在 stdin，不追加
+    } else if (systemPrompt && systemPrompt.length < APPEND_FLAG_MAX_LEN) {
       args.push('--append-system-prompt', systemPrompt);
     } else if (systemPrompt) {
       // 长 system → 写临时文件 → --append-system-prompt-file

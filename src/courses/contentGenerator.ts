@@ -620,7 +620,12 @@ export class ContentGenerator {
   ): void {
     const topics = Array.isArray(data.topics) ? data.topics : [];
     if (topics.length === 0) {
-      throw new Error(`${label}为空：模型没有返回任何主题。请重试，或切换到更稳定的 API 提供方。`);
+      // 附上解析到的实际结构预览，便于判断是"模型真返回空" vs "形状不对/被包了一层"
+      // （如 {course:{topics:[]}} 或抢救到内层 lesson 片段 {id,title,difficulty}）。
+      const shapePreview = (() => {
+        try { return JSON.stringify(data).slice(0, 220); } catch { return String(data).slice(0, 220); }
+      })();
+      throw new Error(`${label}为空：模型没有返回任何主题。解析到的结构：${shapePreview}。请重试，或切换到更稳定的 API 提供方。`);
     }
 
     const invalidTopicIndex = topics.findIndex((topic) => {
