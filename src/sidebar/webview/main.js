@@ -244,8 +244,8 @@
     taskList: $('task-list'),
     dataDirPath: $('data-dir-path'),
     aiConfigCenter: $('ai-config-center'),
-    btnChangeAIConfig: $('btn-change-ai-config'),
-    aiChangeMenu: $('ai-change-menu'),
+    btnChangeAIConfig: $('btn-ai-import'),
+    aiChangeMenu: $('ai-import-menu'),
     resolvedConfigSource: $('resolved-config-source'),
     resolvedWarningPills: $('resolved-warning-pills'),
     resolvedConfigName: $('resolved-config-name'),
@@ -256,6 +256,7 @@
     resolvedConfigContext: $('resolved-config-context'),
     resolvedConfigMaxTokens: $('resolved-config-max-tokens'),
     resolvedConfigHistoryBudget: $('resolved-config-history-budget'),
+    aiProfileCount: $('ai-profile-count'),
     prefDifficulty: $('pref-difficulty'),
     mixEasy: $('mix-easy'),
     mixMedium: $('mix-medium'),
@@ -361,7 +362,7 @@
     // ===== AI Profile 编辑器 =====
     btnAddAIProfile: $('btn-add-ai-profile'),
     aiProfilesList: $('ai-profiles-list'),
-    aiProfileEditor: $('ai-profile-editor'),
+    aiProfileEditor: $('ai-profile-editor-modal'),
     aiProfileEditorTitle: $('ai-profile-editor-title'),
     aiProfileName: $('ai-profile-name'),
     aiProfileProvider: $('ai-profile-provider'),
@@ -374,15 +375,25 @@
     aiProfileMaxTokens: $('ai-profile-max-tokens'),
     aiProfileReasoningEffort: $('ai-profile-reasoning-effort'),
     aiProfileNotes: $('ai-profile-notes'),
+    aiProfileDraftFeedback: $('ai-profile-draft-feedback'),
     btnSaveAIProfile: $('btn-save-ai-profile'),
-    btnCancelAIProfile: $('btn-cancel-ai-profile'),
+    btnTestAIProfileDraft: $('btn-test-ai-profile-draft'),
+    btnCancelAIProfile: $('btn-close-ai-profile-modal'),
     aiWsOverrideEnabled: $('ai-ws-override-enabled'),
     aiWsBaseProfile: $('ai-ws-base-profile'),
     aiWsProvider: $('ai-ws-provider'),
     aiWsBaseUrl: $('ai-ws-base-url'),
+    aiWsAnthropicBaseUrl: $('ai-ws-anthropic-base-url'),
     aiWsToken: $('ai-ws-token'),
     aiWsModel: $('ai-ws-model'),
+    aiWsWireApi: $('ai-ws-wire-api'),
+    aiWsReasoningEffort: $('ai-ws-reasoning-effort'),
+    aiWsContextWindow: $('ai-ws-context-window'),
+    aiWsMaxTokens: $('ai-ws-max-tokens'),
     btnSaveWsOverride: $('btn-save-ws-override'),
+    aiPresetGrid: $('ai-preset-grid'),
+    aiWsSummary: $('ai-ws-summary'),
+    btnCloseAIProfileModal: $('btn-close-ai-profile-modal'),
 
     // ===== 数据管理 =====
     dataSubjectSelect: $('data-subject-select'),
@@ -2744,37 +2755,97 @@
     if (els.onboardingStepLesson) els.onboardingStepLesson.classList.toggle('done', !!hasLesson);
   }
 
+  /**
+   * AI Provider 预设库（前端内置，仅用于预填新建表单，不改变数据结构）。
+   * 对照 cc-switch 的 preset 网格交互：选一个预设 → 自动填好 baseUrl/model/context，
+   * 用户只需填 name + token。最后一个 "custom" 不预填，走完整手填流程。
+   */
+  const AI_PROVIDER_PRESETS = [
+    { id: 'openai', label: 'OpenAI', icon: '🌐', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', contextWindow: 128000, maxTokens: 4096, hint: '官方 ChatGPT 接口' },
+    { id: 'anthropic', label: 'Anthropic', icon: '🅰️', provider: 'anthropic', anthropicBaseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-4-5', contextWindow: 200000, maxTokens: 8192, hint: 'Claude 官方 API' },
+    { id: 'claude_code_cli', label: 'Claude Code CLI', icon: '💻', provider: 'claude_code_cli', model: 'claude-sonnet-4-5', contextWindow: 200000, maxTokens: 8192, hint: '本机 claude 命令，无需 Token' },
+    { id: 'deepseek', label: 'DeepSeek', icon: '🐋', provider: 'openai', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', contextWindow: 64000, maxTokens: 4096, hint: '深度求索' },
+    { id: 'openrouter', label: 'OpenRouter', icon: '🔀', provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet', contextWindow: 200000, maxTokens: 4096, hint: '聚合多模型中转' },
+    { id: 'siliconflow', label: 'SiliconFlow', icon: '⚡', provider: 'openai', baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3', contextWindow: 64000, maxTokens: 4096, hint: '硅基流动' },
+    { id: 'custom', label: '自定义', icon: '⚙️', provider: 'openai', hint: '手动填写全部字段' },
+  ];
+
+  function providerLabel(provider) {
+    if (provider === 'claude_code_cli') return 'Claude Code CLI';
+    if (provider === 'anthropic') return 'Anthropic';
+    if (provider === 'openai') return 'OpenAI / 兼容';
+    return provider || '-';
+  }
+
+  function sourceLabel(source) {
+    return {
+      manual: '手动',
+      claude: '.claude',
+      codex: '.codex',
+      package: '配置包',
+    }[source] || source || '-';
+  }
+
+  function formatTokenNumber(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return '-';
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(n);
+  }
+
+  function profileEndpoint(profile) {
+    if (profile.provider === 'claude_code_cli') return '本机 claude 命令';
+    if (profile.provider === 'anthropic') return profile.anthropicBaseUrl || 'https://api.anthropic.com';
+    return profile.baseUrl || 'https://api.openai.com/v1';
+  }
+
   function renderAIProfiles() {
     if (!els.aiProfilesList) return;
     const profiles = Array.isArray(state.aiProfiles) ? state.aiProfiles : [];
+    if (els.aiProfileCount) {
+      const active = profiles.find((p) => p.id === state.activeProfileId);
+      els.aiProfileCount.textContent = profiles.length
+        ? `${profiles.length} 个配置 · 当前 ${active?.name || '未选择'}`
+        : '还没有配置';
+    }
     if (!profiles.length) {
-      els.aiProfilesList.innerHTML = '<div class="ds-card"><p class="muted">还没有 AI Profile，点击下方"新建"创建一个。</p></div>';
+      els.aiProfilesList.innerHTML = '<div class="ds-card ai-empty-card"><p class="muted">还没有 AI Profile，先新建一个或从 .codex / .claude 导入。</p></div>';
     } else {
       els.aiProfilesList.innerHTML = profiles.map((profile) => {
         const isActive = profile.id === state.activeProfileId;
-        const providerIcon = profile.provider === 'anthropic' ? '🤖'
-          : profile.provider === 'openai' ? '🟢'
-          : profile.provider === 'claude_code_cli' ? '⌨️'
-          : '✨';
+        const tokenOk = profile.provider === 'claude_code_cli' || !!profile.apiToken;
+        const endpoint = profileEndpoint(profile);
+        const source = sourceLabel(profile.source);
         return `
-          <article class="ds-card${isActive ? ' ds-card--active' : ''} ai-profile-card" data-profile-id="${escapeHtml(profile.id)}">
+          <article class="ds-card${isActive ? ' ds-card--active ai-profile-card--active' : ''} ai-profile-card" data-profile-id="${escapeHtml(profile.id)}" data-card-action="activate" role="button" tabindex="0" aria-label="激活 ${escapeHtml(profile.name || 'Profile')}">
             <div class="ds-card__header">
-              <div class="ds-card__title">
-                <span class="ai-profile-icon" aria-hidden="true">${providerIcon}</span>
+              <div class="ds-card__title ai-profile-title">
                 <span class="ds-truncate">${escapeHtml(profile.name || '未命名')}</span>
                 ${isActive ? '<span class="ds-status-chip ds-status-chip--on"><span class="ds-status-dot"></span>激活中</span>' : ''}
               </div>
               <div class="ds-card__actions">
-                <button class="ds-btn ds-btn--icon" type="button" data-action="profile-menu" data-profile-id="${escapeHtml(profile.id)}" title="更多操作（复制 / 测试 / 导出 / 删除）" aria-haspopup="true">⋯</button>
+                <button class="ds-btn ds-btn--icon" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}" title="编辑" aria-label="编辑 Profile">✎</button>
+                <button class="ds-btn ds-btn--icon" type="button" data-action="profile-menu" data-profile-id="${escapeHtml(profile.id)}" title="更多操作（复制 / 测试 / 导出 / 删除）" aria-haspopup="true" aria-label="更多操作">⋯</button>
               </div>
             </div>
-            <div class="ai-profile-meta">
-              <span class="ai-profile-meta__provider">${escapeHtml(profile.provider || '-')}</span>
-              <span class="ai-profile-meta__model ds-truncate" title="${escapeHtml(profile.model || '')}">${escapeHtml(profile.model || '-')}</span>
+            <div class="ai-profile-flags">
+              <span class="ai-profile-meta__provider">${escapeHtml(providerLabel(profile.provider))}</span>
+              <span class="pill ${tokenOk ? 'success' : 'danger'}">${tokenOk ? 'Token OK' : '缺少 Token'}</span>
+              <span class="pill">${escapeHtml(source)}</span>
             </div>
-            <div class="ds-card__actions ai-profile-primary-actions">
-              <button class="ds-btn ${isActive ? '' : 'ds-btn--primary'}" type="button" data-action="activate" data-profile-id="${escapeHtml(profile.id)}" ${isActive ? 'disabled' : ''}>${isActive ? '✓ 已激活' : '激活'}</button>
-              <button class="ds-btn ds-btn--ghost" type="button" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">编辑</button>
+            <div class="ai-profile-detail-grid">
+              <div>
+                <span class="stat-label">Model</span>
+                <span class="stat-value mono ds-truncate" title="${escapeHtml(profile.model || '')}">${escapeHtml(profile.model || '-')}</span>
+              </div>
+              <div>
+                <span class="stat-label">Context / Max</span>
+                <span class="stat-value mono">${escapeHtml(formatTokenNumber(profile.contextWindow))} / ${escapeHtml(formatTokenNumber(profile.maxTokens))}</span>
+              </div>
+              <div class="ai-profile-detail-wide">
+                <span class="stat-label">Endpoint</span>
+                <span class="stat-value mono ds-truncate" title="${escapeHtml(endpoint)}">${escapeHtml(endpoint)}</span>
+              </div>
             </div>
             <!-- 测试连通性 / 其他操作的就近反馈区（默认隐藏，测试时显示）-->
             <div class="ds-feedback hidden" data-profile-feedback="${escapeHtml(profile.id)}" role="status" aria-live="polite">
@@ -2784,6 +2855,24 @@
           </article>
         `;
       }).join('');
+
+      // 整卡点击 = 激活（点击编辑/⋯按钮不触发，按钮 handler 会 stopPropagation；这里再加一道兜底）
+      els.aiProfilesList.querySelectorAll('[data-card-action="activate"]').forEach((card) => {
+        const activateCard = () => {
+          const profileId = card.getAttribute('data-profile-id');
+          const profile = state.aiProfiles.find((p) => p.id === profileId);
+          if (!profile) return;
+          if (profile.id === state.activeProfileId) return;
+          handleAIProfileAction('activate', profile);
+        };
+        card.addEventListener('click', (event) => {
+          if (event.target.closest('[data-action]')) return;
+          activateCard();
+        });
+        card.addEventListener('keydown', (event) => {
+          if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); activateCard(); }
+        });
+      });
 
       els.aiProfilesList.querySelectorAll('[data-action]').forEach((btn) => {
         btn.addEventListener('click', (event) => {
@@ -2897,49 +2986,157 @@
     }
   }
 
+  function normalizeAIProvider(value) {
+    if (value === 'claude_code_cli' || value === 'anthropic' || value === 'openai') return value;
+    return 'openai';
+  }
+
+  function syncAIProfileProviderFields() {
+    const provider = normalizeAIProvider(els.aiProfileProvider?.value || 'openai');
+    if (els.aiProfileProvider && els.aiProfileProvider.value !== provider) {
+      els.aiProfileProvider.value = provider;
+    }
+
+    const isClaudeCli = provider === 'claude_code_cli';
+    const isAnthropic = provider === 'anthropic';
+    const isOpenAI = provider === 'openai';
+    document.querySelectorAll('[data-ai-base-url-row]').forEach((row) => {
+      row.classList.toggle('hidden', !isOpenAI);
+    });
+    document.querySelectorAll('[data-ai-anthropic-url-row]').forEach((row) => {
+      row.classList.toggle('hidden', !isAnthropic);
+    });
+    document.querySelectorAll('[data-ai-token-row]').forEach((row) => {
+      row.classList.toggle('hidden', isClaudeCli);
+    });
+
+    const connectionCard = document.getElementById('ai-profile-connection-card');
+    connectionCard?.classList.toggle('hidden', isClaudeCli);
+    document.getElementById('ai-profile-wire-api-row')?.classList.toggle('hidden', !isOpenAI);
+
+    if (els.aiProfileBaseUrl) {
+      els.aiProfileBaseUrl.placeholder = isOpenAI ? 'https://api.openai.com/v1' : '';
+    }
+    if (els.aiProfileAnthropicBaseUrl) {
+      els.aiProfileAnthropicBaseUrl.placeholder = isAnthropic ? 'https://api.anthropic.com' : '';
+    }
+    if (els.aiProfileToken) {
+      els.aiProfileToken.placeholder = isAnthropic ? 'ANTHROPIC_API_KEY' : 'sk-...';
+    }
+  }
+
   function openAIProfileEditor(profile) {
     state.editingProfileId = profile?.id || null;
-    // 子页切换：把整个 ai-config-subpage 切到 editor 视图
-    const subpage = document.getElementById('ai-config-subpage');
-    if (subpage) subpage.setAttribute('data-view', 'editor');
-    // 兼容旧调用点的 hidden 类（虽然现在 ds-subpage CSS 已经接管显隐）
-    if (els.aiProfileEditor) els.aiProfileEditor.classList.remove('hidden');
+    // 打开弹窗
+    if (els.aiProfileEditor) {
+      els.aiProfileEditor.classList.remove('hidden');
+      els.aiProfileEditor.setAttribute('aria-hidden', 'false');
+    }
     if (els.aiProfileEditorTitle) els.aiProfileEditorTitle.textContent = profile ? `编辑：${profile.name || ''}` : '新建 Profile';
     if (els.aiProfileName) els.aiProfileName.value = profile?.name || '';
-    if (els.aiProfileProvider) els.aiProfileProvider.value = profile?.provider || 'anthropic';
-    if (els.aiProfileBaseUrl) els.aiProfileBaseUrl.value = profile?.baseUrl || '';
-    if (els.aiProfileAnthropicBaseUrl) els.aiProfileAnthropicBaseUrl.value = profile?.anthropicBaseUrl || '';
+    const provider = normalizeAIProvider(profile?.provider || 'openai');
+    if (els.aiProfileProvider) els.aiProfileProvider.value = provider;
+    if (els.aiProfileBaseUrl) els.aiProfileBaseUrl.value = profile?.baseUrl || (provider === 'openai' ? 'https://api.openai.com/v1' : '');
+    if (els.aiProfileAnthropicBaseUrl) els.aiProfileAnthropicBaseUrl.value = profile?.anthropicBaseUrl || (provider === 'anthropic' ? 'https://api.anthropic.com' : '');
     if (els.aiProfileToken) els.aiProfileToken.value = profile?.apiToken || '';
     if (els.aiProfileModel) els.aiProfileModel.value = profile?.model || '';
-    if (els.aiProfileWireApi) els.aiProfileWireApi.value = profile?.wireApi || 'anthropic';
+    if (els.aiProfileWireApi) els.aiProfileWireApi.value = profile?.wireApi || 'chat_completions';
     if (els.aiProfileContextWindow) els.aiProfileContextWindow.value = profile?.contextWindow ? String(profile.contextWindow) : '';
     if (els.aiProfileMaxTokens) els.aiProfileMaxTokens.value = profile?.maxTokens ? String(profile.maxTokens) : '';
     if (els.aiProfileReasoningEffort) els.aiProfileReasoningEffort.value = profile?.reasoningEffort || '';
     if (els.aiProfileNotes) els.aiProfileNotes.value = profile?.notes || '';
-    // 切完滚到顶
+    if (els.aiProfileDraftFeedback) els.aiProfileDraftFeedback.classList.add('hidden');
+    syncAIProfileProviderFields();
+    // 渲染预设网格，编辑时高亮匹配的预设
+    renderAIPresetGrid(profile);
+    // 弹窗滚到顶
     requestAnimationFrame(() => {
-      const editorEl = document.querySelector('#ai-config-subpage [data-view="editor"]');
-      editorEl?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      const panel = els.aiProfileEditor?.querySelector('.modal-panel');
+      if (panel) panel.scrollTop = 0;
     });
   }
 
   function closeAIProfileEditor() {
     state.editingProfileId = null;
-    const subpage = document.getElementById('ai-config-subpage');
-    if (subpage) subpage.setAttribute('data-view', 'list');
-    // 兼容旧调用点的 hidden 类
-    if (els.aiProfileEditor) els.aiProfileEditor.classList.add('hidden');
+    if (els.aiProfileEditor) {
+      els.aiProfileEditor.classList.add('hidden');
+      els.aiProfileEditor.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  /**
+   * 渲染 Provider 预设网格（仿 cc-switch 的 preset 选择）。
+   * 编辑现有 profile 时，按 provider+baseUrl 匹配高亮；都不匹配则高亮"自定义"。
+   * 新建时不高亮任何预设（等用户选）。
+   */
+  function renderAIPresetGrid(profile) {
+    const grid = els.aiPresetGrid;
+    if (!grid) return;
+    const currentProvider = normalizeAIProvider(profile?.provider);
+    const currentBaseUrl = (profile?.baseUrl || '').trim();
+    const currentAnthropicUrl = (profile?.anthropicBaseUrl || '').trim();
+    let matchedId = '';
+    if (profile) {
+      matchedId = 'custom';
+      for (const p of AI_PROVIDER_PRESETS) {
+        if (p.id === 'custom') continue;
+        if (p.provider !== currentProvider) continue;
+        if (p.provider === 'openai' && p.baseUrl && p.baseUrl === currentBaseUrl) { matchedId = p.id; break; }
+        if (p.provider === 'anthropic' && p.anthropicBaseUrl && p.anthropicBaseUrl === currentAnthropicUrl) { matchedId = p.id; break; }
+        if (p.provider === 'claude_code_cli') { matchedId = p.id; break; }
+      }
+    }
+    grid.innerHTML = AI_PROVIDER_PRESETS.map((p) => {
+      const selected = p.id === matchedId;
+      return `
+        <button type="button" class="ai-preset-card${selected ? ' selected' : ''}" data-preset-id="${escapeHtml(p.id)}">
+          <span class="ai-preset-card__icon" aria-hidden="true">${p.icon || ''}</span>
+          <span class="ai-preset-card__label">${escapeHtml(p.label)}</span>
+          ${p.hint ? `<span class="ai-preset-card__hint">${escapeHtml(p.hint)}</span>` : ''}
+        </button>
+      `;
+    }).join('');
+    grid.querySelectorAll('[data-preset-id]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        selectAIPreset(btn.getAttribute('data-preset-id'));
+      });
+    });
+  }
+
+  /**
+   * 选预设 → 预填表单（保留 name/token/notes，覆盖连接与模型字段）。
+   * custom 不预填，仅切 provider 为 openai 让用户手填。
+   */
+  function selectAIPreset(presetId) {
+    const preset = AI_PROVIDER_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    els.aiPresetGrid?.querySelectorAll('[data-preset-id]').forEach((btn) => {
+      btn.classList.toggle('selected', btn.getAttribute('data-preset-id') === presetId);
+    });
+    if (preset.id !== 'custom') {
+      if (els.aiProfileProvider) els.aiProfileProvider.value = normalizeAIProvider(preset.provider);
+      if (preset.baseUrl !== undefined && els.aiProfileBaseUrl) els.aiProfileBaseUrl.value = preset.baseUrl;
+      if (preset.anthropicBaseUrl !== undefined && els.aiProfileAnthropicBaseUrl) els.aiProfileAnthropicBaseUrl.value = preset.anthropicBaseUrl;
+      if (els.aiProfileModel) els.aiProfileModel.value = preset.model || '';
+      if (els.aiProfileContextWindow) els.aiProfileContextWindow.value = preset.contextWindow ? String(preset.contextWindow) : '';
+      if (els.aiProfileMaxTokens) els.aiProfileMaxTokens.value = preset.maxTokens ? String(preset.maxTokens) : '';
+    }
+    syncAIProfileProviderFields();
   }
 
   function collectAIProfileForm() {
+    const provider = normalizeAIProvider(els.aiProfileProvider?.value || 'openai');
+    const baseUrl = (els.aiProfileBaseUrl?.value || '').trim();
+    const anthropicBaseUrl = (els.aiProfileAnthropicBaseUrl?.value || '').trim();
     const profile = {
       name: (els.aiProfileName?.value || '').trim(),
-      provider: els.aiProfileProvider?.value || 'anthropic',
-      baseUrl: (els.aiProfileBaseUrl?.value || '').trim(),
-      anthropicBaseUrl: (els.aiProfileAnthropicBaseUrl?.value || '').trim() || undefined,
-      apiToken: els.aiProfileToken?.value || '',
+      provider,
+      baseUrl: provider === 'openai' ? (baseUrl || 'https://api.openai.com/v1') : baseUrl,
+      anthropicBaseUrl: provider === 'anthropic' ? (anthropicBaseUrl || 'https://api.anthropic.com') : (anthropicBaseUrl || 'https://api.anthropic.com'),
+      apiToken: provider === 'claude_code_cli' ? '' : (els.aiProfileToken?.value || ''),
       model: (els.aiProfileModel?.value || '').trim(),
-      wireApi: els.aiProfileWireApi?.value || 'anthropic',
+      wireApi: provider === 'openai' ? (els.aiProfileWireApi?.value || 'chat_completions') : 'chat_completions',
       contextWindow: els.aiProfileContextWindow?.value ? Number(els.aiProfileContextWindow.value) : undefined,
       maxTokens: els.aiProfileMaxTokens?.value ? Number(els.aiProfileMaxTokens.value) : undefined,
       reasoningEffort: els.aiProfileReasoningEffort?.value || undefined,
@@ -3005,6 +3202,21 @@
     }
   }
 
+  function renderDraftProfileFeedback(state, message) {
+    const fb = els.aiProfileDraftFeedback;
+    if (!fb) return;
+    fb.classList.remove('hidden', 'ds-feedback--success', 'ds-feedback--error', 'ds-feedback--pending');
+    fb.classList.add('ds-feedback--' + state);
+    const icon = fb.querySelector('.ds-feedback__icon');
+    const body = fb.querySelector('.ds-feedback__body');
+    if (icon) {
+      icon.innerHTML = '';
+      icon.textContent = state === 'success' ? '✓' : state === 'error' ? '✗' : '';
+      if (state === 'pending') icon.innerHTML = '<i></i>';
+    }
+    if (body) body.textContent = message || '';
+  }
+
   /** 渲染 Embedding 测试结果到 .ds-feedback 卡（替代原来的内联 span 文本）。 */
   function renderEmbeddingTestFeedback(state, message) {
     const feedback = document.getElementById('embedding-test-feedback');
@@ -3030,15 +3242,34 @@
 
   function renderWorkspaceAIOverride() {
     const ov = state.workspaceAIOverride || {};
+    const overrides = ov.overrides || ov;
     const enabled = !!ov.enabled;
     if (els.aiWsOverrideEnabled) els.aiWsOverrideEnabled.checked = enabled;
-    if (els.aiWsProvider) els.aiWsProvider.value = ov.providerOverride || ov.provider || '';
-    if (els.aiWsBaseUrl) els.aiWsBaseUrl.value = ov.baseUrlOverride || ov.baseUrl || '';
-    if (els.aiWsToken) els.aiWsToken.value = ov.apiTokenOverride || ov.apiToken || '';
-    if (els.aiWsModel) els.aiWsModel.value = ov.modelOverride || ov.model || '';
+    if (els.aiWsBaseProfile) els.aiWsBaseProfile.value = ov.baseProfileId || '';
+    if (els.aiWsProvider) els.aiWsProvider.value = overrides.providerOverride || overrides.provider || '';
+    if (els.aiWsBaseUrl) els.aiWsBaseUrl.value = overrides.baseUrlOverride || overrides.baseUrl || '';
+    if (els.aiWsAnthropicBaseUrl) els.aiWsAnthropicBaseUrl.value = overrides.anthropicBaseUrl || '';
+    if (els.aiWsToken) els.aiWsToken.value = overrides.apiTokenOverride || overrides.apiToken || '';
+    if (els.aiWsModel) els.aiWsModel.value = overrides.modelOverride || overrides.model || '';
+    if (els.aiWsWireApi) els.aiWsWireApi.value = overrides.wireApi || '';
+    if (els.aiWsReasoningEffort) els.aiWsReasoningEffort.value = overrides.reasoningEffort || '';
+    if (els.aiWsContextWindow) els.aiWsContextWindow.value = overrides.contextWindow ? String(overrides.contextWindow) : '';
+    if (els.aiWsMaxTokens) els.aiWsMaxTokens.value = overrides.maxTokens ? String(overrides.maxTokens) : '';
     // 联动 CSS：data-enabled="true" 时 fieldset 内容正常可点；false 时半透明 disabled
     const fieldset = document.getElementById('ai-workspace-override');
     if (fieldset) fieldset.setAttribute('data-enabled', enabled ? 'true' : 'false');
+    // 折叠摘要：在 legend 旁显示当前覆盖状态，避免每次都要展开看
+    if (els.aiWsSummary) {
+      if (!enabled) {
+        els.aiWsSummary.textContent = '未启用';
+      } else {
+        const baseName = ov.baseProfileId
+          ? (state.aiProfiles.find((p) => p.id === ov.baseProfileId)?.name || '全局激活')
+          : '全局激活';
+        const overrideKeys = Object.keys(overrides || {}).filter((k) => overrides[k] !== undefined && overrides[k] !== '');
+        els.aiWsSummary.textContent = `启用 · 基于「${baseName}」${overrideKeys.length ? ` · 覆盖 ${overrideKeys.length} 项` : ''}`;
+      }
+    }
   }
 
   // toggle 的 change 立即同步禁用态（不等保存）—— 让用户拨动 toggle 就能看到效果
@@ -3094,32 +3325,36 @@
     if (!config) {
       if (els.resolvedConfigSource) els.resolvedConfigSource.textContent = '加载中...';
       els.resolvedConfigName.textContent = '-';
+      if (els.resolvedConfigMeta) els.resolvedConfigMeta.textContent = '-';
       if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = '-';
       if (els.resolvedConfigOrigin) els.resolvedConfigOrigin.textContent = '-';
-      els.resolvedConfigUrl.textContent = '-';
-      els.resolvedConfigContext.textContent = '-';
-      els.resolvedConfigMaxTokens.textContent = '-';
-      els.resolvedConfigHistoryBudget.textContent = '-';
+      if (els.resolvedConfigUrl) els.resolvedConfigUrl.textContent = '-';
+      if (els.resolvedConfigContext) els.resolvedConfigContext.textContent = '-';
+      if (els.resolvedConfigMaxTokens) els.resolvedConfigMaxTokens.textContent = '-';
+      if (els.resolvedConfigHistoryBudget) els.resolvedConfigHistoryBudget.textContent = '-';
       if (els.resolvedWarningPills) els.resolvedWarningPills.innerHTML = '';
+      els.aiConfigCenter?.classList.remove('has-warnings');
       return;
     }
 
+    const warnings = Array.isArray(config.warnings) ? config.warnings : [];
     if (els.resolvedConfigSource) {
       els.resolvedConfigSource.textContent = config.resolvedFrom === 'workspace' ? '当前生效：项目覆盖' : '当前生效：全局配置';
     }
-    els.resolvedConfigName.textContent = config.model || config.profileName || '-';
-    const wireApi = config.wireApi ? ` / ${config.wireApi}` : '';
-    els.resolvedConfigMeta.textContent = `${config.provider || '-'}${wireApi}`;
-    els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '-';
+    els.resolvedConfigName.textContent = config.profileName || config.model || '-';
+    const wireApi = config.provider === 'openai' && config.wireApi ? ` · ${config.wireApi}` : '';
+    if (els.resolvedConfigMeta) els.resolvedConfigMeta.textContent = `${config.model || '-'}${wireApi}`;
+    if (els.resolvedConfigProvider) els.resolvedConfigProvider.textContent = providerLabel(config.provider);
+    if (els.resolvedConfigUrl) els.resolvedConfigUrl.textContent = config.effectiveBaseUrl || config.baseUrl || '-';
     if (els.resolvedConfigOrigin) {
       els.resolvedConfigOrigin.textContent = config.resolvedFrom === 'workspace' || workspaceOverride?.enabled ? '项目覆盖' : '全局配置';
     }
-    els.resolvedConfigContext.textContent = String(config.contextWindow || '-');
-    els.resolvedConfigMaxTokens.textContent = String(config.maxTokens || '-');
-    els.resolvedConfigHistoryBudget.textContent = String(config.availableHistoryTokens || '-');
+    if (els.resolvedConfigContext) els.resolvedConfigContext.textContent = formatTokenNumber(config.contextWindow);
+    if (els.resolvedConfigMaxTokens) els.resolvedConfigMaxTokens.textContent = formatTokenNumber(config.maxTokens);
+    if (els.resolvedConfigHistoryBudget) els.resolvedConfigHistoryBudget.textContent = formatTokenNumber(config.availableHistoryTokens);
+    els.aiConfigCenter?.classList.toggle('has-warnings', warnings.length > 0);
 
     if (els.resolvedWarningPills) {
-      const warnings = Array.isArray(config.warnings) ? config.warnings : [];
       const pills = [];
       if (workspaceOverride?.enabled) {
         pills.push('<span class="pill warn">项目覆盖中</span>');
@@ -3627,8 +3862,7 @@
     els.aiChangeMenu?.classList.toggle('hidden');
   });
 
-  // 监听所有 [data-ai-import-source] —— 包括 toolbar 里的 .codex / .claude 快捷按钮
-  // 和 menu 里的 .config / .manual 长尾选项
+  // 监听所有 [data-ai-import-source] —— 导入下拉菜单里的 .codex / .claude / 配置包
   document.querySelectorAll('[data-ai-import-source]').forEach((item) => {
     item.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -4317,6 +4551,8 @@
   bindAutoSave(els.uiShowEmoji);
 
   // ===== AI Profile 编辑器交互 =====
+  els.aiProfileProvider?.addEventListener('change', syncAIProfileProviderFields);
+
   els.btnAddAIProfile?.addEventListener('click', (event) => {
     event.stopPropagation();
     event.preventDefault();
@@ -4329,24 +4565,71 @@
       addLog('请填写 Profile 名称。', 'warn');
       return;
     }
+    if (!profile.model) {
+      addLog('请填写模型名称。', 'warn');
+      return;
+    }
     vscode.postMessage({ type: 'saveAIProfile', profile });
     closeAIProfileEditor();
     addLog(`已提交保存 Profile：${profile.name}`, 'info');
+  });
+
+  els.btnTestAIProfileDraft?.addEventListener('click', () => {
+    const profile = collectAIProfileForm();
+    if (!profile.name) {
+      renderDraftProfileFeedback('error', '请先填写 Profile 名称。');
+      return;
+    }
+    if (!profile.model) {
+      renderDraftProfileFeedback('error', '请先填写模型名称。');
+      return;
+    }
+    state.testingProfileId = null;
+    state.testingProfileName = null;
+    renderDraftProfileFeedback('pending', `正在测试 ${profile.name} 的连通性…`);
+    vscode.postMessage({ type: 'testAIProfile', profile });
   });
 
   els.btnCancelAIProfile?.addEventListener('click', () => {
     closeAIProfileEditor();
   });
 
+  // 点 modal 背景或按 Esc 关闭 AI Profile 弹窗
+  els.aiProfileEditor?.addEventListener('click', (event) => {
+    if (event.target === els.aiProfileEditor) closeAIProfileEditor();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && els.aiProfileEditor && !els.aiProfileEditor.classList.contains('hidden')) {
+      closeAIProfileEditor();
+    }
+  });
+
   // ===== Workspace AI Override =====
   els.btnSaveWsOverride?.addEventListener('click', () => {
+    const optionalNumber = (el) => {
+      const raw = (el?.value || '').trim();
+      if (!raw) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const overrides = {
+      provider: (els.aiWsProvider?.value || '').trim() || undefined,
+      baseUrl: (els.aiWsBaseUrl?.value || '').trim() || undefined,
+      anthropicBaseUrl: (els.aiWsAnthropicBaseUrl?.value || '').trim() || undefined,
+      apiToken: els.aiWsToken?.value || undefined,
+      model: (els.aiWsModel?.value || '').trim() || undefined,
+      wireApi: (els.aiWsWireApi?.value || '').trim() || undefined,
+      reasoningEffort: (els.aiWsReasoningEffort?.value || '').trim() || undefined,
+      contextWindow: optionalNumber(els.aiWsContextWindow),
+      maxTokens: optionalNumber(els.aiWsMaxTokens),
+    };
+    Object.keys(overrides).forEach((key) => {
+      if (overrides[key] === undefined || overrides[key] === '') delete overrides[key];
+    });
     const override = {
       enabled: !!els.aiWsOverrideEnabled?.checked,
-      baseProfileId: els.aiWsBaseProfile?.value || null,
-      providerOverride: (els.aiWsProvider?.value || '').trim() || undefined,
-      baseUrlOverride: (els.aiWsBaseUrl?.value || '').trim() || undefined,
-      apiTokenOverride: els.aiWsToken?.value || undefined,
-      modelOverride: (els.aiWsModel?.value || '').trim() || undefined,
+      baseProfileId: els.aiWsBaseProfile?.value || undefined,
+      overrides,
     };
     vscode.postMessage({ type: 'saveWorkspaceAIOverride', override });
     addLog('已保存工作区 AI 覆盖设置。', 'info');
@@ -4791,7 +5074,9 @@
       }
       case 'resolvedAIConfig': {
         state.resolvedAIConfig = msg.data || null;
+        state.workspaceAIOverride = msg.workspaceOverride || null;
         renderResolvedAIConfig(msg.data || null, msg.workspaceOverride || null);
+        renderWorkspaceAIOverride();
         break;
       }
       case 'aiImportResult': {
@@ -4990,6 +5275,8 @@
             m,
             6000,
           );
+        } else {
+          renderDraftProfileFeedback(msg.success ? 'success' : 'error', m);
         }
         state.testingProfileId = null;
         state.testingProfileName = null;
