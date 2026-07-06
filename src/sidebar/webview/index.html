@@ -775,76 +775,175 @@
       </div>
     </section>
 
-    <section class="cc-settings-section settings-group" id="group-ai-config" data-section="aiConfig" data-cluster="system" data-section-title="AI Profile" data-section-sub="endpoint、模型、token、工作区覆盖" data-active="false">
+    <section class="cc-settings-section settings-group" id="group-ai-config" data-section="aiConfig" data-cluster="system" data-section-title="AI 配置" data-section-sub="Profile、连接测试、工作区覆盖" data-active="false">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">AI 配置中心</h3>
-          <p class="cc-settings-section-sub">endpoint、模型、token、工作区覆盖</p>
+          <p class="cc-settings-section-sub">Profile、连接测试、工作区覆盖</p>
         </div>
       </header>
-      <div class="settings-group-body ds-subpage" id="ai-config-subpage" data-view="list">
-        <!-- ============ LIST 视图 ============ -->
-        <div data-view="list">
-          <!-- 当前生效配置摘要 -->
-          <section class="ds-card resolved-card" id="ai-config-center">
-            <div class="card-subtitle" id="resolved-config-source">加载中...</div>
-            <div class="resolved-main">
+      <div class="settings-group-body" id="ai-config-body">
+        <!-- 当前生效配置 hero -->
+        <section class="ds-card ai-config-hero" id="ai-config-center">
+          <div class="ai-config-hero__status">
+            <span class="ai-config-status-dot" aria-hidden="true"></span>
+            <span id="resolved-config-source">加载中...</span>
+            <span class="pill-group" id="resolved-warning-pills"></span>
+          </div>
+          <div class="ai-config-hero__main">
+            <div>
               <div class="resolved-name" id="resolved-config-name">-</div>
+              <div class="resolved-meta" id="resolved-config-meta">-</div>
             </div>
-            <div class="resolved-summary-grid">
-              <div class="stat-card">
-                <span class="stat-label">Provider</span>
-                <span class="stat-value" id="resolved-config-provider">-</span>
-              </div>
-              <div class="stat-card">
-                <span class="stat-label">来源</span>
-                <span class="stat-value" id="resolved-config-origin">-</span>
-              </div>
-              <div class="stat-card stat-card-wide">
-                <span class="stat-label">Base URL</span>
-                <span class="stat-value mono" id="resolved-config-url">-</span>
-              </div>
-            </div>
-            <div class="hidden">
-              <span id="resolved-warning-pills"></span>
-              <span id="resolved-config-meta"></span>
-              <span id="resolved-config-context"></span>
-              <span id="resolved-config-max-tokens"></span>
-              <span id="resolved-config-history-budget"></span>
-            </div>
-          </section>
-
-          <!-- 新建 / 导入：4 个并排按钮（最常用的两个 codex/claude 不再藏 dropdown）-->
-          <div class="ai-profile-toolbar">
-            <button class="ds-btn ds-btn--primary" id="btn-add-ai-profile" type="button">➕ 新建</button>
-            <button class="ds-btn" type="button" data-ai-import-source="codex">📦 .codex</button>
-            <button class="ds-btn" type="button" data-ai-import-source="claude">🤖 .claude</button>
-            <div class="custom-dropdown ai-change-dropdown">
-              <button class="ds-btn ds-btn--icon" id="btn-change-ai-config" type="button" title="更多导入选项">⋯</button>
-              <div class="dropdown-menu hidden" id="ai-change-menu">
-                <div class="dropdown-item" data-ai-import-source="package">从 config 导入</div>
-                <div class="dropdown-item" data-ai-import-source="manual">手动新增（命令面板）</div>
+            <div class="ai-config-hero__actions">
+              <button class="ds-btn ds-btn--primary" id="btn-add-ai-profile" type="button">新建 Profile</button>
+              <div class="custom-dropdown ai-import-dropdown">
+                <button class="ds-btn" type="button" id="btn-ai-import" title="从外部配置导入" aria-haspopup="true">导入 ▾</button>
+                <div class="dropdown-menu hidden" id="ai-import-menu">
+                  <div class="dropdown-item" data-ai-import-source="codex">从 .codex</div>
+                  <div class="dropdown-item" data-ai-import-source="claude">从 .claude</div>
+                  <div class="dropdown-item" data-ai-import-source="package">从配置包导入</div>
+                </div>
               </div>
             </div>
           </div>
+          <div class="resolved-summary-grid ai-config-summary-grid">
+            <div class="stat-card ai-stat-card">
+              <span class="stat-label">Provider</span>
+              <span class="stat-value" id="resolved-config-provider">-</span>
+            </div>
+            <div class="stat-card ai-stat-card">
+              <span class="stat-label">来源</span>
+              <span class="stat-value" id="resolved-config-origin">-</span>
+            </div>
+            <div class="stat-card ai-stat-card">
+              <span class="stat-label">Context</span>
+              <span class="stat-value mono" id="resolved-config-context">-</span>
+            </div>
+            <div class="stat-card ai-stat-card">
+              <span class="stat-label">Max Tokens</span>
+              <span class="stat-value mono" id="resolved-config-max-tokens">-</span>
+            </div>
+            <div class="stat-card ai-stat-card">
+              <span class="stat-label">History Budget</span>
+              <span class="stat-value mono" id="resolved-config-history-budget">-</span>
+            </div>
+            <div class="stat-card stat-card-wide ai-stat-card">
+              <span class="stat-label">Base URL</span>
+              <span class="stat-value mono" id="resolved-config-url">-</span>
+            </div>
+          </div>
+        </section>
 
-          <!-- Profile 卡片列表 -->
+          <fieldset class="ds-card ds-fieldset ai-workspace-override" id="ai-workspace-override">
+            <legend>
+              <div class="ai-ws-legend">
+                <label class="ds-toggle">
+                  <input type="checkbox" id="ai-ws-override-enabled" class="ds-toggle__input">
+                  <span>工作区覆盖</span>
+                </label>
+                <span class="ai-ws-summary muted" id="ai-ws-summary">未启用</span>
+              </div>
+            </legend>
+            <details class="ai-ws-details">
+              <summary>展开覆盖字段</summary>
+              <div class="ds-fieldset__body ai-ws-grid">
+                <div class="setting-row">
+                  <label for="ai-ws-base-profile">基础 Profile</label>
+                  <select id="ai-ws-base-profile"><option value="">使用全局激活</option></select>
+                </div>
+                <div class="setting-row">
+                  <label for="ai-ws-provider">Provider</label>
+                  <select id="ai-ws-provider">
+                    <option value="">不覆盖</option>
+                    <option value="openai">OpenAI / 兼容接口</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="claude_code_cli">Claude Code CLI</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label for="ai-ws-model">Model</label>
+                  <input type="text" id="ai-ws-model" class="ds-input--mono" placeholder="留空表示不覆盖">
+                </div>
+                <div class="setting-row">
+                  <label for="ai-ws-base-url">OpenAI Base URL</label>
+                  <input type="text" id="ai-ws-base-url" placeholder="留空表示不覆盖">
+                </div>
+                <div class="setting-row">
+                  <label for="ai-ws-anthropic-base-url">Anthropic Base URL</label>
+                  <input type="text" id="ai-ws-anthropic-base-url" placeholder="留空表示不覆盖">
+                </div>
+                <div class="setting-row">
+                  <label for="ai-ws-token">API Token</label>
+                  <input type="password" id="ai-ws-token" placeholder="留空表示不覆盖">
+                </div>
+                <details class="ai-ws-advanced">
+                  <summary>高级覆盖</summary>
+                  <div class="ai-ws-grid">
+                    <div class="setting-row">
+                      <label for="ai-ws-wire-api">Wire API</label>
+                      <select id="ai-ws-wire-api">
+                        <option value="">不覆盖</option>
+                        <option value="chat_completions">Chat Completions</option>
+                        <option value="responses">Responses</option>
+                      </select>
+                    </div>
+                    <div class="setting-row">
+                      <label for="ai-ws-context-window">Context Window</label>
+                      <input type="number" id="ai-ws-context-window" min="0" placeholder="留空表示不覆盖">
+                    </div>
+                    <div class="setting-row">
+                      <label for="ai-ws-max-tokens">Max Tokens</label>
+                      <input type="number" id="ai-ws-max-tokens" min="0" placeholder="留空表示不覆盖">
+                    </div>
+                    <div class="setting-row">
+                      <label for="ai-ws-reasoning-effort">Reasoning Effort</label>
+                      <select id="ai-ws-reasoning-effort">
+                        <option value="">不覆盖</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                      </select>
+                    </div>
+                  </div>
+                </details>
+                <div class="actions-row ai-ws-actions">
+                  <button class="ds-btn ds-btn--primary" id="btn-save-ws-override" type="button">保存覆盖</button>
+                </div>
+              </div>
+            </details>
+          </fieldset>
+
+          <div class="ai-list-header">
+            <div>
+              <div class="ai-list-title">Profiles</div>
+              <div class="muted" id="ai-profile-count">加载中...</div>
+            </div>
+          </div>
           <div id="ai-profiles-list" class="ai-profiles-list">
             <p class="muted">加载中...</p>
           </div>
-        </div>
+      </div>
+    </section>
 
-        <!-- ============ EDITOR 视图 ============ -->
-        <div data-view="editor" id="ai-profile-editor">
-          <div class="ds-subpage__breadcrumb">
-            <button class="ds-subpage__back" id="btn-cancel-ai-profile" type="button" aria-label="返回 Profile 列表">‹ 返回</button>
-            <span class="muted">AI Profile · </span>
-            <strong id="ai-profile-editor-title">新建 Profile</strong>
+    <!-- AI Profile 编辑/新建弹窗（仿 cc-switch：预设网格 + 表单）-->
+    <div id="ai-profile-editor-modal" class="modal-overlay hidden" aria-hidden="true">
+      <div class="modal-panel ai-profile-modal" role="dialog" aria-modal="true" aria-labelledby="ai-profile-editor-title">
+        <div class="modal-header">
+          <div>
+            <h3 id="ai-profile-editor-title">新建 Profile</h3>
+            <p class="section-subtitle">选一个预设快速开始，或自定义填写。选预设会自动填好连接信息，你只需补名称和 Token。</p>
           </div>
+          <button class="btn ghost small fixed" id="btn-close-ai-profile-modal" type="button">关闭</button>
+        </div>
+        <div class="modal-body">
+          <section class="modal-section" id="ai-preset-section">
+            <div class="section-label">Provider 预设</div>
+            <div class="ai-preset-grid" id="ai-preset-grid"></div>
+          </section>
 
-          <!-- Fieldset 1: 基本信息 -->
-          <fieldset class="ds-card ds-fieldset">
-            <legend>基本信息</legend>
+          <fieldset class="ds-card ds-fieldset ai-editor-card">
+            <legend>基础</legend>
             <div class="setting-row">
               <label for="ai-profile-name">名称<span class="ds-field__required" aria-hidden="true"></span></label>
               <input type="text" id="ai-profile-name" placeholder="例如：Claude Sonnet">
@@ -853,47 +952,42 @@
               <label for="ai-profile-provider">Provider<span class="ds-field__required" aria-hidden="true"></span></label>
               <select id="ai-profile-provider">
                 <option value="claude_code_cli">Claude Code CLI（本机子进程，无需 Token）</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="openai-compatible">OpenAI 兼容</option>
-                <option value="custom">Custom</option>
+                <option value="openai">OpenAI / OpenAI 兼容</option>
+                <option value="anthropic">Anthropic 原生</option>
               </select>
+            </div>
+            <div class="setting-row">
+              <label for="ai-profile-model">Model<span class="ds-field__required" aria-hidden="true"></span></label>
+              <input type="text" id="ai-profile-model" class="ds-input--mono" placeholder="claude-sonnet-4-6">
             </div>
           </fieldset>
 
-          <!-- Fieldset 2: 连接 -->
-          <fieldset class="ds-card ds-fieldset">
+          <fieldset class="ds-card ds-fieldset ai-editor-card" id="ai-profile-connection-card">
             <legend>连接</legend>
-            <div class="setting-row">
+            <div class="setting-row" data-ai-base-url-row>
               <label for="ai-profile-base-url">Base URL</label>
               <input type="text" id="ai-profile-base-url" placeholder="https://api.example.com/v1">
             </div>
-            <div class="setting-row">
-              <label for="ai-profile-anthropic-base-url">Anthropic Base URL（可选）</label>
-              <input type="text" id="ai-profile-anthropic-base-url">
+            <div class="setting-row" data-ai-anthropic-url-row>
+              <label for="ai-profile-anthropic-base-url">Anthropic Base URL</label>
+              <input type="text" id="ai-profile-anthropic-base-url" placeholder="https://api.anthropic.com">
             </div>
-            <div class="setting-row">
+            <div class="setting-row" data-ai-token-row>
               <label for="ai-profile-token">API Token</label>
               <div class="ds-input-with-toggle">
                 <input type="password" id="ai-profile-token" placeholder="sk-...">
                 <button type="button" class="ds-btn ds-btn--icon ds-input-toggle" id="btn-toggle-ai-token" title="显示 / 隐藏 Token" aria-label="切换 Token 可见性">👁</button>
               </div>
             </div>
-            <div class="setting-row">
-              <label for="ai-profile-model">Model<span class="ds-field__required" aria-hidden="true"></span></label>
-              <input type="text" id="ai-profile-model" class="ds-input--mono" placeholder="claude-3-7-sonnet-20250219">
-            </div>
           </fieldset>
 
-          <!-- Fieldset 3: 高级（默认折叠）-->
           <details class="ds-card ds-fieldset ds-fieldset--collapsible">
             <summary>高级选项（多数用户保持默认即可）</summary>
-            <div class="setting-row">
+            <div class="setting-row" id="ai-profile-wire-api-row">
               <label for="ai-profile-wire-api">Wire API</label>
               <select id="ai-profile-wire-api">
-                <option value="anthropic">anthropic</option>
-                <option value="openai">openai</option>
-                <option value="responses">responses</option>
+                <option value="chat_completions">Chat Completions</option>
+                <option value="responses">Responses</option>
               </select>
             </div>
             <div class="setting-row">
@@ -919,48 +1013,17 @@
             </div>
           </details>
 
-          <!-- 保存 + Workspace Override 卡（Step 5 进一步打磨 toggle）-->
           <div class="ai-profile-editor-actions">
             <button class="ds-btn ds-btn--primary" id="btn-save-ai-profile" type="button">💾 保存 Profile</button>
+            <button class="ds-btn" id="btn-test-ai-profile-draft" type="button">测试当前填写</button>
           </div>
-
-          <!-- Workspace Override（进编辑器子页，Step 5 加 toggle 启用态）-->
-          <fieldset class="ds-card ds-fieldset ai-workspace-override" id="ai-workspace-override">
-            <legend>
-              <label class="ds-toggle">
-                <input type="checkbox" id="ai-ws-override-enabled" class="ds-toggle__input">
-                <span>为当前工作区覆盖</span>
-              </label>
-            </legend>
-            <div class="ds-fieldset__body">
-              <div class="setting-row">
-                <label for="ai-ws-base-profile">基础 Profile</label>
-                <select id="ai-ws-base-profile"><option value="">使用全局激活</option></select>
-              </div>
-              <div class="setting-row">
-                <label for="ai-ws-provider">Provider 覆盖</label>
-                <input type="text" id="ai-ws-provider" placeholder="留空表示不覆盖">
-              </div>
-              <div class="setting-row">
-                <label for="ai-ws-base-url">Base URL 覆盖</label>
-                <input type="text" id="ai-ws-base-url">
-              </div>
-              <div class="setting-row">
-                <label for="ai-ws-token">Token 覆盖</label>
-                <input type="password" id="ai-ws-token">
-              </div>
-              <div class="setting-row">
-                <label for="ai-ws-model">Model 覆盖</label>
-                <input type="text" id="ai-ws-model" class="ds-input--mono">
-              </div>
-              <div class="actions-row">
-                <button class="ds-btn ds-btn--primary" id="btn-save-ws-override" type="button">保存覆盖</button>
-              </div>
-            </div>
-          </fieldset>
+          <div class="ds-feedback hidden" id="ai-profile-draft-feedback" role="status" aria-live="polite">
+            <span class="ds-feedback__icon"></span>
+            <div class="ds-feedback__body"></div>
+          </div>
         </div>
       </div>
-    </section>
+    </div>
 
     <section class="cc-settings-section settings-group" id="group-data" data-section="data" data-cluster="manage" data-section-title="数据" data-section-sub="清理错题 / 诊断历史、导出导入学习数据" data-active="false">
       <header class="cc-settings-section-header">
