@@ -555,6 +555,71 @@ export class CourseManager {
     });
   }
 
+  // ===== Topic CRUD（整章增删改/重排）=====
+  // 与 lesson 一致：现有 topic.code 合规就保留 → 重命名/重排不改 code →
+  // 目录路径不变，无需文件迁移。只有 addTopic 新建的 topic 由 normalize 生成新 code。
+
+  /** 重命名 topic 标题（code 保留，目录不动）。 */
+  async renameTopic(subject: Subject, topicId: string, newTitle: string): Promise<void> {
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const topic = outline.topics.find(t => t.id === topicId);
+      if (!topic) throw new Error(`找不到 topic: ${topicId}`);
+      const trimmed = newTitle.trim();
+      if (!trimmed) throw new Error('topic 标题不能为空');
+      topic.title = trimmed;
+      await this.saveCourseOutline(subject, outline);
+    });
+  }
+
+  /** 在末尾追加一个 topic。code 由 normalize 自动生成。返回新 topic。 */
+  async addTopic(subject: Subject, title: string): Promise<TopicOutline> {
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const draft: TopicOutline = {
+        id: '',  // normalizeTopic 会重新算 topicCode 当 id
+        title: title.trim() || '新主题',
+        lessons: [],
+      };
+      outline.topics.push(draft);
+      await this.saveCourseOutline(subject, outline);
+      const newOutline = await this.getCourseOutline(subject);
+      const added = newOutline?.topics[newOutline.topics.length - 1];
+      if (!added) throw new Error('topic 创建失败');
+      return added;
+    });
+  }
+
+  /** 删除 topic + 整个 topic 目录（讲义 / 知识点 / 练习 / 批改）。best-effort 删除。 */
+  async deleteTopic(subject: Subject, topicId: string): Promise<void> {
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const idx = outline.topics.findIndex(t => t.id === topicId);
+      if (idx < 0) throw new Error(`找不到 topic: ${topicId}`);
+      outline.topics.splice(idx, 1);
+      await this.saveCourseOutline(subject, outline);
+      // 删整目录（讲义 / .keypoints.json / 练习 / 批改都在其下）
+      await fs.rm(this.paths.courseTopicDir(subject, topicId), { recursive: true, force: true }).catch(() => { /* 不存在忽略 */ });
+    });
+  }
+
+  /** 上下移动 topic 顺序（dir: -1 上移, +1 下移）。code 保留 → 不动文件。 */
+  async reorderTopic(subject: Subject, topicId: string, dir: -1 | 1): Promise<void> {
+    return this._withOutlineLock(subject, async () => {
+      const outline = await this.getCourseOutline(subject);
+      if (!outline) throw new Error('找不到课程大纲');
+      const idx = outline.topics.findIndex(t => t.id === topicId);
+      if (idx < 0) throw new Error(`找不到 topic: ${topicId}`);
+      const target = idx + dir;
+      if (target < 0 || target >= outline.topics.length) return;
+      [outline.topics[idx], outline.topics[target]] = [outline.topics[target], outline.topics[idx]];
+      await this.saveCourseOutline(subject, outline);
+    });
+  }
+
   getExercisePath(subject: Subject, topicId: string, sessionId: string): string {
     return this.paths.courseExercisePromptPath(subject, topicId, sessionId);
   }

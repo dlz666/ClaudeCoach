@@ -106,8 +106,12 @@ async function splitPdfToPngs(
 
 /**
  * 调 vision API 把单张 PNG 转 markdown。
- * 返回 markdown 字符串（成功）或 null（失败）。
+ * 返回 markdown 字符串（成功）或 null（失败 — 已重试最多 3 次）。
+ *
+ * 单页重试：原版网络抖动 / 限流一次就 null，导致该页永久失败只能整本重跑。
+ * 现在每页最多重试 MAX_RETRIES 次，间隔指数退避。
  */
+const VISION_MAX_RETRIES = 3;
 async function callVisionForPage(
   config: VisionConfig,
   pngPath: string,
@@ -133,21 +137,33 @@ async function callVisionForPage(
     max_tokens: config.maxTokens ?? 6000,
   });
 
-  try {
-    const respText = await postJson(url, config.apiToken, body, 180_000);
-    const parsed = JSON.parse(respText);
-    if (parsed.error || parsed.code) {
-      const msg = parsed.error?.message || parsed.message || `code=${parsed.code}`;
-      throw new Error(`vision API 错误：${msg}`);
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= VISION_MAX_RETRIES; attempt++) {
+    try {
+      const respText = await postJson(url, config.apiToken, body, 180_000);
+      const parsed = JSON.parse(respText);
+      if (parsed.error || parsed.code) {
+        const msg = parsed.error?.message || parsed.message || `code=${parsed.code}`;
+        throw new Error(`vision API 错误：${msg}`);
+      }
+      const content = parsed?.choices?.[0]?.message?.content;
+      if (typeof content === 'string' && content.trim()) {
+        // 部分模型会用 ```markdown 包起来，剥离
+        return stripMarkdownFence(content);
+      }
+      // 空内容也当一次失败，进入重试
+      lastErr = new Error('vision 返回空内容');
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[VisionExtractor] page ${path.basename(pngPath)} attempt ${attempt}/${VISION_MAX_RETRIES} failed:`, err);
     }
-    const content = parsed?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || !content.trim()) return null;
-    // 部分模型会用 ```markdown 包起来，剥离
-    return stripMarkdownFence(content);
-  } catch (err) {
-    console.warn('[VisionExtractor] page failed:', err);
-    return null;
+    if (attempt < VISION_MAX_RETRIES) {
+      // 指数退避：1s / 2s / 4s
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+    }
   }
+  console.warn(`[VisionExtractor] page ${path.basename(pngPath)} gave up after ${VISION_MAX_RETRIES} attempts:`, lastErr);
+  return null;
 }
 
 /** 主入口：PDF → markdown */

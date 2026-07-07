@@ -9,12 +9,8 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
     exerciseMix: { easy: 30, medium: 50, hard: 20 },
   },
   pace: {
-    dailyGoalMinutes: 60,
     exercisesPerSession: 5,
     speed: 'medium',
-    reviewEveryNLessons: 3,
-    restDays: [],
-    studyTimeSlots: ['morning', 'afternoon', 'evening'],
   },
   language: {
     content: 'zh',
@@ -31,9 +27,6 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
     includeHistory: false,
   },
   retrieval: {
-    defaultGrounding: true,
-    strictness: 'inclusive',
-    citeSources: true,
     maxExcerpts: 4,
     embedding: {
       // 默认关闭，需要用户在设置页主动启用 + 填 baseUrl/token；首次启用时弹一次性
@@ -66,41 +59,17 @@ const DEFAULT_PREFERENCES: LearningPreferences = {
     theme: 'auto',
   },
   coach: {
-    active: true,
-    loops: {
-      dailyBrief: true,
-      idle: true,
-      sr: true,
-      metacog: true,
-      drift: true,
-    },
-    notifications: {
-      toastLevel: 'high-urgency-only',
-      quietHoursStart: '22:00',
-      quietHoursEnd: '08:00',
-    },
-    throttle: {
-      maxToastsPerHour: 1,
-      maxBannersPerHour: 4,
-    },
-    doNotDisturbUntil: null,
-    idleThresholdMinutes: 8,
-    sr: {
-      variantStrategy: 'ai-variant',
-    },
-    dailyBrief: {
-      cacheStrategy: 'per-day',
-    },
     lecture: {
       viewerMode: 'lecture-webview',
       applyMode: 'preview-confirm',
-      syncSourceEditor: false,
       highlightChangesMs: 5000,
     },
   },
 };
 
-/** 深合并：用户保存的 prefs 缺字段时用默认值补齐。 */
+/** 深合并：用户保存的 prefs 缺字段时用默认值补齐。
+ *  旧版 prefs 里残留的废弃字段（studyTimeSlots / restDays / defaultGrounding /
+ *  strictness / citeSources / coach.loops / coach.notifications 等）会被静默丢弃。 */
 function mergePreferences(stored: Partial<LearningPreferences> | null | undefined): LearningPreferences {
   if (!stored) {
     return JSON.parse(JSON.stringify(DEFAULT_PREFERENCES)) as LearningPreferences;
@@ -112,8 +81,8 @@ function mergePreferences(stored: Partial<LearningPreferences> | null | undefine
       exerciseMix: stored.difficulty?.exerciseMix ?? DEFAULT_PREFERENCES.difficulty.exerciseMix,
     },
     pace: {
-      ...DEFAULT_PREFERENCES.pace,
-      ...(stored.pace ?? {}),
+      exercisesPerSession: stored.pace?.exercisesPerSession ?? DEFAULT_PREFERENCES.pace.exercisesPerSession,
+      speed: stored.pace?.speed ?? DEFAULT_PREFERENCES.pace.speed,
     },
     language: {
       ...DEFAULT_PREFERENCES.language,
@@ -130,6 +99,9 @@ function mergePreferences(stored: Partial<LearningPreferences> | null | undefine
     retrieval: {
       ...DEFAULT_PREFERENCES.retrieval!,
       ...(stored.retrieval ?? {}),
+      // 只搬 maxExcerpts / embedding / vision，旧版 defaultGrounding / strictness /
+      // citeSources 直接忽略
+      maxExcerpts: stored.retrieval?.maxExcerpts ?? DEFAULT_PREFERENCES.retrieval!.maxExcerpts,
       embedding: {
         ...DEFAULT_PREFERENCES.retrieval!.embedding!,
         ...(stored.retrieval?.embedding ?? {}),
@@ -144,28 +116,6 @@ function mergePreferences(stored: Partial<LearningPreferences> | null | undefine
       ...(stored.ui ?? {}),
     },
     coach: {
-      ...DEFAULT_PREFERENCES.coach!,
-      ...(stored.coach ?? {}),
-      loops: {
-        ...DEFAULT_PREFERENCES.coach!.loops!,
-        ...(stored.coach?.loops ?? {}),
-      },
-      notifications: {
-        ...DEFAULT_PREFERENCES.coach!.notifications!,
-        ...(stored.coach?.notifications ?? {}),
-      },
-      throttle: {
-        ...DEFAULT_PREFERENCES.coach!.throttle!,
-        ...(stored.coach?.throttle ?? {}),
-      },
-      sr: {
-        ...DEFAULT_PREFERENCES.coach!.sr!,
-        ...(stored.coach?.sr ?? {}),
-      },
-      dailyBrief: {
-        ...DEFAULT_PREFERENCES.coach!.dailyBrief!,
-        ...(stored.coach?.dailyBrief ?? {}),
-      },
       lecture: {
         ...DEFAULT_PREFERENCES.coach!.lecture!,
         ...(stored.coach?.lecture ?? {}),

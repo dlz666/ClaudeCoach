@@ -67,7 +67,6 @@ function preferencesContext(prefs: LearningPreferences | null): string {
 - 练习难度分布：简单 ${prefs.difficulty.exerciseMix.easy}% / 中等 ${prefs.difficulty.exerciseMix.medium}% / 困难 ${prefs.difficulty.exerciseMix.hard}%
 - 学习速度：${speedLabel[prefs.pace.speed] ?? prefs.pace.speed}
 - 每次练习数量：${prefs.pace.exercisesPerSession} 题
-- 每日学习目标：${prefs.pace.dailyGoalMinutes ?? 60} 分钟
 - 内容语言：${langLabel[prefs.language.content] ?? prefs.language.content}
 - 练习语言：${langLabel[prefs.language.exercises] ?? prefs.language.exercises}
 - 代码注释语言：${langLabel[prefs.language.codeComments] ?? prefs.language.codeComments}
@@ -345,9 +344,13 @@ function exercisePersonalizationContext(ctx: PromptContext, difficulty: number, 
     lines.push(`请遵循学生的学习偏好：整体难度 ${ctx.preferences.difficulty.global}，节奏 ${ctx.preferences.pace.speed}，单次练习数量偏好 ${ctx.preferences.pace.exercisesPerSession} 题。`);
     if (ctx.preferences.pace.speed === 'slow') {
       lines.push('由于学生偏好慢速推进，请让至少一半题目更强调分步思考、概念辨析或中间步骤。');
+    } else if (ctx.preferences.pace.speed === 'fast') {
+      lines.push('由于学生偏好快速推进，请减少分步铺垫、直接进入核心问题，可适当增加综合性题量。');
     }
     if (ctx.preferences.difficulty.global === 'challenge' || difficulty >= 4) {
       lines.push('请至少包含 1 道更强调迁移、综合或开放性思考的题目。');
+    } else if (ctx.preferences.difficulty.global === 'intermediate') {
+      lines.push('请在标准题量基础上，安排至少 1 道需要跨节知识迁移的中等偏上题目。');
     }
     if (ctx.preferences.difficulty.global === 'beginner' || ctx.preferences.difficulty.global === 'basic') {
       lines.push('请避免题面过度跳步，基础题要清楚覆盖定义、判定条件和基本方法。');
@@ -1105,7 +1108,7 @@ const INTERACTIVE_WIDGET_RULES = [
   '2. 不要 `fetch` / `XMLHttpRequest` / `WebSocket` —— 同上',
   '3. SVG 必须显式 `<svg width="600" height="300" viewBox="0 0 600 300">` 三个属性都给齐，否则部分浏览器渲染 0×0 不可见',
   '4. **模板字符串插值必须紧贴**：写 `${var}` 不是 `$ {var}`。中间空格会让插值失效（变成字面量字符串），所有 querySelector / data-key 都对不上号 → 看起来"渲染成功但内容空"',
-  '5. JS 里如果有字符串包含 `</script>`，**一定写成 `<\\/script>`**，否则会提前关 script 标签把后面内容当成 HTML',
+  '5. JS 里如果有字符串包含 `</script>`，**一定写成 `<\\/script>`**，否则会提前关 script 标签把后面内容当成 HTML；但真正关闭脚本标签时必须写 `</script>`，不要写成 `<\\/script>`',
   '6. CSS 里如果字符串包含 `</style>`，写成 `<\\/style>`',
   '7. **颜色 CSS 变量 + 必须保证对比度**：可用 var(--bg) var(--fg) var(--accent) var(--accent-fg) var(--border) var(--input-bg) var(--input-fg) var(--muted) var(--panel-bg)。**但绝对不能 SVG 节点 fill 用容器背景同色变量**：',
   '   - ❌ `.graph-shell { background: var(--input-bg) }` + `.node circle { fill: var(--input-bg) }` → 节点融进背景看起来"图是空的"（用户最常踩这个坑）',

@@ -361,6 +361,14 @@ export class MaterialManager {
   private async processEntry(entry: MaterialEntry): Promise<MaterialEntry> {
     let current = await this._refreshEntry(entry);
 
+    // 提取阶段进度广播：让前端能看到"在跑提取"，而不是只看到长时间 pending
+    this.vectorizeProgressEmitter.fire({
+      kind: 'start',
+      materialId: current.id,
+      fileName: current.fileName,
+      message: '开始提取文本',
+    });
+
     try {
       current = await this._restoreIndexedStateFromSummary(current);
       if (current.status === 'indexed' && await fileExists(current.summaryPath)) {
@@ -370,6 +378,14 @@ export class MaterialManager {
       const text = await this._ensureTextForIndexing(current);
       current = await this._setEntryState(current, 'extracted', {
         lastError: undefined,
+      });
+      this.vectorizeProgressEmitter.fire({
+        kind: 'chunk-batch',
+        materialId: current.id,
+        fileName: current.fileName,
+        doneChunks: 1,
+        totalChunks: 2,
+        message: '文本已提取，正在解析章节',
       });
 
       const summary = await this.parser.parse(text, current.subject);
@@ -385,6 +401,12 @@ export class MaterialManager {
       const message = this._formatProcessingError(error);
       current = await this._setEntryState(current, 'failed', {
         lastError: message,
+      });
+      this.vectorizeProgressEmitter.fire({
+        kind: 'error',
+        materialId: current.id,
+        fileName: current.fileName,
+        message,
       });
       throw new Error(`资料索引失败：${current.fileName} - ${message}`);
     }
@@ -817,8 +839,21 @@ export class MaterialManager {
       return entry;
     }
 
+    // 已经是 indexed 且无错误 → 保持。
     if (entry.status === 'indexed' && !entry.lastError) {
       return entry;
+    }
+
+    // 重试短路保护：原来只要 summary.json 存在就把 status 直接置回 indexed，
+    // 跳过实际重提取。这导致 Vision 提取中途失败（summary 已写、但 .md 含失败占位）
+    // 的资料永远重试无效。改为：
+    //   - summary 存在但 lastError 含"提取"/"vision"/"timeout" 时，**不**短路，
+    //     让上层 processEntry 重跑提取；
+    //   - 否则（曾经成功过，只是状态被改回 pending）才短路复用 summary。
+    const err = String(entry.lastError || '').toLowerCase();
+    const looksLikeExtractFailure = /提取|vision|timeout|ocr|pdf|未能在|未能从|network|econn|fetch/.test(err);
+    if (looksLikeExtractFailure) {
+      return entry; // 不复用 summary，强制重提取
     }
 
     return this._setEntryState(entry, 'indexed', {
