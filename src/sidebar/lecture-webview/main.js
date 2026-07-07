@@ -769,7 +769,8 @@
    * 块，可接受。`<\/script` 在 JS 里完全合法等价于 `</script`。
    */
   function patchScriptStrings(html) {
-    return html.replace(/<script\b[^>]*>([\s\S]*)<\/script\s*>/gi, (match, body) => {
+    const normalized = String(html || '').replace(/<\\\/script\s*>/gi, '</script>');
+    return normalized.replace(/<script\b[^>]*>([\s\S]*)<\/script\s*>/gi, (match, body) => {
       const fixed = body.replace(/<\/(script\b)/gi, '<\\/$1');
       return match.replace(body, fixed);
     });
@@ -1707,7 +1708,7 @@ canvas { display: block; max-width: 100%; }
       '3. **不要 fetch / XMLHttpRequest / WebSocket** — 同上',
       '4. SVG 必须 `<svg width="600" height="300" viewBox="0 0 600 300">` 三件套都给齐，否则可能渲染成 0×0',
       '5. **模板字符串插值必须紧贴**：写 `${var}` 不是 `$ {var}` —— 中间空格会让插值失效，整个变字面量字符串，querySelector 全找不到节点',
-      '6. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；CSS 里的 `</style>` 同理写 `<\\/style>`',
+      '6. JS 字符串里如果有 `</script>`，**必须**写成 `<\\/script>`；但真正关闭脚本标签时必须写 `</script>`，不要把结束标签写成 `<\\/script>`；CSS 字符串里的 `</style>` 同理写 `<\\/style>`',
       '7. **颜色 CSS 变量 + 必须保证对比**：可用 `var(--bg)` `var(--fg)` `var(--accent)` `var(--accent-fg)` `var(--border)` `var(--input-bg)` `var(--input-fg)` `var(--muted)` `var(--panel-bg)`，**但绝对不能 SVG 节点 fill 用容器同色变量**：',
       '   - ❌ `.graph-shell { background: var(--input-bg) }` + `.node circle { fill: var(--input-bg) }` → 节点融进背景看起来空',
       '   - ✅ SVG 节点 fill 用 `var(--accent)` / `var(--fg)`（前景色）；stroke 用 `var(--border)` / `var(--accent-fg)`',
@@ -2029,6 +2030,14 @@ canvas { display: block; max-width: 100%; }
     }
     bubble.style.top = `${top}px`;
     bubble.style.left = `${left}px`;
+    // max-height 必须按"气泡实际起始 top"动态算，而不是 CSS 里写死的 calc(100vh - 32px)。
+    // 气泡锚在 chip 下方（top ≈ 60px+），若 max-height 仍按"贴顶 16px"算，气泡底边会
+    // 超出视口约 (top-16)px → 底部的「关闭/采纳/丢弃」按钮被视口截断、滚到底也够不着
+    // （用户反馈：要缩放才点得到）。这里把上限收到「视口底部上方 16px」，配合 CSS 的
+    // overflow-y:auto，内容超长时气泡内滚，按钮始终在视口内可达。
+    const bottomMargin = 16;
+    const maxH = Math.max(180, window.innerHeight - top - bottomMargin);
+    bubble.style.maxHeight = `${maxH}px`;
   }
 
   // ===== streaming 状态：每个 turn 一个 buffer，50ms 节流 re-render markdown =====

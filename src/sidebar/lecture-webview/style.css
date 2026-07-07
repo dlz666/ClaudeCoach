@@ -650,6 +650,18 @@ div.cc-suggest {
   margin-top: 10px;
 }
 
+/* 气泡的操作按钮（关闭/采纳/丢弃）做成粘性底栏：长答案时整个气泡内滚，按钮始终钉在
+   气泡可视底部，不用滚到底才够得着（配合 positionBubble 的动态 max-height，治"按钮被
+   视口截断、要缩放才点得到"）。不透明底色遮住滚到下面的内容，顶部细线与正文分隔。 */
+.bubble-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+  background: var(--surface-2);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
 .btn-primary,
 .btn-ghost {
   border: 1px solid var(--border);

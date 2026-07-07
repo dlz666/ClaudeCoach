@@ -529,14 +529,9 @@ export type LessonDetailLevel = 'concise' | 'standard' | 'detailed';
 export type FeedbackTone = 'direct' | 'encouraging' | 'socratic' | 'push' | 'playful';
 export type ExplanationStyle = 'example-first' | 'formula-first' | 'intuition-first' | 'rigor-first';
 export type MathSymbolStyle = 'english-standard' | 'chinese';
-export type RetrievalStrictness = 'strict' | 'inclusive';
 export type LectureViewerMode = 'lecture-webview' | 'native-preview' | 'split-both';
 export type LectureApplyMode = 'auto-apply' | 'preview-confirm';
-export type ToastLevel = 'always' | 'high-urgency-only' | 'never';
-export type SRVariantStrategy = 'ai-variant' | 'repeat-original' | 'ask-each-time';
-export type DailyBriefCacheStrategy = 'per-day' | 'always-fresh';
 export type DefaultTab = 'learn' | 'chat' | 'materials' | 'settings' | 'logs';
-export type StudyTimeSlot = 'morning' | 'afternoon' | 'evening';
 
 export interface LearningPreferences {
   difficulty: {
@@ -545,14 +540,8 @@ export interface LearningPreferences {
     exerciseMix: { easy: number; medium: number; hard: number };
   };
   pace: {
-    dailyGoalMinutes: number;
     exercisesPerSession: number;
     speed: 'slow' | 'medium' | 'fast';
-    reviewEveryNLessons: number;
-    /** 每周第几天为休息日（0=周日 ... 6=周六）。drift 检测时不计入。 */
-    restDays?: number[];
-    /** 学习时段偏好。Coach 在勾选的时段才主动提醒。 */
-    studyTimeSlots?: StudyTimeSlot[];
   };
   language: {
     content: 'zh' | 'en' | 'mixed';
@@ -572,9 +561,6 @@ export interface LearningPreferences {
   };
   /** 资料检索行为。 */
   retrieval?: {
-    defaultGrounding?: boolean;
-    strictness?: RetrievalStrictness;
-    citeSources?: boolean;
     maxExcerpts?: number;
     /**
      * 向量检索 (Hybrid RAG) 配置。embedding 模型可以与 chat 模型完全独立的
@@ -619,39 +605,14 @@ export interface LearningPreferences {
     defaultTab?: DefaultTab;
     expandCourseTree?: boolean;
     showEmoji?: boolean;
-    theme?: 'auto' | 'high-contrast';
+    theme?: 'auto' | 'light' | 'dark';
   };
-  /** Coach 主动行为。 */
+  /** 讲义阅读器行为。其余 Coach 主动循环（dailyBrief / idle / sr / drift 等）
+   * 仍在设计、未落地，暂不暴露到 prefs。 */
   coach?: {
-    active?: boolean;
-    loops?: {
-      dailyBrief?: boolean;
-      idle?: boolean;
-      sr?: boolean;
-      metacog?: boolean;
-      drift?: boolean;
-    };
-    notifications?: {
-      toastLevel?: ToastLevel;
-      quietHoursStart?: string;
-      quietHoursEnd?: string;
-    };
-    throttle?: {
-      maxToastsPerHour?: number;
-      maxBannersPerHour?: number;
-    };
-    doNotDisturbUntil?: string | null;
-    idleThresholdMinutes?: number;
-    sr?: {
-      variantStrategy?: SRVariantStrategy;
-    };
-    dailyBrief?: {
-      cacheStrategy?: DailyBriefCacheStrategy;
-    };
     lecture?: {
       viewerMode?: LectureViewerMode;
       applyMode?: LectureApplyMode;
-      syncSourceEditor?: boolean;
       highlightChangesMs?: number;
     };
   };
@@ -1131,13 +1092,19 @@ export type SidebarCommand =
     }
   /** 基于上一份预览 + 用户的自然语言修改建议，重新生成预览。 */
   | { type: 'refineCoursePreview'; previewId: string; instruction: string }
-  /** 把缓存的预览写盘成正式课程大纲。 */
-  | { type: 'applyCoursePreview'; previewId: string }
+  /** 把缓存的预览写盘成正式课程大纲。outline 可选：前端可在本地编辑预览
+   * （重命名 / 删除 / 增删 / 重排），编辑后把整份 outline 一起带过来覆盖后端缓存。 */
+  | { type: 'applyCoursePreview'; previewId: string; outline?: CourseOutline }
   /** 丢弃缓存的预览（用户关掉 UI / 取消生成）。 */
   | { type: 'discardCoursePreview'; previewId: string }
   | { type: 'rebuildCourseOutline'; subject: Subject; materialId?: string }
   | { type: 'previewRebuildCourseOutline'; request: OutlineRebuildPreviewRequest }
   | { type: 'applyRebuildCourseOutline'; request: OutlineRebuildApplyRequest }
+  // ===== Topic CRUD（整章增删改/重排）=====
+  | { type: 'renameTopic'; subject: Subject; topicId: string; newTitle: string }
+  | { type: 'addTopic'; subject: Subject; title: string }
+  | { type: 'deleteTopic'; subject: Subject; topicId: string; topicTitle?: string }
+  | { type: 'reorderTopic'; subject: Subject; topicId: string; dir: -1 | 1 }
   | { type: 'generateLesson'; topicId: string; lessonId: string }
   | { type: 'generateExercises'; lessonId: string; count: number }
   | { type: 'openOrGenerateLesson'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; difficulty: number }
@@ -1224,7 +1191,9 @@ export type SidebarCommand =
   | { type: 'clearProjectFiles'; projectId: string }
   /** 把一个**从提案落地而来**的真项目完全退回提案阶段：删项目目录 + 删 meta +
    * 清掉 proposal.realizedAs，让提案卡片重新出现可供再次"落地为项目"。 */
-  | { type: 'revertProjectToProposal'; projectId: string };
+  | { type: 'revertProjectToProposal'; projectId: string }
+  /** 手动跑项目的 testCommand，解析 pass/fail 并回传结果（可选自动回写进度）。 */
+  | { type: 'runProjectTest'; projectId: string };
 
 export type SidebarResponse =
   | { type: 'courses'; data: CourseOutline[] }
@@ -1330,6 +1299,10 @@ export type SidebarResponse =
   | { type: 'projectOpened'; projectId: string; projectDir: string }
   | { type: 'projectProgressUpdated'; meta: ProjectMeta }
   | { type: 'projectDeleted'; projectId: string }
+  /** 项目生成流式输出：每个 token chunk 到达时推送，让前端显示"AI 正在写什么"。 */
+  | { type: 'projectStreamDelta'; chunk: string }
+  /** 项目测试结果：runProjectTest 的响应。 */
+  | { type: 'projectTestResult'; projectId: string; success: boolean; passed: number; failed: number; total: number; output: string; durationMs: number }
   | { type: 'error'; message: string }
   | { type: 'loading'; active: boolean; task?: string }
   | { type: 'log'; message: string; level: 'info' | 'warn' | 'error' };

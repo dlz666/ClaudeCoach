@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { exec } from 'child_process';
 import { ContentGenerator } from '../courses/contentGenerator';
 import { Grader } from '../courses/grader';
 import { CourseManager } from '../courses/courseManager';
@@ -44,6 +45,33 @@ import { chatPrompt, reviseMarkdownPatchPrompt, reviseMarkdownPrompt } from '../
 import { buildCourseSummaryMd, openMarkdownPreview, reprocessMarkdown, writeMarkdown, writeMarkdownAndPreview } from '../utils/markdown';
 import { fileExists, ensureDir } from '../utils/fileSystem';
 import { getDataDirectory } from '../config';
+
+/** 从测试 runner 输出里解析 pass/fail/total 计数。支持 jest/vitest/pytest/go test 通用格式。 */
+function parseTestOutput(output: string): { passed: number; failed: number; total: number } {
+  // jest / vitest: "Tests: 5 passed, 2 failed, 7 total" 或 "Tests  5 passed | 2 failed"
+  const jestMatch = output.match(/Tests[:\s]+(\d+)\s*passed[,|\s]*(\d+)?\s*(?:failed)?[,|\s]*(\d+)?\s*(?:total)?/i);
+  if (jestMatch) {
+    const passed = parseInt(jestMatch[1], 10) || 0;
+    const failed = parseInt(jestMatch[2] || '0', 10) || 0;
+    const total = parseInt(jestMatch[3] || '0', 10) || (passed + failed);
+    return { passed, failed, total: total || (passed + failed) };
+  }
+  // pytest: "5 passed, 2 failed" 或 "5 passed"
+  const pytestMatch = output.match(/(\d+)\s*passed(?:[,\s]+(\d+)\s*failed)?/i);
+  if (pytestMatch) {
+    const passed = parseInt(pytestMatch[1], 10) || 0;
+    const failed = parseInt(pytestMatch[2] || '0', 10) || 0;
+    return { passed, failed, total: passed + failed };
+  }
+  // go test: "ok  pkg  0.5s" (all pass) 或 "--- FAIL: TestName"
+  const goFail = (output.match(/--- FAIL:/g) || []).length;
+  const goPass = (output.match(/--- PASS:/g) || []).length;
+  if (goPass + goFail > 0) {
+    return { passed: goPass, failed: goFail, total: goPass + goFail };
+  }
+  // 兜底：无法解析
+  return { passed: 0, failed: 0, total: 0 };
+}
 
 interface ChatEditTarget {
   subject: Subject;
@@ -161,6 +189,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           type: 'log',
           message: `[向量化失败] ${event.fileName ?? ''}：${event.message ?? ''}`,
           level: 'warn',
+        });
+      } else if (event.kind === 'chunk-batch') {
+        // 提取/向量化的细粒度进度（X/Y 页）→ 单独一条 info，让用户看到"在跑"
+        const done = event.doneChunks ?? 0;
+        const total = event.totalChunks ?? 0;
+        const tail = total > 0 ? ` ${done}/${total}` : '';
+        this._post({
+          type: 'log',
+          message: `${event.fileName ?? ''} ${event.message ?? '处理中'}${tail}`,
+          level: 'info',
+        });
+      } else if (event.kind === 'start') {
+        this._post({
+          type: 'log',
+          message: `${event.fileName ?? ''} ${event.message ?? '开始处理'}`,
+          level: 'info',
         });
       }
     });
@@ -1520,6 +1564,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'error', message: '预览已过期或丢失，请重新生成。' });
             break;
           }
+          // 前端可在预览面板内联编辑（重命名 / 删除 / 增删 / 重排）；若带了 outline
+          // 就用前端的版本覆盖缓存里的 AI 原版，否则用缓存里的。
+          if (msg.outline) {
+            entry.outline = msg.outline;
+          }
           // 真正写盘
           const outlineToSave: CourseOutline = {
             ...entry.outline,
@@ -1580,7 +1629,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 prompt: promptText,
                 techStackHint: techStackHint || undefined,
                 linkedCourse: { subject: msg.subject },
-              }, { profile, preferences });
+              }, { profile, preferences }, (chunk) => this._post({ type: 'projectStreamDelta', chunk }));
               if (result.ok && result.meta && result.spec) {
                 // mark proposal as realized
                 proposal.realizedAs = result.meta.id;
@@ -1709,6 +1758,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 limit: 4,
               }),
             ]);
+            // 难度 per-subject merge：用户在设置里为该课程单独覆盖过难度时，
+            // 把 global 替换成 per-subject 值，AI 才能真正看到课程级难度。
+            this._applyPerSubjectDifficulty(prefs, msg.subject);
             const lessonMaxExcerpts = await this._resolveMaxExcerpts('normal');
             // 方案 A + C 协同：先读 keypoints（如果用户预先生成过）→ 把 keypoint titles
             // 也加进 RAG query，让教材检索更精准（不只检索 lesson 标题）→
@@ -1793,6 +1845,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               }),
               this.adaptiveEngine.getTriggerState(msg.subject),
             ]);
+            // 难度 per-subject merge（同 generateLesson）
+            this._applyPerSubjectDifficulty(prefs, msg.subject);
             const exerciseMaxExcerpts = await this._resolveMaxExcerpts('normal');
             const grounding = await this._buildSubjectGrounding(
               msg.subject,
@@ -1883,6 +1937,50 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             await this._refreshCourses();
           } catch (err) {
             this._post({ type: 'log', message: `重排序失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        // ===== Topic 编辑（整章增删改/重排）=====
+        case 'renameTopic': {
+          try {
+            await this.courseManager.renameTopic(msg.subject, msg.topicId, String(msg.newTitle || ''));
+            await this._refreshCourses();
+          } catch (err) {
+            this._post({ type: 'log', message: `重命名主题失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'addTopic': {
+          try {
+            const added = await this.courseManager.addTopic(msg.subject, String(msg.title || '新主题'));
+            await this._refreshCourses();
+            this._post({ type: 'log', message: `已添加主题：${added.title}`, level: 'info' });
+          } catch (err) {
+            this._post({ type: 'log', message: `添加主题失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'deleteTopic': {
+          try {
+            await this.courseManager.deleteTopic(msg.subject, msg.topicId);
+            await this._refreshCourses();
+            this._post({ type: 'log', message: `已删除主题：${msg.topicTitle || msg.topicId}`, level: 'info' });
+          } catch (err) {
+            this._post({ type: 'log', message: `删除主题失败：${(err as Error).message}`, level: 'error' });
+          }
+          break;
+        }
+
+        case 'reorderTopic': {
+          try {
+            const dir = msg.dir === -1 ? -1 : 1;
+            await this.courseManager.reorderTopic(msg.subject, msg.topicId, dir as -1 | 1);
+            await this._refreshCourses();
+          } catch (err) {
+            this._post({ type: 'log', message: `主题重排序失败：${(err as Error).message}`, level: 'error' });
           }
           break;
         }
@@ -2108,16 +2206,36 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             this._post({ type: 'log', message: '缺少要重试的资料 ID', level: 'warn' });
             break;
           }
+          // 重试前清掉 lastError 的"提取失败"短路标记，让 _restoreIndexedStateFromSummary
+          // 不再复用旧 summary，强制走完整提取流水线（修过 Vision 单页重试 + 退避后，
+          // 原本失败的页这次有机会成功）
+          try {
+            const before = await this.materialManager.getMaterialById(materialId);
+            if (before && before.lastError) {
+              this._post({
+                type: 'log',
+                message: `重试 ${before.fileName}：清掉旧的「${before.lastError}」标记，强制重新提取`,
+                level: 'info',
+              });
+            }
+          } catch { /* 忽略，下面 reconcile 还会处理 */ }
           this._startTask('重试资料索引', async () => {
             const entries = await this.materialManager.reconcileMaterials(undefined, { materialId });
             const refreshed = entries.find((entry) => entry.id === materialId);
-            this._post({
-              type: 'log',
-              message: refreshed
-                ? `资料已重新处理：${refreshed.fileName}（状态 ${refreshed.status}）`
-                : `资料 ${materialId} 未找到或处理失败`,
-              level: refreshed?.status === 'failed' ? 'warn' : 'info',
-            });
+            if (refreshed?.status === 'failed') {
+              this._post({
+                type: 'error',
+                message: `资料「${refreshed.fileName}」重试仍失败：${refreshed.lastError || '未知原因'}`,
+              });
+            } else {
+              this._post({
+                type: 'log',
+                message: refreshed
+                  ? `资料已重新处理：${refreshed.fileName}（状态 ${refreshed.status}）`
+                  : `资料 ${materialId} 未找到或处理失败`,
+                level: 'info',
+              });
+            }
             await this._refreshMaterials();
           });
           break;
@@ -2914,10 +3032,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             try {
               const profile = await this.progressStore.getProfile().catch(() => null);
               const preferences = await this.prefsStore.get().catch(() => null);
-              const result = await this.projectGenerator.createProject(msg.request, {
-                profile,
-                preferences,
-              });
+              const result = await this.projectGenerator.createProject(
+                msg.request,
+                { profile, preferences },
+                (chunk) => this._post({ type: 'projectStreamDelta', chunk }),
+              );
               if (result.ok && result.meta && result.spec) {
                 this._post({
                   type: 'projectCreated',
@@ -3085,17 +3204,78 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
 
+        case 'runProjectTest': {
+          const meta = await this.projectStore.readMetaByProjectId(msg.projectId);
+          if (!meta) {
+            this._post({ type: 'error', message: '找不到项目，无法跑测试。' });
+            break;
+          }
+          if (!meta.testCommand) {
+            this._post({ type: 'error', message: '该项目没有 testCommand，无法跑测试。' });
+            break;
+          }
+          if (!meta.projectDir) {
+            this._post({ type: 'error', message: '该项目没有 projectDir，可能已被清空。' });
+            break;
+          }
+          this._post({ type: 'log', message: `正在跑测试：${meta.testCommand}（cwd: ${meta.projectDir}）`, level: 'info' });
+          const startTime = Date.now();
+          const child = exec(
+            meta.testCommand,
+            { cwd: meta.projectDir, timeout: 120_000, maxBuffer: 1024 * 1024 },
+            (error, stdout, stderr) => {
+              const durationMs = Date.now() - startTime;
+              const output = (stdout || '') + (stderr ? '\n--- stderr ---\n' + stderr : '');
+              // 解析测试结果：尝试常见 test runner 的输出格式
+              const result = parseTestOutput(output);
+              // exit code 0 = 全过；非 0 = 有失败或错误
+              const success = error === null || (result.total > 0 && result.failed === 0);
+              this._post({
+                type: 'projectTestResult',
+                projectId: msg.projectId,
+                success,
+                passed: result.passed,
+                failed: result.failed,
+                total: result.total,
+                output: output.slice(-4000),
+                durationMs,
+              });
+              // 自动回写进度：按 passed 数更新 completedTodos
+              if (result.total > 0) {
+                this.projectStore.updateProgress(msg.projectId, result.passed, success ? 'completed' : 'in-progress').then((updated) => {
+                  if (updated) this._post({ type: 'projectProgressUpdated', meta: updated });
+                });
+              }
+            },
+          );
+          child.on('error', (err) => {
+            this._post({ type: 'error', message: `启动测试命令失败：${err.message}` });
+          });
+          break;
+        }
+
         case 'importMaterial': {
           const entry = await this.materialManager.importMaterial(msg.subject);
           if (entry) {
+            // 显式反馈：importMaterial 内部已经 fire-and-forget 跑提取，
+            // 这里只发一条"已加入、后台提取中"的提示，避免用户以为卡住。
+            this._post({
+              type: 'log',
+              message: `资料已导入：${entry.fileName}（后台提取中，请留意日志…）`,
+              level: 'info',
+            });
+            this._post({
+              type: 'log',
+              message: `提示：资料卡片状态会从「待处理」→「已提取」→「已索引」依次变化；若长时间停在「待处理」，可点卡片右上「重试」。`,
+              level: 'info',
+            });
+            // 触发一次资料列表刷新，让卡片立刻以 pending 态出现
+            await this._refreshMaterials();
+            // 兜底再起一次 reconcile（去重保护在 materialManager 里）
             this._reconcileMaterialsInBackground(msg.subject, entry.id);
-          }
-          if (entry) {
-            this._post({ type: 'log', message: `资料已导入：${entry.fileName}`, level: 'info' });
           } else {
             this._post({ type: 'log', message: '取消导入资料', level: 'info' });
           }
-          await this._refreshMaterials();
           break;
         }
 
@@ -3332,6 +3512,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._post({ type: 'loading', active: false });
       this._post({ type: 'error', message });
       vscode.window.showErrorMessage(`ClaudeCoach: ${message}`);
+    }
+  }
+
+  /** 把 prefs.difficulty.perSubject[subject] 合并进 prefs.difficulty.global，
+   *  让 AI 生成讲义/练习时 prompt 里看到的"整体难度"是课程级覆盖值。
+   *  perSubject 之前是"前端能设但后端不读"的断裂字段，这里补上消费点。 */
+  private _applyPerSubjectDifficulty(prefs: import('../types').LearningPreferences, subject: string): void {
+    if (!prefs?.difficulty) return;
+    const override = prefs.difficulty.perSubject?.[subject];
+    if (override) {
+      prefs.difficulty.global = override;
     }
   }
 

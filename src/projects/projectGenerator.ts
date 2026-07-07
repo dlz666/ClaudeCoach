@@ -43,7 +43,11 @@ interface ProjectGenerationContext {
 export class ProjectGenerator {
   constructor(private ai: AIClient, private store: ProjectStore) {}
 
-  async createProject(request: CreateProjectRequest, ctx: ProjectGenerationContext = {}): Promise<ProjectScaffoldResult> {
+  async createProject(
+    request: CreateProjectRequest,
+    ctx: ProjectGenerationContext = {},
+    onDelta?: (chunk: string) => void,
+  ): Promise<ProjectScaffoldResult> {
     if (!request.subject?.trim()) {
       return { ok: false, errorMessage: '缺少 subject。' };
     }
@@ -66,7 +70,23 @@ export class ProjectGenerator {
           scope: 'project-spec',
         },
       });
-      spec = await this.ai.chatJson<ProjectSpec>(messages, { temperature: 0.4, maxTokens: 8000 });
+      // 流式：用 chatCompletion + onDelta 让前端看到生成进度，完成后手动解析 JSON；
+      // 解析失败回退到 chatJson（非流式 + 重试），保证正确性。
+      if (onDelta) {
+        const raw = await this.ai.chatCompletion(messages, {
+          temperature: 0.4,
+          maxTokens: 8000,
+          onDelta,
+          responseFormat: 'json',
+        });
+        try {
+          spec = JSON.parse(raw) as ProjectSpec;
+        } catch {
+          spec = await this.ai.chatJson<ProjectSpec>(messages, { temperature: 0.4, maxTokens: 8000 });
+        }
+      } else {
+        spec = await this.ai.chatJson<ProjectSpec>(messages, { temperature: 0.4, maxTokens: 8000 });
+      }
     } catch (error) {
       return {
         ok: false,

@@ -78,12 +78,8 @@
       exerciseMix: { easy: 30, medium: 50, hard: 20 },
     },
     pace: {
-      dailyGoalMinutes: 45,
       exercisesPerSession: 5,
       speed: 'medium',
-      reviewEveryNLessons: 3,
-      restDays: [0, 6],
-      studyTimeSlots: ['evening'],
     },
     language: {
       content: 'zh',
@@ -94,15 +90,12 @@
       lessonDetail: 'standard',
       feedbackTone: 'encouraging',
       explanationStyles: ['example-first'],
-      mathSymbol: 'latex',
+      mathSymbol: 'english-standard',
       exerciseTypeMix: { multipleChoice: 40, freeResponse: 40, code: 20 },
       includeProofs: false,
       includeHistory: false,
     },
     retrieval: {
-      defaultGrounding: false,
-      strictness: 'balanced',
-      citeSources: true,
       maxExcerpts: 4,
     },
     ui: {
@@ -116,7 +109,6 @@
       lecture: {
         viewerMode: 'lecture-webview',
         applyMode: 'preview-confirm',
-        syncSourceEditor: true,
         highlightChangesMs: 3000,
       },
     },
@@ -263,7 +255,6 @@
     mixHard: $('mix-hard'),
     prefExercises: $('pref-exercises'),
     prefSpeed: $('pref-speed'),
-    prefReview: $('pref-review'),
     prefLangContent: $('pref-lang-content'),
     prefLangCode: $('pref-lang-code'),
     wrongQuestionsSection: $('wrong-questions-section'),
@@ -295,13 +286,6 @@
     settingsGroups: Array.from(document.querySelectorAll('.settings-group')),
 
     // ===== 学习节奏与目标 =====
-    prefDailyGoal: $('pref-daily-goal'),
-    prefDailyGoalNum: $('pref-daily-goal-num'),
-    studySlotMorning: document.querySelector('[data-study-slot="morning"]'),
-    studySlotAfternoon: document.querySelector('[data-study-slot="afternoon"]'),
-    studySlotEvening: document.querySelector('[data-study-slot="evening"]'),
-    restDayCheckboxes: Array.from(document.querySelectorAll('[data-rest-day]')),
-    studySlotCheckboxes: Array.from(document.querySelectorAll('[data-study-slot]')),
     mixSumHint: $('mix-sum-hint'),
     perSubjectDifficultyList: $('per-subject-difficulty-list'),
 
@@ -319,9 +303,6 @@
     prefLangExercises: $('pref-lang-exercises'),
 
     // ===== 资料检索 =====
-    retrievalGroundingDefault: $('retrieval-grounding-default'),
-    retrievalStrictnessRadios: Array.from(document.querySelectorAll('input[name="retrieval-strictness"]')),
-    retrievalCiteDefault: $('retrieval-cite-default'),
     retrievalSnippets: $('retrieval-snippets'),
     retrievalSnippetsValue: $('retrieval-snippets-value'),
     // Hybrid RAG
@@ -579,6 +560,8 @@
       settingsCollapsedGroups: state.settingsCollapsedGroups, // legacy
       settingsActiveSection: state.settingsActiveSection,
       materialsFilter: state.materialsFilter,
+      // 记住用户上次选的 defaultTab，启动时 restore（真正的 prefs 也会同步保存到磁盘）
+      preferences: state.preferences || undefined,
     });
   }
 
@@ -947,8 +930,8 @@
       return `
         <div class="tree-node">
           <div class="tree-topic-row">
-            <div class="tree-topic open" data-topic-id="${escapeHtml(topic.id)}">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
-            <button class="tree-btn btn-topic-more" data-topic-id="${escapeHtml(topic.id)}" data-topic-title="${escapeHtml(topic.title)}" data-subject="${escapeHtml(course.subject)}" title="编辑 / 生成知识点">⋯</button>
+            <div class="tree-topic ${state.preferences?.ui?.expandCourseTree !== false ? 'open' : ''}" data-topic-id="${escapeHtml(topic.id)}">${escapeHtml(formatTopicTitle(topic, topicIndex))}</div>
+            <button class="tree-btn btn-topic-more" data-topic-id="${escapeHtml(topic.id)}" data-topic-title="${escapeHtml(topic.title)}" data-subject="${escapeHtml(course.subject)}" title="编辑 / 重命名 / 删除 / 生成知识点">⋯</button>
           </div>
           <div class="tree-children${editing ? ' editing-mode' : ''}">
             ${lessonsHtml}
@@ -1133,7 +1116,7 @@
       });
     });
 
-    // ===== topic 三点菜单（编辑 lessons / 生成本章知识点） =====
+    // ===== topic 三点菜单（编辑 lessons / 重命名主题 / 删除主题 / 生成本章知识点） =====
     els.courseTree.querySelectorAll('.btn-topic-more').forEach((btn) => {
       btn.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -1146,6 +1129,8 @@
         popover.className = 'topic-menu-popover';
         popover.innerHTML = `
           <button type="button" data-action="toggle-edit">${editing ? '✓ 完成编辑' : '✎ 编辑讲义'}</button>
+          <button type="button" data-action="rename-topic">✎ 重命名主题</button>
+          <button type="button" data-action="del-topic">✕ 删除主题</button>
           <button type="button" data-action="gen-keypoints">💡 一键生成本章知识点</button>
         `;
         btn.parentNode?.appendChild(popover);
@@ -1165,6 +1150,10 @@
               if (editing) state.editingTopics.delete(topicId);
               else state.editingTopics.add(topicId);
               renderSelectedCourse();
+            } else if (action === 'rename-topic') {
+              _startTopicRenameInline(topicId, d.topicTitle);
+            } else if (action === 'del-topic') {
+              _confirmDeleteTopic(topicId, d.topicTitle);
             } else if (action === 'gen-keypoints') {
               vscode.postMessage({
                 type: 'generateKeyPointsForTopic',
@@ -1218,16 +1207,42 @@
     els.courseTree.querySelectorAll('.btn-delete-lesson').forEach((btn) => {
       btn.addEventListener('click', (event) => {
         event.stopPropagation();
-        // 直接删 —— 编辑模式本身已是二次操作，且 VSCode webview 默认禁 confirm()（静默
-        // 返回 false 会让按钮看似无反应）。误删可在讲义阅读器 .bak 撤回 / 重新生成。
+        // VSCode webview 禁 confirm()。内联两次确认：第一点把 × 切红 + 标题
+        // "再点一次确认删除"，3 秒内再点才真删。误删仍可走 .bak 撤回 / 重新生成。
         const d = btn.dataset;
-        vscode.postMessage({
-          type: 'deleteLesson',
-          subject: d.subject,
-          topicId: d.topicId,
-          lessonId: d.lessonId,
-          lessonTitle: d.lessonTitle,
-        });
+        const row = btn.closest('.tree-lesson-editing');
+        const titleEl = row?.querySelector('.tree-lesson-input');
+        if (btn.dataset.confirming === '1') {
+          vscode.postMessage({
+            type: 'deleteLesson',
+            subject: d.subject,
+            topicId: d.topicId,
+            lessonId: d.lessonId,
+            lessonTitle: d.lessonTitle,
+          });
+          return;
+        }
+        btn.dataset.confirming = '1';
+        const originalText = btn.textContent;
+        const originalTitle = btn.title;
+        btn.textContent = '⚠';
+        btn.title = '再点一次确认删除';
+        btn.classList.add('confirm-delete');
+        if (titleEl) {
+          titleEl.dataset.placeholder = titleEl.placeholder;
+          titleEl.placeholder = '再点一次「×」确认删除…';
+        }
+        const revert = () => {
+          btn.dataset.confirming = '';
+          btn.textContent = originalText;
+          btn.title = originalTitle;
+          btn.classList.remove('confirm-delete');
+          if (titleEl && titleEl.dataset.placeholder) {
+            titleEl.placeholder = titleEl.dataset.placeholder;
+            delete titleEl.dataset.placeholder;
+          }
+        };
+        setTimeout(revert, 3000);
       });
     });
 
@@ -1280,6 +1295,81 @@
         renderKeyPointsPanel(lessonId);
       }
     });
+  }
+
+  // ============================================================
+  // topic 重命名 / 删除内联交互（用 contenteditable / 内联确认，
+  // 绕开 VSCode webview 禁用的 confirm() / prompt()）
+  // ============================================================
+
+  /** 在 course-tree 里把某个 topic 标题就地变 contenteditable，blur/Enter 提交 rename。 */
+  function _startTopicRenameInline(topicId, currentTitle) {
+    const topicEl = els.courseTree.querySelector(`.tree-topic[data-topic-id="${CSS.escape(topicId)}"]`);
+    if (!topicEl) return;
+    const original = String(currentTitle || topicEl.textContent || '');
+    topicEl.setAttribute('contenteditable', 'true');
+    topicEl.setAttribute('spellcheck', 'false');
+    topicEl.classList.add('editing');
+    topicEl.focus();
+    // 全选
+    const r = document.createRange();
+    r.selectNodeContents(topicEl);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+
+    const commit = () => {
+      topicEl.removeEventListener('blur', commit);
+      topicEl.removeEventListener('keydown', onKey);
+      topicEl.removeAttribute('contenteditable');
+      topicEl.classList.remove('editing');
+      const newTitle = (topicEl.textContent || '').trim();
+      topicEl.textContent = newTitle || original;
+      if (newTitle && newTitle !== original && state.selectedSubject) {
+        vscode.postMessage({
+          type: 'renameTopic',
+          subject: state.selectedSubject,
+          topicId,
+          newTitle,
+        });
+      } else {
+        topicEl.textContent = original;
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); topicEl.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); topicEl.textContent = original; topicEl.blur(); }
+    };
+    topicEl.addEventListener('blur', commit);
+    topicEl.addEventListener('keydown', onKey);
+  }
+
+  /** 内联两次确认删除 topic：第一点把标题切成红字"再点一次确认删除"。 */
+  function _confirmDeleteTopic(topicId, topicTitle) {
+    const topicEl = els.courseTree.querySelector(`.tree-topic[data-topic-id="${CSS.escape(topicId)}"]`);
+    if (!topicEl) return;
+    if (topicEl.dataset.confirming === '1') {
+      // 第二次点 → 真删
+      vscode.postMessage({
+        type: 'deleteTopic',
+        subject: state.selectedSubject,
+        topicId,
+        topicTitle,
+      });
+      return;
+    }
+    const original = topicEl.textContent || '';
+    topicEl.dataset.confirming = '1';
+    topicEl.dataset.original = original;
+    topicEl.classList.add('confirm-delete');
+    topicEl.textContent = `✕ 再点一次确认删除整章`;
+    const revert = () => {
+      topicEl.dataset.confirming = '';
+      topicEl.classList.remove('confirm-delete');
+      topicEl.textContent = topicEl.dataset.original || original;
+      delete topicEl.dataset.original;
+    };
+    setTimeout(revert, 4000);
   }
 
   // ============================================================
@@ -2282,19 +2372,6 @@
     updateMixSumHint();
     if (els.prefExercises) els.prefExercises.value = String(merged.pace?.exercisesPerSession ?? 5);
     if (els.prefSpeed) els.prefSpeed.value = merged.pace?.speed || 'medium';
-    if (els.prefReview) els.prefReview.value = String(merged.pace?.reviewEveryNLessons ?? 3);
-    const dailyGoal = merged.pace?.dailyGoalMinutes ?? 45;
-    if (els.prefDailyGoal) els.prefDailyGoal.value = String(dailyGoal);
-    if (els.prefDailyGoalNum) els.prefDailyGoalNum.value = String(dailyGoal);
-
-    const restDays = Array.isArray(merged.pace?.restDays) ? merged.pace.restDays.map(Number) : [];
-    els.restDayCheckboxes?.forEach((cb) => {
-      cb.checked = restDays.includes(Number(cb.getAttribute('data-rest-day')));
-    });
-    const slots = Array.isArray(merged.pace?.studyTimeSlots) ? merged.pace.studyTimeSlots : [];
-    els.studySlotCheckboxes?.forEach((cb) => {
-      cb.checked = slots.includes(cb.getAttribute('data-study-slot'));
-    });
 
     renderPerSubjectDifficulty(merged);
 
@@ -2310,7 +2387,7 @@
     els.explainStyleCheckboxes?.forEach((cb) => {
       cb.checked = explainStyles.includes(cb.getAttribute('data-explain-style'));
     });
-    setRadioGroup(els.aiMathStyleRadios, merged.aiStyle?.mathSymbol || 'latex');
+    setRadioGroup(els.aiMathStyleRadios, merged.aiStyle?.mathSymbol || 'english-standard');
     if (els.exTypeConcept) els.exTypeConcept.value = String(merged.aiStyle?.exerciseTypeMix?.multipleChoice ?? 40);
     if (els.exTypeCalc) els.exTypeCalc.value = String(merged.aiStyle?.exerciseTypeMix?.freeResponse ?? 40);
     if (els.exTypeProof) els.exTypeProof.value = String(merged.aiStyle?.exerciseTypeMix?.code ?? 20);
@@ -2319,9 +2396,6 @@
     if (els.aiIncludeHistory) els.aiIncludeHistory.checked = !!merged.aiStyle?.includeHistory;
 
     // ===== 资料检索 =====
-    if (els.retrievalGroundingDefault) els.retrievalGroundingDefault.checked = !!merged.retrieval?.defaultGrounding;
-    setRadioGroup(els.retrievalStrictnessRadios, merged.retrieval?.strictness || 'balanced');
-    if (els.retrievalCiteDefault) els.retrievalCiteDefault.checked = merged.retrieval?.citeSources !== false;
     const snippets = merged.retrieval?.maxExcerpts ?? 4;
     if (els.retrievalSnippets) els.retrievalSnippets.value = String(snippets);
     if (els.retrievalSnippetsValue) els.retrievalSnippetsValue.textContent = String(snippets);
@@ -2353,7 +2427,6 @@
     // ===== 讲义阅读体验 =====
     setRadioGroup(els.lectureReaderModeRadios, merged.coach?.lecture?.viewerMode || 'lecture-webview');
     setRadioGroup(els.lectureApplyModeRadios, merged.coach?.lecture?.applyMode || 'preview-confirm');
-    if (els.lectureSyncSource) els.lectureSyncSource.checked = merged.coach?.lecture?.syncSourceEditor !== false;
     const highlightSec = Math.round((merged.coach?.lecture?.highlightChangesMs ?? 3000) / 1000);
     if (els.lectureHighlightDuration) els.lectureHighlightDuration.value = String(highlightSec);
     if (els.lectureHighlightDurationValue) els.lectureHighlightDurationValue.textContent = `${highlightSec} 秒`;
@@ -2368,6 +2441,7 @@
     setRadioGroup(els.uiThemeRadios, merged.ui?.theme || 'auto');
     if (els.uiShowEmoji) els.uiShowEmoji.checked = merged.ui?.showEmoji !== false;
     applyShowEmoji(merged.ui?.showEmoji !== false);
+    applyTheme(merged.ui?.theme || 'auto');
   }
 
   /**
@@ -2404,6 +2478,22 @@
     document.body.style.zoom = String(scale);
   }
 
+  /**
+   * 应用主题：auto 跟随 VS Code 颜色（默认），light/dark 强制覆盖。
+   * 通过给 body 加 data-theme，让 CSS 变量在 light/dark 下分别取值。
+   */
+  function applyTheme(theme) {
+    const t = theme || 'auto';
+    document.body.dataset.theme = t;
+    // auto 时尝试用 prefers-color-scheme 推断
+    if (t === 'auto') {
+      const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.body.dataset.themeResolved = dark ? 'dark' : 'light';
+    } else {
+      document.body.dataset.themeResolved = t;
+    }
+  }
+
   // Ctrl+滚轮 调整字体大小（任何 webview 区域都生效）
   document.addEventListener('wheel', (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
@@ -2425,14 +2515,6 @@
   function collectPreferences() {
     const current = state.preferences || deepClone(DEFAULT_PREFS);
 
-    const restDays = (els.restDayCheckboxes || [])
-      .filter((cb) => cb.checked)
-      .map((cb) => Number(cb.getAttribute('data-rest-day')))
-      .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
-    const studySlots = (els.studySlotCheckboxes || [])
-      .filter((cb) => cb.checked)
-      .map((cb) => cb.getAttribute('data-study-slot'))
-      .filter(Boolean);
     const explainStyles = (els.explainStyleCheckboxes || [])
       .filter((cb) => cb.checked)
       .map((cb) => cb.getAttribute('data-explain-style'))
@@ -2449,12 +2531,8 @@
         },
       },
       pace: {
-        dailyGoalMinutes: Number(els.prefDailyGoalNum?.value ?? els.prefDailyGoal?.value ?? current.pace?.dailyGoalMinutes ?? 45),
         exercisesPerSession: Number(els.prefExercises?.value ?? current.pace?.exercisesPerSession ?? 5),
         speed: els.prefSpeed?.value || current.pace?.speed || 'medium',
-        reviewEveryNLessons: Number(els.prefReview?.value ?? current.pace?.reviewEveryNLessons ?? 3),
-        restDays,
-        studyTimeSlots: studySlots,
       },
       language: {
         content: els.prefLangContent?.value || current.language?.content || 'zh',
@@ -2465,7 +2543,7 @@
         lessonDetail: getRadioGroup(els.aiDetailLevelRadios) || current.aiStyle?.lessonDetail || 'standard',
         feedbackTone: getRadioGroup(els.aiFeedbackToneRadios) || current.aiStyle?.feedbackTone || 'encouraging',
         explanationStyles: explainStyles,
-        mathSymbol: getRadioGroup(els.aiMathStyleRadios) || current.aiStyle?.mathSymbol || 'latex',
+        mathSymbol: getRadioGroup(els.aiMathStyleRadios) || current.aiStyle?.mathSymbol || 'english-standard',
         exerciseTypeMix: {
           multipleChoice: Number(els.exTypeConcept?.value ?? 40),
           freeResponse: Number(els.exTypeCalc?.value ?? 40),
@@ -2475,9 +2553,6 @@
         includeHistory: !!els.aiIncludeHistory?.checked,
       },
       retrieval: {
-        defaultGrounding: !!els.retrievalGroundingDefault?.checked,
-        strictness: getRadioGroup(els.retrievalStrictnessRadios) || current.retrieval?.strictness || 'balanced',
-        citeSources: !!els.retrievalCiteDefault?.checked,
         maxExcerpts: Number(els.retrievalSnippets?.value ?? current.retrieval?.maxExcerpts ?? 4),
         embedding: {
           enabled: !!els.embeddingEnabled?.checked,
@@ -2508,7 +2583,6 @@
         lecture: {
           viewerMode: getRadioGroup(els.lectureReaderModeRadios) || current.coach?.lecture?.viewerMode || 'lecture-webview',
           applyMode: getRadioGroup(els.lectureApplyModeRadios) || current.coach?.lecture?.applyMode || 'preview-confirm',
-          syncSourceEditor: !!els.lectureSyncSource?.checked,
           highlightChangesMs: Math.max(1, Number(els.lectureHighlightDuration?.value ?? 3)) * 1000,
         },
       },
@@ -3563,6 +3637,11 @@
     if (tabName === 'chat') {
       scrollChatToBottom();
     }
+    if (state.preferences) {
+      state.preferences.ui = state.preferences.ui || {};
+      state.preferences.ui.defaultTab = tabName;
+      schedulePreferenceSave();
+    }
   }
 
   // ===== Projects（嵌在课程面板里，按当前课程的 subject 过滤）=====
@@ -3704,6 +3783,8 @@
       </div>
       <div class="project-card-actions">
         <button class="btn primary small" data-act="open">在 IDE 打开</button>
+        <button class="btn ghost small" data-act="toggle-detail" title="展开/收起项目规格详情（学习目标、文件、测试策略）">📋 详情</button>
+        <button class="btn ghost small" data-act="run-test" title="跑 testCommand 并解析结果">▶ 跑测试</button>
         <button class="btn ghost small" data-act="mark-done">标记完成</button>
         <button class="btn ghost small" data-act="clear-files" title="清空代码文件，保留 meta + spec，可以重新生成">🗑 删除项目文件</button>
         ${fromProposal
@@ -3711,9 +3792,22 @@
           : ''}
         <button class="btn ghost small" data-act="delete">从列表移除</button>
       </div>
+      <div class="project-spec-detail hidden" data-spec-detail="${escapeProjHtml(meta.id)}"></div>
+      <div class="project-test-result hidden" data-test-result="${escapeProjHtml(meta.id)}"></div>
     `;
     card.querySelector('[data-act="open"]').addEventListener('click', () => {
       vscode.postMessage({ type: 'openProject', projectId: meta.id });
+    });
+    card.querySelector('[data-act="toggle-detail"]').addEventListener('click', () => {
+      toggleProjectSpecDetail(card, meta.id);
+    });
+    card.querySelector('[data-act="run-test"]').addEventListener('click', () => {
+      const resultEl = card.querySelector('[data-test-result]');
+      if (resultEl) {
+        resultEl.classList.remove('hidden');
+        resultEl.innerHTML = '<p class="muted">⏳ 正在跑测试…</p>';
+      }
+      vscode.postMessage({ type: 'runProjectTest', projectId: meta.id });
     });
     card.querySelector('[data-act="mark-done"]').addEventListener('click', () => {
       vscode.postMessage({
@@ -3743,6 +3837,65 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  /** 展开/收起项目 spec 详情。首次展开时如果没缓存就向后端请求。 */
+  function toggleProjectSpecDetail(card, projectId) {
+    const detailEl = card.querySelector('[data-spec-detail]');
+    if (!detailEl) return;
+    const isHidden = detailEl.classList.contains('hidden');
+    if (isHidden) {
+      const cached = state.projectSpecs && state.projectSpecs[projectId];
+      if (cached) {
+        renderProjectSpecDetail(detailEl, cached);
+        detailEl.classList.remove('hidden');
+      } else {
+        detailEl.classList.remove('hidden');
+        detailEl.innerHTML = '<p class="muted">⏳ 正在加载项目规格…</p>';
+        vscode.postMessage({ type: 'getProjectSpec', projectId });
+      }
+    } else {
+      detailEl.classList.add('hidden');
+    }
+  }
+
+  /** 把 ProjectSpec 渲染到详情容器：学习目标 / 前置 / 文件列表 / todos / 测试策略。 */
+  function renderProjectSpecDetail(container, spec) {
+    if (!spec) {
+      container.innerHTML = '<p class="muted">无法加载项目规格。</p>';
+      return;
+    }
+    const goals = (spec.learningGoals || []).map((g) => `<li>${escapeProjHtml(g)}</li>`).join('');
+    const prereqs = (spec.prerequisites || []).map((p) => `<li>${escapeProjHtml(p)}</li>`).join('');
+    const files = (spec.files || []).map((f) => {
+      const roleBadge = `<span class="pc-file-role pc-role-${escapeProjHtml(f.role)}">${escapeProjHtml(f.role)}</span>`;
+      const stub = f.stubDensity ? ` <span class="pc-stub-density">${escapeProjHtml(f.stubDensity)}</span>` : '';
+      return `<div class="pc-file-row">${roleBadge}<code>${escapeProjHtml(f.path)}</code>${stub}</div>`;
+    }).join('');
+    const todos = (spec.todos || []).map((t, i) => {
+      const diff = typeof t.difficulty === 'number' ? ` <span class="pc-diff-small">${'⭐'.repeat(Math.max(1, Math.min(5, t.difficulty)))}</span>` : '';
+      const check = t.checkCriteria ? `<div class="pc-todo-check">验收：${escapeProjHtml(t.checkCriteria)}</div>` : '';
+      return `<div class="pc-todo-row"><span class="pc-todo-num">${i + 1}</span><div><div class="pc-todo-desc">${escapeProjHtml(t.description)}${diff}</div><div class="pc-todo-file"><code>${escapeProjHtml(t.targetFile)}</code></div>${check}</div></div>`;
+    }).join('');
+    container.innerHTML = `
+      <div class="pc-spec-section">
+        <div class="pc-spec-label">学习目标</div>
+        <ul class="pc-spec-list">${goals || '<li class="muted">无</li>'}</ul>
+      </div>
+      ${prereqs ? `<div class="pc-spec-section"><div class="pc-spec-label">前置知识</div><ul class="pc-spec-list">${prereqs}</ul></div>` : ''}
+      <div class="pc-spec-section">
+        <div class="pc-spec-label">文件（${(spec.files || []).length}）</div>
+        <div class="pc-file-list">${files}</div>
+      </div>
+      <div class="pc-spec-section">
+        <div class="pc-spec-label">任务里程碑（${(spec.todos || []).length}）</div>
+        <div class="pc-todo-list">${todos}</div>
+      </div>
+      <div class="pc-spec-section">
+        <div class="pc-spec-label">测试策略</div>
+        <p class="pc-spec-text">${escapeProjHtml(spec.testStrategy || '-')}</p>
+      </div>
+    `;
   }
 
   /**
@@ -3919,6 +4072,7 @@
     const subject = getDraftSubject();
     if (!subject) {
       addLog('请先填写课程名称。', 'warn');
+      els.subjectInput?.focus();
       return;
     }
     // 收集 tags（从 chip 的 .checked class 读）
@@ -3965,7 +4119,25 @@
   })();
 
   // ===== 课程大纲 preview / refine / apply / discard 流程 =====
-  state.coursePreview = state.coursePreview || null; // { previewId, subject, outline, lastRefineInstruction? }
+  state.coursePreview = state.coursePreview || null; // { previewId, subject, outline, lastRefineInstruction?, error?, busy }
+  // 进入预览编辑时临时维护一份可变 outline（深拷贝 AI 原版，方便 reset）
+  state.coursePreviewDraft = null;
+
+  /** 把 state.coursePreview.outline 深拷贝成可编辑 draft 挂到 state.coursePreviewDraft */
+  function _seedCoursePreviewDraft() {
+    const cp = state.coursePreview;
+    if (!cp) { state.coursePreviewDraft = null; return; }
+    try {
+      state.coursePreviewDraft = JSON.parse(JSON.stringify(cp.outline));
+    } catch {
+      state.coursePreviewDraft = null;
+    }
+  }
+
+  /** 生成一个临时 id（前端编辑用，apply 时后端 normalize 会重算 code）。 */
+  function _tmpId(prefix) {
+    return `${prefix}-tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  }
 
   function renderCoursePreviewPanel() {
     const panel = document.getElementById('course-preview-panel');
@@ -3977,45 +4149,55 @@
     }
     panel.classList.remove('hidden');
 
+    const draft = state.coursePreviewDraft || (() => { _seedCoursePreviewDraft(); return state.coursePreviewDraft; })();
+
     const titleEl = document.getElementById('course-preview-title');
     const metaEl = document.getElementById('course-preview-meta');
-    if (titleEl) titleEl.textContent = `预览：${cp.outline.title || '（未命名）'}`;
+    if (titleEl) titleEl.textContent = `预览：${draft.title || '（未命名）'}`;
     if (metaEl) {
-      const topicCount = (cp.outline.topics || []).length;
-      const lessonCount = (cp.outline.topics || []).reduce((s, t) => s + (t.lessons?.length || 0), 0);
-      const projCount = (cp.outline.projects || []).length;
+      const topicCount = (draft.topics || []).length;
+      const lessonCount = (draft.topics || []).reduce((s, t) => s + (t.lessons?.length || 0), 0);
+      const projCount = (draft.projects || []).length;
       const projStr = projCount ? ` · 项目 ${projCount}` : '';
       const refineStr = cp.lastRefineInstruction ? ` · 上次修订："${cp.lastRefineInstruction}"` : '';
       metaEl.textContent = `主题 ${topicCount} · 课时 ${lessonCount}${projStr}${refineStr}`;
     }
 
-    // 渲染主题/课时树
+    // 渲染主题/课时树（可内联编辑）
     const treeEl = document.getElementById('course-preview-tree');
     if (treeEl) {
-      treeEl.innerHTML = (cp.outline.topics || []).map((t, ti) => {
+      treeEl.innerHTML = (draft.topics || []).map((t, ti) => {
         const lessons = (t.lessons || []).map((l, li) => `
-          <li class="cpt-lesson">
+          <li class="cpt-lesson" data-cpt-topic="${ti}" data-cpt-lesson="${li}">
             <span class="cpt-lesson-num">${ti + 1}.${li + 1}</span>
-            <span class="cpt-lesson-title">${escapeHtml(l.title || '')}</span>
+            <span class="cpt-lesson-title" contenteditable="true" spellcheck="false" data-role="lesson-title">${escapeHtml(l.title || '')}</span>
             <span class="cpt-lesson-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(l.difficulty) || 1)))}</span>
+            <button class="cpt-icon-btn" type="button" data-cpt-act="del-lesson" data-cpt-topic="${ti}" data-cpt-lesson="${li}" title="删除这节">✕</button>
           </li>
         `).join('');
         return `
-          <div class="cpt-topic">
+          <div class="cpt-topic" data-cpt-topic="${ti}">
             <div class="cpt-topic-head">
               <span class="cpt-topic-num">${ti + 1}.</span>
-              <span class="cpt-topic-title">${escapeHtml(t.title || '')}</span>
+              <span class="cpt-topic-title" contenteditable="true" spellcheck="false" data-role="topic-title">${escapeHtml(t.title || '')}</span>
+              <span class="cpt-topic-actions">
+                <button class="cpt-icon-btn" type="button" data-cpt-act="up-topic" data-cpt-topic="${ti}" title="整章上移">↑</button>
+                <button class="cpt-icon-btn" type="button" data-cpt-act="down-topic" data-cpt-topic="${ti}" title="整章下移">↓</button>
+                <button class="cpt-icon-btn" type="button" data-cpt-act="del-topic" data-cpt-topic="${ti}" title="删除整章">✕</button>
+              </span>
             </div>
             <ul class="cpt-lessons">${lessons}</ul>
+            <button class="cpt-add-lesson-btn" type="button" data-cpt-act="add-lesson" data-cpt-topic="${ti}">＋ 加一节</button>
           </div>
         `;
       }).join('');
+      _bindCoursePreviewTree(treeEl);
     }
 
     // 渲染项目提案
     const projEl = document.getElementById('course-preview-projects');
     if (projEl) {
-      const projects = cp.outline.projects || [];
+      const projects = draft.projects || [];
       if (projects.length === 0) {
         projEl.innerHTML = '';
         projEl.classList.add('hidden');
@@ -4036,17 +4218,145 @@
         `;
       }
     }
+
+    // 错误条 / busy 态
+    const errEl = document.getElementById('course-preview-error');
+    if (errEl) {
+      const hasErr = !!cp.error;
+      errEl.classList.toggle('hidden', !hasErr);
+      errEl.textContent = cp.error || '';
+    }
+    const busy = !!cp.busy;
+    const refineBtn = document.getElementById('btn-refine-course-preview');
+    const applyBtn = document.getElementById('btn-apply-course-preview');
+    const discardBtn = document.getElementById('btn-discard-course-preview');
+    if (refineBtn) {
+      refineBtn.disabled = busy;
+      refineBtn.classList.toggle('is-busy', busy);
+      refineBtn.textContent = busy ? '生成中…' : 'AI 修订一版';
+    }
+    if (applyBtn) applyBtn.disabled = busy;
+    if (discardBtn) discardBtn.disabled = busy;
+  }
+
+  /** 把 draft 写回 state.coursePreview.outline（apply 时随消息发回后端覆盖缓存）。 */
+  function _flushCoursePreviewDraftToOutline() {
+    const cp = state.coursePreview;
+    const draft = state.coursePreviewDraft;
+    if (!cp || !draft) return;
+    // 落盘前再读一遍 contenteditable 文本，避免失焦未 commit 的边角
+    const tree = document.getElementById('course-preview-tree');
+    if (tree) {
+      tree.querySelectorAll('.cpt-topic').forEach((topicEl) => {
+        const ti = Number(topicEl.getAttribute('data-cpt-topic'));
+        const t = draft.topics[ti];
+        if (!t) return;
+        const tTitle = topicEl.querySelector('.cpt-topic-title');
+        if (tTitle) t.title = (tTitle.textContent || '').trim() || t.title;
+        topicEl.querySelectorAll('.cpt-lesson').forEach((li) => {
+          const li_ = Number(li.getAttribute('data-cpt-lesson'));
+          const l = t.lessons[li_];
+          if (!l) return;
+          const lTitle = li.querySelector('.cpt-lesson-title');
+          if (lTitle) l.title = (lTitle.textContent || '').trim() || l.title;
+        });
+      });
+    }
+    cp.outline = draft;
+  }
+
+  /** 绑定预览树的编辑 / 增删 / 移动交互 */
+  function _bindCoursePreviewTree(treeEl) {
+    // contenteditable 失焦 / 回车提交（回车 blur）
+    treeEl.querySelectorAll('[contenteditable="true"]').forEach((el) => {
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+        if (e.key === 'Escape') { e.preventDefault(); el.textContent = el.getAttribute('data-original') || ''; el.blur(); }
+      });
+      el.addEventListener('focus', () => el.setAttribute('data-original', el.textContent || ''));
+      el.addEventListener('blur', () => {
+        // 只把文本刷到 draft，UI 不重渲染（重渲染会丢光标）
+        const role = el.getAttribute('data-role');
+        const topicEl = el.closest('.cpt-topic');
+        const ti = Number(topicEl?.getAttribute('data-cpt-topic'));
+        const draft = state.coursePreviewDraft;
+        if (!draft || !draft.topics[ti]) return;
+        if (role === 'topic-title') {
+          draft.topics[ti].title = (el.textContent || '').trim() || draft.topics[ti].title;
+        } else if (role === 'lesson-title') {
+          const li = el.closest('.cpt-lesson');
+          const li_ = Number(li?.getAttribute('data-cpt-lesson'));
+          const l = draft.topics[ti].lessons[li_];
+          if (l) l.title = (el.textContent || '').trim() || l.title;
+        }
+      });
+    });
+
+    // icon 按钮：删 lesson / 加 lesson / 删 topic / 上移 topic / 下移 topic
+    treeEl.querySelectorAll('.cpt-icon-btn, .cpt-add-lesson-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const act = btn.getAttribute('data-cpt-act');
+        const ti = Number(btn.getAttribute('data-cpt-topic'));
+        const draft = state.coursePreviewDraft;
+        if (!draft || !draft.topics[ti]) return;
+        const topic = draft.topics[ti];
+        if (act === 'add-lesson') {
+          topic.lessons = topic.lessons || [];
+          topic.lessons.push({
+            id: _tmpId('lesson'),
+            title: '新章节',
+            difficulty: 1,
+            status: 'not-started',
+            filePath: '',
+          });
+          renderCoursePreviewPanel();
+          // 自动聚焦新行末尾
+          requestAnimationFrame(() => {
+            const rows = document.querySelectorAll(`.cpt-topic[data-cpt-topic="${ti}"] .cpt-lesson`);
+            const last = rows[rows.length - 1]?.querySelector('.cpt-lesson-title');
+            if (last) {
+              last.focus();
+              const r = document.createRange();
+              r.selectNodeContents(last);
+              r.collapse(false);
+              const sel = window.getSelection();
+              sel?.removeAllRanges();
+              sel?.addRange(r);
+            }
+          });
+        } else if (act === 'del-lesson') {
+          const li_ = Number(btn.getAttribute('data-cpt-lesson'));
+          topic.lessons.splice(li_, 1);
+          renderCoursePreviewPanel();
+        } else if (act === 'del-topic') {
+          draft.topics.splice(ti, 1);
+          renderCoursePreviewPanel();
+        } else if (act === 'up-topic') {
+          if (ti > 0) {
+            [draft.topics[ti - 1], draft.topics[ti]] = [draft.topics[ti], draft.topics[ti - 1]];
+            renderCoursePreviewPanel();
+          }
+        } else if (act === 'down-topic') {
+          if (ti < draft.topics.length - 1) {
+            [draft.topics[ti + 1], draft.topics[ti]] = [draft.topics[ti], draft.topics[ti + 1]];
+            renderCoursePreviewPanel();
+          }
+        }
+      });
+    });
   }
 
   function clearCoursePreview() {
     state.coursePreview = null;
+    state.coursePreviewDraft = null;
     const refineInput = document.getElementById('course-preview-refine-input');
     if (refineInput) refineInput.value = '';
     renderCoursePreviewPanel();
   }
 
   // refine 按钮
-  document.getElementById('btn-refine-course-preview')?.addEventListener('click', () => {
+  function _submitRefine() {
     if (!state.coursePreview) return;
     const refineInput = document.getElementById('course-preview-refine-input');
     const instruction = (refineInput?.value || '').trim();
@@ -4055,30 +4365,64 @@
       refineInput?.focus();
       return;
     }
+    const cp = state.coursePreview;
+    cp.busy = true;
+    cp.error = '';
+    renderCoursePreviewPanel();
     vscode.postMessage({
       type: 'refineCoursePreview',
-      previewId: state.coursePreview.previewId,
+      previewId: cp.previewId,
       instruction,
     });
+  }
+  document.getElementById('btn-refine-course-preview')?.addEventListener('click', _submitRefine);
+  // Ctrl/Cmd + Enter 提交 refine
+  document.getElementById('course-preview-refine-input')?.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      _submitRefine();
+    }
   });
 
-  // apply 按钮
+  // apply 按钮：把前端编辑过的 draft 一起发回后端
   document.getElementById('btn-apply-course-preview')?.addEventListener('click', () => {
     if (!state.coursePreview) return;
+    _flushCoursePreviewDraftToOutline();
+    const cp = state.coursePreview;
+    cp.busy = true;
+    cp.error = '';
+    renderCoursePreviewPanel();
     vscode.postMessage({
       type: 'applyCoursePreview',
-      previewId: state.coursePreview.previewId,
+      previewId: cp.previewId,
+      outline: cp.outline,
     });
   });
 
-  // discard 按钮
+  // discard 按钮：内联确认
   document.getElementById('btn-discard-course-preview')?.addEventListener('click', () => {
     if (!state.coursePreview) return;
-    vscode.postMessage({
-      type: 'discardCoursePreview',
-      previewId: state.coursePreview.previewId,
-    });
-    clearCoursePreview();
+    const btn = document.getElementById('btn-discard-course-preview');
+    // 第一次点 → 切成"确认丢弃"红字按钮；3 秒内再点才真丢弃
+    if (btn && btn.dataset.confirming === '1') {
+      vscode.postMessage({
+        type: 'discardCoursePreview',
+        previewId: state.coursePreview.previewId,
+      });
+      clearCoursePreview();
+      return;
+    }
+    if (btn) {
+      btn.dataset.confirming = '1';
+      btn.textContent = '再点一次确认丢弃';
+      btn.classList.add('danger');
+      clearTimeout(btn._confirmTimer);
+      btn._confirmTimer = setTimeout(() => {
+        btn.dataset.confirming = '';
+        btn.textContent = '丢弃';
+        btn.classList.remove('danger');
+      }, 3000);
+    }
   });
 
   els.btnRefreshCourses?.addEventListener('click', () => {
@@ -4414,27 +4758,12 @@
   bindAutoSave(els.prefDifficulty);
   bindAutoSave(els.prefExercises);
   bindAutoSave(els.prefSpeed);
-  bindAutoSave(els.prefReview, 'input');
   bindAutoSave(els.mixEasy, 'input');
   bindAutoSave(els.mixMedium, 'input');
   bindAutoSave(els.mixHard, 'input');
   [els.mixEasy, els.mixMedium, els.mixHard].forEach((el) => {
     el?.addEventListener('input', updateMixSumHint);
   });
-
-  if (els.prefDailyGoal && els.prefDailyGoalNum) {
-    els.prefDailyGoal.addEventListener('input', () => {
-      els.prefDailyGoalNum.value = els.prefDailyGoal.value;
-      schedulePreferenceSave();
-    });
-    els.prefDailyGoalNum.addEventListener('input', () => {
-      els.prefDailyGoal.value = els.prefDailyGoalNum.value;
-      schedulePreferenceSave();
-    });
-  }
-
-  els.restDayCheckboxes?.forEach((cb) => bindAutoSave(cb));
-  els.studySlotCheckboxes?.forEach((cb) => bindAutoSave(cb));
 
   // AI 风格与内容
   els.aiDetailLevelRadios?.forEach((r) => bindAutoSave(r));
@@ -4454,9 +4783,6 @@
   bindAutoSave(els.prefLangCode);
 
   // 资料检索
-  bindAutoSave(els.retrievalGroundingDefault);
-  els.retrievalStrictnessRadios?.forEach((r) => bindAutoSave(r));
-  bindAutoSave(els.retrievalCiteDefault);
   if (els.retrievalSnippets) {
     els.retrievalSnippets.addEventListener('input', () => {
       if (els.retrievalSnippetsValue) els.retrievalSnippetsValue.textContent = String(els.retrievalSnippets.value);
@@ -4527,7 +4853,7 @@
   // 讲义阅读体验
   els.lectureReaderModeRadios?.forEach((r) => bindAutoSave(r));
   els.lectureApplyModeRadios?.forEach((r) => bindAutoSave(r));
-  bindAutoSave(els.lectureSyncSource);
+  // lectureSyncSource 选项已禁用（功能未实现），不绑自动保存
   if (els.lectureHighlightDuration) {
     els.lectureHighlightDuration.addEventListener('input', () => {
       const v = els.lectureHighlightDuration.value;
@@ -4852,18 +5178,25 @@
       }
       case 'coursePreview': {
         // AI 生成 / refine 后的预览：缓存到 state，渲染预览面板
+        const wasRefine = !!state.coursePreview;
         state.coursePreview = {
           previewId: msg.previewId,
           subject: msg.subject,
           outline: msg.outline,
           lastRefineInstruction: msg.lastRefineInstruction,
+          busy: false,
+          error: '',
         };
+        state.coursePreviewDraft = null; // 重新 seed 一份可编辑 draft
         renderCoursePreviewPanel();
         // 清空 refine textarea（refine 成功后），让用户可以继续下一轮
         const refineInput = document.getElementById('course-preview-refine-input');
         if (refineInput) refineInput.value = '';
         // 滚到预览面板
         document.getElementById('course-preview-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        if (wasRefine) {
+          showToast('大纲已更新 ✓', 'success');
+        }
         break;
       }
       case 'coursePreviewDiscarded': {
@@ -5105,6 +5438,9 @@
         if (Array.isArray(msg.warnings) && msg.warnings.length) {
           msg.warnings.forEach((w) => addLog('[项目] ' + w, 'warn'));
         }
+        // 清空流式输出区
+        const streamEl = document.getElementById('project-stream-output');
+        if (streamEl) { streamEl.classList.add('hidden'); streamEl.textContent = ''; }
         vscode.postMessage({ type: 'listProjects' });
         // 清空 + 收起创建表单
         const promptEl = document.getElementById('project-prompt');
@@ -5117,6 +5453,8 @@
       case 'projectScaffoldFailed': {
         showToast('生成项目失败：' + (msg.errorMessage || '未知错误'), 'error');
         addLog('[项目] 生成失败：' + (msg.errorMessage || '未知错误'), 'error');
+        const streamEl = document.getElementById('project-stream-output');
+        if (streamEl) { streamEl.classList.add('hidden'); streamEl.textContent = ''; }
         break;
       }
       case 'projectOpened': {
@@ -5134,9 +5472,49 @@
         break;
       }
       case 'projectSpec': {
-        // 暂存到 state；详情视图未实现，留作后续
         state.projectSpecs = state.projectSpecs || {};
         state.projectSpecs[msg.projectId] = msg.spec;
+        // 找到对应卡片的详情容器并渲染（用户可能已展开等结果）
+        const detailEl = document.querySelector(`[data-spec-detail="${CSS.escape(msg.projectId)}"]`);
+        if (detailEl) {
+          renderProjectSpecDetail(detailEl, msg.spec);
+        }
+        break;
+      }
+      case 'projectStreamDelta': {
+        // 流式生成：把 chunk 追加到创建表单的流式输出区
+        const streamEl = document.getElementById('project-stream-output');
+        if (streamEl) {
+          streamEl.classList.remove('hidden');
+          streamEl.textContent += msg.chunk || '';
+          streamEl.scrollTop = streamEl.scrollHeight;
+        }
+        break;
+      }
+      case 'projectTestResult': {
+        const resultEl = document.querySelector(`[data-test-result="${CSS.escape(msg.projectId)}"]`);
+        if (!resultEl) break;
+        const dur = msg.durationMs ? `（${(msg.durationMs / 1000).toFixed(1)}s）` : '';
+        if (msg.total > 0) {
+          const passColor = msg.failed === 0 ? 'success' : 'warn';
+          resultEl.innerHTML = `
+            <div class="pc-test-summary pc-test-${msg.failed === 0 ? 'pass' : 'fail'}">
+              <span class="pc-test-status">${msg.success ? '✓ 全部通过' : '✗ 有失败'}</span>
+              <span class="pc-test-counts">${msg.passed} passed, ${msg.failed} failed, ${msg.total} total ${dur}</span>
+            </div>
+            <details class="pc-test-output"><summary>查看输出</summary><pre>${escapeProjHtml(msg.output || '')}</pre></details>
+          `;
+        } else {
+          // 无法解析 pass/fail，直接显示原始输出
+          resultEl.innerHTML = `
+            <div class="pc-test-summary pc-test-${msg.success ? 'pass' : 'fail'}">
+              <span class="pc-test-status">${msg.success ? '✓ 测试通过' : '✗ 测试失败'}</span>
+              <span class="pc-test-counts">exit ${msg.success ? 0 : 1} ${dur}</span>
+            </div>
+            <details class="pc-test-output"><summary>查看输出</summary><pre>${escapeProjHtml(msg.output || '')}</pre></details>
+          `;
+        }
+        resultEl.classList.remove('hidden');
         break;
       }
       case 'error': {
@@ -5145,6 +5523,12 @@
           state.rebuildModal.applyingPreview = false;
           state.rebuildModal.error = msg.message || '重构请求失败，请稍后重试。';
           renderOutlineRebuildModal();
+        }
+        // 预览面板的 refine / apply 失败时，把错误就近显示在面板里
+        if (state.coursePreview) {
+          state.coursePreview.busy = false;
+          state.coursePreview.error = msg.message || '生成失败，请重试。';
+          renderCoursePreviewPanel();
         }
         addLog(msg.message, 'error');
         break;
@@ -5304,6 +5688,11 @@
   });
 
   state.chatMessages.forEach((message) => appendChat(message.role, message.content, false));
+  // 启动期按 prefs.defaultTab 选择初始 Tab（用户上次选过的）
+  {
+    const initTab = (saved.preferences?.ui?.defaultTab) || 'learn';
+    activateTab(initTab);
+  }
   renderCourseDropdown();
   renderSelectedCourse();
   renderCourseMaterials();
@@ -5318,6 +5707,7 @@
   renderAIProfiles();
   renderWorkspaceAIOverride();
   updateTaskBlockedState();
+  applyTheme('auto'); // 启动期先按 auto，getPreferences 回来后 renderPreferences 会覆盖
 
   refreshCoursePanelData();
   renderWrongQuestions();

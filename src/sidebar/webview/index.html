@@ -151,10 +151,11 @@
         </div>
         <div id="course-preview-tree" class="course-preview-tree"></div>
         <div id="course-preview-projects" class="course-preview-projects"></div>
+        <div id="course-preview-error" class="feedback-line error-text hidden"></div>
 
         <div class="course-preview-refine">
           <label class="form-row">
-            <span class="form-label">不满意？告诉 AI 怎么改</span>
+            <span class="form-label">不满意？告诉 AI 怎么改 <span class="hint">（Ctrl+Enter 提交）</span></span>
             <textarea id="course-preview-refine-input" rows="2" placeholder="如：把"第3章"拆成两章 / 加一节关于 SSR 的 / 把后半段难度调到 challenge / 用 Vitest 替换 Jest"></textarea>
           </label>
           <div class="course-preview-actions">
@@ -162,6 +163,7 @@
             <button class="btn primary success-tone" id="btn-apply-course-preview">✓ 应用大纲</button>
             <button class="btn ghost" id="btn-discard-course-preview">丢弃</button>
           </div>
+          <p class="hint">提示：上方主题 / 课时可直接点击编辑、✕ 删除、↑↓ 重排、＋ 加节，应用时会一并生效。</p>
         </div>
       </div>
     </section>
@@ -214,6 +216,7 @@
           <button class="btn primary" id="btn-create-project">生成项目骨架</button>
           <button class="btn ghost" id="btn-cancel-create-project">取消</button>
         </div>
+        <pre id="project-stream-output" class="project-stream-output hidden" aria-live="polite"></pre>
       </div>
 
       <div id="projects-list" class="projects-list">
@@ -348,11 +351,11 @@
     <!-- 二级 chip：renderSettingsNav 按 cluster 过滤 -->
     <nav class="cc-chip-nav bordered" id="settings-nav" aria-label="设置分组导航"></nav>
 
-    <section class="cc-settings-section settings-group" id="group-pace" data-section="pace" data-cluster="learn" data-section-title="节奏" data-section-sub="每天投入多久、什么时段学习、难度分布" data-active="true">
+    <section class="cc-settings-section settings-group" id="group-pace" data-section="pace" data-cluster="learn" data-section-title="节奏" data-section-sub="难度分布、单次题量、推进速度" data-active="true">
       <header class="cc-settings-section-header">
         <div>
           <h3 class="cc-settings-section-title">学习节奏与目标</h3>
-          <p class="cc-settings-section-sub">每天投入多久、什么时段学习、难度分布</p>
+          <p class="cc-settings-section-sub">难度分布、单次题量、推进速度</p>
         </div>
         <button class="btn ghost small reset-group-btn" type="button" data-reset-group="pace">恢复默认</button>
       </header>
@@ -365,37 +368,6 @@
             <option value="intermediate">进阶</option>
             <option value="challenge">挑战</option>
           </select>
-        </div>
-
-        <div class="setting-row">
-          <label for="pref-daily-goal">每日学习目标分钟数</label>
-          <div class="slider-row">
-            <input type="range" id="pref-daily-goal" min="10" max="240" value="45">
-            <input type="number" id="pref-daily-goal-num" min="10" max="240" value="45" class="num-input">
-            <span class="hint">分钟</span>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>学习时段</label>
-          <div class="check-row">
-            <label class="inline-check"><input type="checkbox" data-study-slot="morning"> 早晨</label>
-            <label class="inline-check"><input type="checkbox" data-study-slot="afternoon"> 午后</label>
-            <label class="inline-check"><input type="checkbox" data-study-slot="evening"> 晚上</label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <label>周休息日</label>
-          <div class="check-row" id="rest-days-row">
-            <label class="inline-check"><input type="checkbox" data-rest-day="0"> 周日</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="1"> 周一</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="2"> 周二</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="3"> 周三</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="4"> 周四</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="5"> 周五</label>
-            <label class="inline-check"><input type="checkbox" data-rest-day="6"> 周六</label>
-          </div>
         </div>
 
         <div class="setting-row">
@@ -427,21 +399,16 @@
         <div class="setting-row">
           <label for="pref-speed">课程推进速度</label>
           <select id="pref-speed">
-            <option value="slow">慢速</option>
+            <option value="slow">慢速（多铺垫、多分步）</option>
             <option value="medium">中速</option>
-            <option value="fast">快速</option>
+            <option value="fast">快速（少铺垫、直入核心）</option>
           </select>
-        </div>
-
-        <div class="setting-row">
-          <label for="pref-review">每学完几课复习一次</label>
-          <input type="number" id="pref-review" value="3" min="1" max="10">
         </div>
 
         <div class="setting-row">
           <label>每学科难度覆盖</label>
           <div id="per-subject-difficulty-list" class="per-subject-list">
-            <p class="hint">尚无已知学科。生成课程后会出现在这里。</p>
+            <p class="hint">尚无已知学科。生成课程后会出现在这里——为单门课单独设难度，会覆盖上面的"整体难度"。</p>
           </div>
         </div>
       </div>
@@ -479,18 +446,18 @@
         <div class="setting-row">
           <label>解释风格（可多选）</label>
           <div class="check-row">
-            <label class="inline-check"><input type="checkbox" data-explain-style="visual"> 可视化</label>
-            <label class="inline-check"><input type="checkbox" data-explain-style="analogy"> 类比</label>
-            <label class="inline-check"><input type="checkbox" data-explain-style="formal"> 严格形式</label>
             <label class="inline-check"><input type="checkbox" data-explain-style="example-first"> 例题先行</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="intuition-first"> 直觉优先</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="formula-first"> 公式优先</label>
+            <label class="inline-check"><input type="checkbox" data-explain-style="rigor-first"> 严谨证明</label>
           </div>
         </div>
 
         <div class="setting-row">
           <label>数学符号习惯</label>
           <div class="check-row" id="ai-math-style">
-            <label class="inline-check"><input type="radio" name="ai-math-style" value="latex" checked> LaTeX</label>
-            <label class="inline-check"><input type="radio" name="ai-math-style" value="plain"> 普通文本</label>
+            <label class="inline-check"><input type="radio" name="ai-math-style" value="english-standard" checked> 英文标准（∀ ∃ ∈ ⊆）</label>
+            <label class="inline-check"><input type="radio" name="ai-math-style" value="chinese"> 中文习惯（「」"故"）</label>
           </div>
         </div>
 
@@ -561,21 +528,7 @@
           <div class="ds-card__header">
             <div class="ds-card__title">📚 资料 Grounding</div>
           </div>
-          <p class="ds-card__subtitle">AI 回答时是否自动附上资料来源 + 严格程度</p>
-          <div class="setting-row">
-            <label class="inline-check"><input type="checkbox" id="retrieval-grounding-default"> 默认启用 grounding</label>
-          </div>
-          <div class="setting-row">
-            <label>检索严格度</label>
-            <div class="check-row" id="retrieval-strictness">
-              <label class="inline-check"><input type="radio" name="retrieval-strictness" value="loose"> 宽松</label>
-              <label class="inline-check"><input type="radio" name="retrieval-strictness" value="balanced" checked> 平衡</label>
-              <label class="inline-check"><input type="radio" name="retrieval-strictness" value="strict"> 严格</label>
-            </div>
-          </div>
-          <div class="setting-row">
-            <label class="inline-check"><input type="checkbox" id="retrieval-cite-default" checked> 默认引用资料来源</label>
-          </div>
+          <p class="ds-card__subtitle">AI 回答时附上资料片段的数量（在对话 Tab 用「当前课程 / 所选资料 / 普通问答」切换是否启用 grounding）</p>
           <div class="setting-row">
             <label for="retrieval-snippets">检索片段数</label>
             <div class="slider-row">
@@ -721,7 +674,7 @@
           </div>
         </div>
         <div class="setting-row">
-          <label class="inline-check"><input type="checkbox" id="lecture-sync-source" checked> 阅读时同步源码</label>
+          <label class="inline-check"><input type="checkbox" id="lecture-sync-source" checked disabled title="该选项暂未启用"> 阅读时同步源码（暂未启用）</label>
         </div>
         <div class="setting-row">
           <label for="lecture-highlight-duration">改动高亮时长（秒）</label>

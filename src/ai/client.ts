@@ -494,6 +494,16 @@ export class AIClient {
       body.stream = true;
     }
 
+    // reasoning_effort：仅 OpenAI o1/o3/o4-mini/gpt-5 系列 reasoning 模型支持。
+    // 非 reasoning 模型（gpt-4o 等）传了会被忽略或报错，所以按模型名过滤。
+    const modelLower = config.model.toLowerCase();
+    const isOpenAIReasoningModel =
+      modelLower.startsWith('o1') || modelLower.startsWith('o3') ||
+      modelLower.startsWith('o4') || modelLower.startsWith('gpt-5');
+    if (isOpenAIReasoningModel && config.reasoningEffort?.trim()) {
+      body.reasoning_effort = config.reasoningEffort.trim().toLowerCase();
+    }
+
     const resp = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: {
@@ -642,6 +652,24 @@ export class AIClient {
     }
     if (useStream) {
       body.stream = true;
+    }
+
+    // Extended thinking：Claude 3.7+ 系列支持。3.5 及更早传 thinking 会 400。
+    const m = config.model.toLowerCase();
+    const supportsThinking =
+      m.includes('3-7') || m.includes('3.7') ||
+      m.includes('sonnet-4') || m.includes('opus-4') || m.includes('haiku-4') ||
+      m.startsWith('claude-4');
+    const effort = config.reasoningEffort?.trim().toLowerCase();
+    if (supportsThinking && effort && effort !== 'none') {
+      const maxTokens = (options?.maxTokens ?? config.maxTokens ?? 4096) as number;
+      const budgetMap: Record<string, number> = { low: 5000, medium: 10000, high: 16000, max: 32000 };
+      const desiredBudget = budgetMap[effort] ?? 10000;
+      const budget = Math.min(desiredBudget, Math.max(1024, maxTokens - 256));
+      if (budget >= 1024 && budget < maxTokens) {
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        body.temperature = 1;
+      }
     }
 
     const resp = await this.fetchWithRetry(url, {
@@ -1128,8 +1156,13 @@ export class AIClient {
     // 控制 thinking budget：Claude 4 系列默认开 Extended Thinking，会吃掉大量
     // output tokens 用于"思考"。给一个 12K 长 system prompt 让它写 2500 字讲义，
     // 它会反复思考"哪些规则要遵守"，最后 output 配额耗尽，只输出末尾几节甚至只剩小结。
-    // --effort low 显著降低 thinking budget，把 output 配额留给最终答案。
-    args.push('--effort', 'low');
+    // effort 从 profile 的 reasoningEffort 读（讲义/大纲/批改/语义分析都走这条）：
+    // low 省 output 配额，high/max 思考更充分但可能吃掉长讲义的输出配额。
+    // 合法值 low/medium/high/max；未设置或非法时回退 low（保持旧默认，避免长 system
+    // prompt 讲义被 thinking 吃爆只剩小结）。
+    const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'max']);
+    const effort = config.reasoningEffort?.trim().toLowerCase();
+    args.push('--effort', effort && VALID_EFFORTS.has(effort) ? effort : 'low');
 
     // Windows cmd.exe 单条命令行最大 8191 字符。讲义生成 system prompt 长 ~9K-12K，
     // 作为 --append-system-prompt 参数传过去就触发 "命令行太长" (exit 1)。

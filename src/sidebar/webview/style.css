@@ -594,6 +594,23 @@ textarea:focus,
   font-weight: 600;
 }
 
+.tree-topic.editing {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -2px;
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.08));
+  cursor: text;
+}
+.tree-topic.confirm-delete {
+  color: var(--vscode-errorForeground, #f48771);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 12%, transparent);
+}
+.tree-btn.confirm-delete {
+  color: var(--vscode-errorForeground, #f48771);
+  border-color: var(--vscode-errorForeground, #f48771) !important;
+  font-weight: 700;
+}
+
 .tree-topic::before {
   content: "▾ ";
   opacity: 0.75;
@@ -2465,6 +2482,7 @@ pre.hljs code,
 .cpt-lesson {
   display: flex;
   gap: 8px;
+  align-items: center;
   font-size: 12px;
   padding: 2px 0;
 }
@@ -2478,6 +2496,70 @@ pre.hljs code,
   font-size: 9px;
   letter-spacing: -2px;
   opacity: 0.7;
+}
+.cpt-topic-title,
+.cpt-lesson-title {
+  outline: none;
+  border-radius: 3px;
+  padding: 1px 3px;
+  cursor: text;
+  min-width: 24px;
+}
+.cpt-topic-title:focus,
+.cpt-lesson-title:focus {
+  background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007fd4);
+}
+.cpt-topic-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0.4;
+  transition: opacity 0.12s;
+}
+.cpt-topic:hover .cpt-topic-actions,
+.cpt-lesson:hover .cpt-icon-btn {
+  opacity: 1;
+}
+.cpt-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+.cpt-icon-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  color: var(--vscode-foreground);
+}
+.cpt-icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.cpt-add-lesson-btn {
+  margin: 4px 0 0 28px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cpt-add-lesson-btn:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+  color: var(--vscode-foreground);
+}
+.cpt-lesson .cpt-icon-btn {
+  opacity: 0;
+  margin-left: 4px;
+}
+.course-preview-actions .btn.danger {
+  color: var(--vscode-errorForeground, #f48771);
+  border-color: var(--vscode-errorForeground, #f48771);
 }
 
 /* 项目提案区（预览面板里 + 课程树里复用） */
@@ -2843,6 +2925,166 @@ pre.hljs code,
 .project-card.proposal-pending {
   border-left: 3px solid color-mix(in srgb, var(--accent, var(--vscode-button-background)) 60%, var(--border));
   background: color-mix(in srgb, var(--accent, var(--vscode-button-background)) 4%, var(--vscode-sideBar-background, transparent));
+}
+
+/* ===== 项目 spec 详情面板（A）===== */
+.project-spec-detail {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 50%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: ds-pop-in var(--motion-enter);
+}
+.pc-spec-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pc-spec-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+}
+.pc-spec-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pc-spec-text {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.pc-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pc-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.pc-file-row code {
+  font-size: 11px;
+}
+.pc-file-role {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.pc-role-boilerplate { background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); color: var(--vscode-foreground); }
+.pc-role-test-skeleton { background: color-mix(in srgb, #4ec9b0 20%, transparent); color: #4ec9b0; }
+.pc-role-user-stub { background: color-mix(in srgb, #ce9178 20%, transparent); color: #ce9178; }
+.pc-role-doc { background: color-mix(in srgb, #569cd6 20%, transparent); color: #569cd6; }
+.pc-stub-density {
+  font-size: 10px;
+  color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+}
+.pc-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pc-todo-row {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+.pc-todo-num {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+  color: var(--vscode-button-foreground, var(--vscode-foreground));
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pc-todo-desc { font-weight: 500; }
+.pc-todo-file code { font-size: 10.5px; color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent); }
+.pc-todo-check { font-size: 11px; color: color-mix(in srgb, var(--vscode-foreground) 65%, transparent); }
+.pc-diff-small { font-size: 10px; }
+
+/* ===== 流式输出（B）===== */
+.project-stream-output {
+  margin-top: 8px;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 70%, transparent);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: color-mix(in srgb, var(--vscode-foreground) 85%, transparent);
+}
+
+/* ===== 测试结果（C）===== */
+.project-test-result {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pc-test-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+}
+.pc-test-pass {
+  background: color-mix(in srgb, #4ec9b0 14%, transparent);
+  color: #4ec9b0;
+  border: 1px solid color-mix(in srgb, #4ec9b0 30%, transparent);
+}
+.pc-test-fail {
+  background: color-mix(in srgb, #f48771 14%, transparent);
+  color: #f48771;
+  border: 1px solid color-mix(in srgb, #f48771 30%, transparent);
+}
+.pc-test-counts {
+  font-weight: 400;
+  font-size: 11.5px;
+}
+.pc-test-output {
+  font-size: 11px;
+}
+.pc-test-output summary {
+  cursor: pointer;
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+  padding: 4px 0;
+}
+.pc-test-output pre {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 
