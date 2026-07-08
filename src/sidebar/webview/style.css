@@ -1723,7 +1723,6 @@ input[type="radio"] + * {
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
-  margin-left: 6px;
   font-size: 10px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--vscode-button-background) 25%, transparent);
@@ -1738,6 +1737,12 @@ input[type="radio"] + * {
   flex-wrap: wrap;
   gap: 4px;
   vertical-align: middle;
+  /* 课程下拉列表项里右对齐：作为 .dropdown-item 直接子元素，
+     配合父级 justify-content: space-between + .dropdown-item-main 的 flex:1
+     把徽章推到右侧，不再和课程名挤在左侧。 */
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  max-width: 60%;
 }
 
 /* 教学法 Tag 选择模态：每个 tag 一行，含描述 */

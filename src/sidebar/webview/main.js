@@ -808,13 +808,16 @@
     const items = state.courses.map((course) => {
       // 只显示 course.title（与下方标题行一致、⋯ 可重命名的那个）；不再附带 subjectLabel，
       // 避免"outline 名 + 课程名"两个名字同时出现。data-subject 仍保留 subject 作内部 key。
+      // tag 徽章作为 .dropdown-item 直接子元素（不在 .dropdown-item-main 内），
+      // 配合父级 justify-content: space-between 让徽章右对齐，不再和课程名堆在左侧。
       const title = course.title || subjectLabel(course.subject);
+      const tagsHtml = renderCourseTagBadges(course.tags);
       return `
         <div class="dropdown-item${course.subject === state.selectedSubject ? ' selected' : ''}" data-subject="${escapeHtml(course.subject)}">
           <span class="dropdown-item-main">
             <span class="dropdown-item-title">${escapeHtml(title)}</span>
-            ${renderCourseTagBadges(course.tags)}
           </span>
+          ${tagsHtml}
         </div>
       `;
     });
