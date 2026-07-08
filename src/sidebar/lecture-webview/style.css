@@ -543,7 +543,10 @@ div.cc-suggest {
 
 .lecture-comment-popover {
   /* position: fixed 让 popover 跟着 chip 一样锚到视口右上角，
-     用户滚动讲义不会改变 popover 位置。 */
+     用户滚动讲义不会改变 popover 位置。
+     Ctrl+滚轮缩放时 body.zoom≠1，但 popover 高度由内容（mode-bar/quote/textarea/
+     actions）决定，本身是 shrink-to-fit，没有写死的 height/max-height，所以不会
+     像 bubble 那样被 zoom 撑出视口；位置由 showPopoverFor 按 scale 换算。 */
   position: fixed;
   z-index: 1001;
   width: 380px;
@@ -700,7 +703,10 @@ div.cc-suggest {
   max-width: calc(100vw - 32px);
   /* 视口高度上限 + 自身滚动：widget 内容超长时让整个 bubble 内部滚（header
      + body + actions 一起），而不是 .bubble-body 单独滚 → 用户拖滚动条
-     永远能看到 header 跟 actions */
+     永远能看到 header 跟 actions。
+     注意：max-height 会被 JS（positionBubble）动态覆盖成按 scale 换算后的值，
+     这里只是兜底（scale=1 时等价）。calc(100vh - 32px) 在 body.zoom≠1 下视觉会
+     被 ×scale，但 JS 覆盖后就不走这条了。 */
   max-height: calc(100vh - 32px);
   overflow-y: auto;
   overflow-x: hidden;

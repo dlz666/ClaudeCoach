@@ -1527,17 +1527,21 @@ canvas { display: block; max-width: 100%; }
     if (!els.popover || !info) return;
     // popover 现在是 position: fixed（与 chip 一致），直接用 viewport 坐标。
     // 不再 + window.scrollY/scrollX —— 之前那么写，用户滚动后位置会漂。
-    let top, left;
+    // 与 bubble 同理：body.zoom 下 style px 会被再 ×scale，÷scale 换算回局部坐标
+    // 才能让视觉位置等于输入。scale=1 时零影响。
+    const scale = _lectureFontScale || 1;
+    const POPOVER_W = 380; // CSS width（局部 px）；视觉宽度 = POPOVER_W × scale
+    let visualTop, visualLeft;
     const chipRect = els.chip?.getBoundingClientRect();
     if (chipRect) {
-      top = chipRect.bottom + 8;                          // 视口顶 + chip 下方 8px
-      left = Math.max(16, chipRect.right - 380);          // 380 = popover 宽度
+      visualTop = chipRect.bottom + 8;                               // chip 下方 8px
+      visualLeft = Math.max(16, chipRect.right - POPOVER_W * scale); // 右对齐 chip
     } else {
-      top = 60;
-      left = Math.max(16, window.innerWidth - 396);
+      visualTop = 60;
+      visualLeft = Math.max(16, window.innerWidth - POPOVER_W * scale - 16);
     }
-    els.popover.style.top = `${top}px`;
-    els.popover.style.left = `${left}px`;
+    els.popover.style.top = `${visualTop / scale}px`;
+    els.popover.style.left = `${visualLeft / scale}px`;
     els.popover.innerHTML = '';
 
     // 三种 mode：rewrite=改这段/整篇 / ask=提问 / idea=记一下想法（不改文件）
@@ -2019,25 +2023,34 @@ canvas { display: block; max-width: 100%; }
     // 永远锚到右上角 chip 下方，视口固定，跟 popover 一致。
     // 之前根据 selection rect 跑，无选区时 anchor=null 直接早返回，bubble 留在 (0,0)
     // 跑到左下角去。现在完全脱钩。
+    //
+    // body { zoom: scale }（Ctrl+滚轮缩放）下，position:fixed 子元素的 style px 值
+    // 会在渲染时再 ×scale。但这里所有输入都是视觉像素——getBoundingClientRect()、
+    // innerWidth/innerHeight 都不受 body CSS zoom 影响。直接把视觉值写进 style 会让
+    // 气泡视觉位置/尺寸 = 输入 ×scale：放大字号后提问，气泡被往下推、max-height 超
+    // 过视口 → 底部按钮被截、内部滚动条拉不动（用户反馈"只能动一点"）。
+    // 解：所有 style 值 ÷scale 换算回局部坐标系，渲染后视觉正好等于输入。scale=1 时零影响。
+    const scale = _lectureFontScale || 1;
     const chipRect = els.chip?.getBoundingClientRect();
-    let top, left;
+    const BUBBLE_W = 440;                  // CSS width（局部 px）；视觉宽度 = BUBBLE_W × scale
+    let visualTop, visualLeft;
     if (chipRect) {
-      top = chipRect.bottom + 8;
-      left = Math.max(16, chipRect.right - 440); // 440 = bubble 宽度
+      visualTop = chipRect.bottom + 8;                            // chip 下方 8px
+      visualLeft = Math.max(16, chipRect.right - BUBBLE_W * scale); // 右对齐 chip，留 ≥16 左边距
     } else {
-      top = 60;
-      left = Math.max(16, window.innerWidth - 456);
+      visualTop = 60;
+      visualLeft = Math.max(16, window.innerWidth - BUBBLE_W * scale - 16); // 右贴边留 16px
     }
-    bubble.style.top = `${top}px`;
-    bubble.style.left = `${left}px`;
+    bubble.style.top = `${visualTop / scale}px`;
+    bubble.style.left = `${visualLeft / scale}px`;
     // max-height 必须按"气泡实际起始 top"动态算，而不是 CSS 里写死的 calc(100vh - 32px)。
     // 气泡锚在 chip 下方（top ≈ 60px+），若 max-height 仍按"贴顶 16px"算，气泡底边会
     // 超出视口约 (top-16)px → 底部的「关闭/采纳/丢弃」按钮被视口截断、滚到底也够不着
     // （用户反馈：要缩放才点得到）。这里把上限收到「视口底部上方 16px」，配合 CSS 的
     // overflow-y:auto，内容超长时气泡内滚，按钮始终在视口内可达。
     const bottomMargin = 16;
-    const maxH = Math.max(180, window.innerHeight - top - bottomMargin);
-    bubble.style.maxHeight = `${maxH}px`;
+    const visualMaxH = Math.max(180, window.innerHeight - visualTop - bottomMargin);
+    bubble.style.maxHeight = `${visualMaxH / scale}px`;
   }
 
   // ===== streaming 状态：每个 turn 一个 buffer，50ms 节流 re-render markdown =====
@@ -2684,6 +2697,10 @@ canvas { display: block; max-width: 100%; }
       wrap.style.zoom = inverseZoom;
     });
     _isZooming = true;
+    // 缩放改变了 body.zoom → position:fixed 的 bubble 视觉位置/尺寸会跟着变。
+    // 立即重定位所有可见 bubble（positionBubble 内部按 scale 换算），治"放大字号
+    // 后 bubble 顶部跑到视口外 / 底部按钮被截、滚动条拉不动"。
+    bubbles.forEach((bubble) => positionBubble(bubble, null));
     if (_zoomEndTimer) clearTimeout(_zoomEndTimer);
     _zoomEndTimer = setTimeout(() => {
       _isZooming = false;
