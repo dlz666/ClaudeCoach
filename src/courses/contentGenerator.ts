@@ -156,16 +156,25 @@ export class ContentGenerator {
   /** 校验并规整 projects 数组：补 id、限定 difficulty 范围、过滤空标题。 */
   private normalizeProjects(projects: any[]): import('../types').CourseProjectProposal[] {
     return (projects || [])
-      .map((p, i) => ({
-        id: typeof p?.id === 'string' && p.id ? p.id : `proposal-${String(i + 1).padStart(2, '0')}`,
-        title: typeof p?.title === 'string' ? p.title : '',
-        description: typeof p?.description === 'string' ? p.description : '',
-        learningGoals: Array.isArray(p?.learningGoals) ? p.learningGoals.filter((g: any) => typeof g === 'string') : [],
-        difficulty: typeof p?.difficulty === 'number' ? Math.max(1, Math.min(5, Math.floor(p.difficulty))) : 3,
-        suggestedTechStack: Array.isArray(p?.suggestedTechStack)
-          ? p.suggestedTechStack.filter((s: any) => typeof s === 'string')
-          : [],
-      }))
+      .map((p, i) => {
+        const capstoneRaw = Number(p?.capstoneChapter);
+        // capstoneChapter：必须是正整数（1-based 章序号）；允许超过章总数（表示"学完整个课程后做"）。
+        // 非 number / NaN / ≤0 一律丢弃，前端按"未标注"处理。
+        const capstoneChapter = Number.isFinite(capstoneRaw) && capstoneRaw >= 1
+          ? Math.floor(capstoneRaw)
+          : undefined;
+        return {
+          id: typeof p?.id === 'string' && p.id ? p.id : `proposal-${String(i + 1).padStart(2, '0')}`,
+          title: typeof p?.title === 'string' ? p.title : '',
+          description: typeof p?.description === 'string' ? p.description : '',
+          learningGoals: Array.isArray(p?.learningGoals) ? p.learningGoals.filter((g: any) => typeof g === 'string') : [],
+          difficulty: typeof p?.difficulty === 'number' ? Math.max(1, Math.min(5, Math.floor(p.difficulty))) : 3,
+          suggestedTechStack: Array.isArray(p?.suggestedTechStack)
+            ? p.suggestedTechStack.filter((s: any) => typeof s === 'string')
+            : [],
+          ...(capstoneChapter ? { capstoneChapter } : {}),
+        };
+      })
       .filter((p) => p.title.trim().length > 0);
   }
 

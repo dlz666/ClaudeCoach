@@ -621,14 +621,16 @@ export function strictCourseOutlinePrompt(subject: Subject, ctx: PromptContext):
       "description": "1-2 句话：要做什么 + 学完能产出什么",
       "learningGoals": ["完成后能 X", "完成后能 Y"],
       "difficulty": 3,
-      "suggestedTechStack": ["TypeScript", "Vitest"]
+      "suggestedTechStack": ["TypeScript", "Vitest"],
+      "capstoneChapter": 3
     }
   ]` : '';
   const projectsRequirements = includeProjects
     ? `- **必须**输出 1 到 3 个 projects 提案。每个提案是一个可以让学生**亲手做**的项目（写代码 / 搭系统 / 实现算法 / 复现论文），不是"读完然后写感想"那种。
 - projects 难度梯度：第 1 个 easy（贯穿前期课时），最后一个 medium-hard（综合多个主题）。
 - projects 不要拘泥于课程已有 topic，可以引入跨主题综合。
-- suggestedTechStack 选项要符合现代主流（2026 年）。`
+- suggestedTechStack 选项要符合现代主流（2026 年）。
+- 每个项目**尽量**标注 capstoneChapter（1-based 章节序号，即该做第几个 topic 之后）：表示"学完这一章后建议动手做这个项目"。easy 项目标靠前的章，medium-hard 综合项目标在最后一章或更后（可以大于章总数，表示"学完全部课程后做"）。只有当项目确实不适合绑到任何一章时才省略该字段。`
     : '';
 
   const userExtras: string[] = [];

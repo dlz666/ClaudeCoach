@@ -3713,11 +3713,16 @@
       .filter((s) => typeof s === 'string' && s.trim())
       .map((s) => `<span class="pc-stack-chip">${escapeProjHtml(s)}</span>`)
       .join('');
+    // capstoneChapter：标"学完第 N 章做这个"，让学生知道时机
+    const capstoneBadge = (typeof p.capstoneChapter === 'number' && p.capstoneChapter > 0)
+      ? `<span class="pc-capstone-badge" title="建议学完本章后做这个项目">📌 第${p.capstoneChapter}章 capstone</span>`
+      : '';
     card.innerHTML = `
       <div class="project-card-header">
         <p class="project-card-title">${escapeProjHtml(p.title || '')}</p>
         <span class="pc-diff" title="AI 评估的实现难度">${stars}</span>
       </div>
+      ${capstoneBadge ? `<div class="pc-capstone-row">${capstoneBadge}</div>` : ''}
       <p class="project-card-desc">${escapeProjHtml(p.description || '')}</p>
       ${stackChips ? `<div class="pc-stack-row">${stackChips}</div>` : ''}
       <div class="project-card-actions">
@@ -4205,16 +4210,21 @@
         projEl.classList.remove('hidden');
         projEl.innerHTML = `
           <div class="cpp-section-title">🛠 推荐项目（应用大纲后可一键落地）</div>
-          ${projects.map((p) => `
+          ${projects.map((p) => {
+            const cap = (typeof p.capstoneChapter === 'number' && p.capstoneChapter > 0)
+              ? `<div class="cpp-capstone-row"><span class="cpp-capstone-badge" title="建议学完本章后做这个项目">📌 第${p.capstoneChapter}章 capstone</span></div>`
+              : '';
+            return `
             <div class="cpp-card">
               <div class="cpp-card-head">
                 <div class="cpp-card-title">${escapeHtml(p.title || '')}</div>
                 <span class="cpp-card-diff">${'⭐'.repeat(Math.max(1, Math.min(5, Number(p.difficulty) || 3)))}</span>
               </div>
+              ${cap}
               <p class="cpp-card-desc">${escapeHtml(p.description || '')}</p>
               ${(p.suggestedTechStack || []).length ? `<div class="cpp-card-stack">${(p.suggestedTechStack || []).map((s) => `<span class="cpp-card-stack-pill">${escapeHtml(s)}</span>`).join('')}</div>` : ''}
-            </div>
-          `).join('')}
+            </div>`;
+          }).join('')}
         `;
       }
     }

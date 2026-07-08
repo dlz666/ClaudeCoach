@@ -2,7 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { CourseOutline, GradeResult, LessonKeyPoints, LessonMeta, Subject, TopicOutline, TopicSummary, WrongQuestion, WrongQuestionBook } from '../types';
 import { readJson, writeJson, ensureDir, fileExists } from '../utils/fileSystem';
-import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver } from '../storage/pathResolver';
+import { StoragePathResolver, buildLessonCode, buildTopicCode, getStoragePathResolver, isCollapsedPlaceholderSlug } from '../storage/pathResolver';
 
 export class CourseManager {
   private readonly paths: StoragePathResolver;
@@ -50,16 +50,35 @@ export class CourseManager {
 
   private resolveTopicCode(topic: TopicOutline, chapterNumber: number): string {
     const candidate = String(topic.code ?? topic.id ?? '').trim().toLowerCase();
-    if (CourseManager.TOPIC_CODE_PATTERN.test(candidate)) {
+    // 即便 candidate 形状合法，如果是塌缩占位符（NN-chapter-topic）也要重算
+    if (CourseManager.TOPIC_CODE_PATTERN.test(candidate) && !CourseManager.isCollapsedTopicCode(candidate)) {
       return candidate;
     }
 
     return buildTopicCode(chapterNumber, topic.title, topic.code ?? topic.id);
   }
 
+  /**
+   * 检查一个已存在的 topic/lesson code 是否是"塌缩占位符"——
+   * 旧版 normalizeOutline 对"已合法的 code 一律原样保留"会导致一门课里所有章都叫
+   * `NN-chapter-topic`（中文标题转不出真 slug → 退到 'topic'）。这些 code 虽然语法
+   * 合规、正则能过，但语义是空的、且彼此重复，应当重算而非保留。
+   */
+  private static isCollapsedTopicCode(code: string): boolean {
+    const m = String(code).match(/^\d{2}-chapter-(.*)$/);
+    if (!m) return false;
+    return isCollapsedPlaceholderSlug(m[1]);
+  }
+
+  private static isCollapsedLessonCode(code: string): boolean {
+    const m = String(code).match(/^\d{2}-\d{2}-(.*)$/);
+    if (!m) return false;
+    return isCollapsedPlaceholderSlug(m[1]);
+  }
+
   private resolveLessonCode(lesson: LessonMeta, chapterNumber: number, lessonNumber: number): string {
     const candidate = String(lesson.code ?? lesson.id ?? '').trim().toLowerCase();
-    if (CourseManager.LESSON_CODE_PATTERN.test(candidate)) {
+    if (CourseManager.LESSON_CODE_PATTERN.test(candidate) && !CourseManager.isCollapsedLessonCode(candidate)) {
       return candidate;
     }
 

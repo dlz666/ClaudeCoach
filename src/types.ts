@@ -302,6 +302,11 @@ export interface CourseProjectProposal {
   suggestedTechStack: string[];
   /** 标记是否已经被用户落地为真正的项目（meta.id）；落地后这里写真 id 防重复创建。 */
   realizedAs?: string;
+  /**
+   * 该项目作为哪一章的 capstone（章节序号，1-based）。可选——不填则视为"课后自由做"，
+   * 填了则表示"学完这一章应该做这个项目"。前端可据此在对应章节末尾渲染项目卡。
+   */
+  capstoneChapter?: number;
 }
 
 export interface TopicOutline {

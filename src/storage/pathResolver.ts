@@ -45,6 +45,19 @@ export function sanitizeSegment(value: string, fallback = 'item'): string {
   return normalized || fallback;
 }
 
+/**
+ * 判断一个 slug 是否是"塌缩占位符"——AI 生成大纲时若 topic/lesson 标题是纯中文，
+ * slug 会退成字面 `topic` / `lesson` / `section` / `unit` / `chapter`，导致同一门课
+ * 所有章/节目录名长得一样（如 01-chapter-topic / 02-chapter-topic …）。
+ * 这些词本身不带任何语义信息，应当视为"没拿到真 slug"，强制走唯一化 fallback。
+ */
+export function isCollapsedPlaceholderSlug(slug: string | undefined | null): boolean {
+  if (!slug) return true;
+  const s = String(slug).trim().toLowerCase();
+  // 纯占位词（topic/lesson/chapter/section/unit）或纯数字（如 "1", "01"）或空
+  return /^(topic|lesson|chapter|section|unit|item|\d+|)$/.test(s);
+}
+
 function extractAsciiSlug(...values: Array<string | undefined>): string {
   for (const value of values) {
     if (!value) {
@@ -57,7 +70,9 @@ function extractAsciiSlug(...values: Array<string | undefined>): string {
         .replace(/\d+/g, ' ')
     , '');
 
-    if (slug) {
+    // 拒收塌缩占位符：sanitizeSegment 兜底成 'item' 的，或剥离后只剩占位词的，
+    // 都不算"真 slug"，让调用方走唯一化 fallback。
+    if (slug && !isCollapsedPlaceholderSlug(slug)) {
       return slug;
     }
   }
@@ -70,7 +85,7 @@ function formatTwoDigits(value: number): string {
 }
 
 export function buildTopicCode(chapterNumber: number, title: string, fallbackId?: string): string {
-  const slug = extractAsciiSlug(title, fallbackId) || 'topic';
+  const slug = extractAsciiSlug(title, fallbackId) || `topic-${formatTwoDigits(chapterNumber)}`;
   return `${formatTwoDigits(chapterNumber)}-chapter-${slug}`;
 }
 
@@ -80,7 +95,7 @@ export function buildLessonCode(
   title: string,
   fallbackId?: string
 ): string {
-  const slug = extractAsciiSlug(title, fallbackId) || 'lesson';
+  const slug = extractAsciiSlug(title, fallbackId) || `lesson-${formatTwoDigits(chapterNumber)}-${formatTwoDigits(lessonNumber)}`;
   return `${formatTwoDigits(chapterNumber)}-${formatTwoDigits(lessonNumber)}-${slug}`;
 }
 

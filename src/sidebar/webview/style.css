@@ -2808,6 +2808,32 @@ pre.hljs code,
   gap: 4px;
   margin-top: 2px;
 }
+.cpp-capstone-row {
+  margin-top: 4px;
+}
+.cpp-capstone-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 18%, transparent);
+  color: var(--vscode-charts-green, #4ec9b0);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 40%, transparent);
+}
+.pc-capstone-row {
+  margin-top: 4px;
+}
+.pc-capstone-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 18%, transparent);
+  color: var(--vscode-charts-green, #4ec9b0);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #4ec9b0) 40%, transparent);
+}
 .pc-stack-chip {
   display: inline-block;
   padding: 2px 8px;
