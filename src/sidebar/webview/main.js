@@ -148,6 +148,12 @@
     wrongQuestions: [],
     lastChatTurnId: null,
     answerSubmitContext: null,
+    answerExercises: [],
+    answerResults: {},
+    answerGrading: false,
+    answerActiveIndex: 0,
+    answerHintsUsed: {},
+    answerPendingIds: new Set(),
     lastOpenedLesson: saved.lastOpenedLesson || null,
     // === 知识点 + lesson 编辑（不持久化，每次 webview 重载重置）===
     editingTopics: new Set(),       // 处于"编辑模式"的 topic ids（lesson 变输入框 + 增删按钮）
@@ -266,6 +272,14 @@
     btnCloseAnswerSubmitModal: $('btn-close-answer-submit-modal'),
     answerSubmitLessonInfo: $('answer-submit-lesson-info'),
     answerSubmitTextarea: $('answer-submit-textarea'),
+    answerQuestionList: $('answer-question-list'),
+    answerQuestionStepper: $('answer-question-stepper'),
+    answerQuestionNav: $('answer-question-nav'),
+    answerQuestionPosition: $('answer-question-position'),
+    btnAnswerPrev: $('btn-answer-prev'),
+    btnAnswerNext: $('btn-answer-next'),
+    answerSubmitProgress: $('answer-submit-progress'),
+    answerSubmitScore: $('answer-submit-score'),
     btnAnswerSubmitSaveDraft: $('btn-answer-submit-save-draft'),
     btnAnswerSubmitClearDraft: $('btn-answer-submit-clear-draft'),
     answerSubmitDraftStatus: $('answer-submit-draft-status'),
@@ -885,13 +899,17 @@
       const editing = state.editingTopics.has(topic.id);
       const lessonsHtml = (topic.lessons || []).map((lesson) => {
         const expanded = state.expandedLessons.has(lesson.id);
+        const lessonStatusClass = lesson.status === 'completed'
+          ? 'completed'
+          : lesson.hasExercises ? 'practice-ready' : (lesson.status || 'not-started');
         const commonData = `
           data-subject="${escapeHtml(course.subject)}"
           data-topic-id="${escapeHtml(topic.id)}"
           data-topic-title="${escapeHtml(topic.title)}"
           data-lesson-id="${escapeHtml(lesson.id)}"
           data-lesson-title="${escapeHtml(lesson.title)}"
-          data-difficulty="${Number(lesson.difficulty) || 1}"`;
+          data-difficulty="${Number(lesson.difficulty) || 1}"
+          data-chapter-number="${Number(topic.chapterNumber) || ''}"`;
         if (editing) {
           // 编辑模式：标题→输入框；右侧增删/上下移动按钮；隐藏讲义/练习/...
           return `
@@ -910,12 +928,13 @@
           <div class="tree-lesson tree-lesson-open" role="button" tabindex="0" ${commonData}>
             <button class="tree-lesson-toggle ${expanded ? 'open' : ''}" title="知识点" ${commonData}>▸</button>
             <span class="tree-lesson-label">
-              <span class="status-dot ${lesson.status || 'not-started'}"></span>
+              <span class="status-dot ${lessonStatusClass}" title="${lesson.status === 'completed' ? '已完成' : lesson.hasExercises ? '练习已生成' : lesson.status === 'in-progress' ? '讲义已生成' : '尚未开始'}"></span>
               ${escapeHtml(lesson.title)}
             </span>
             <span class="tree-actions">
               <button class="tree-btn btn-lesson" ${commonData}>讲义</button>
-              <button class="tree-btn btn-exercise" ${commonData}>练习</button>
+              <button class="tree-btn btn-exercise ${lesson.hasExercises ? 'is-ready' : ''}" title="${lesson.hasExercises ? '打开专注练习室' : '生成练习'}" ${commonData}>练习</button>
+              <button class="tree-btn btn-lesson-more" type="button" title="更多操作" aria-label="更多操作" ${commonData}>⋯</button>
             </span>
           </div>
           ${expanded ? `<div class="lesson-keypoints-panel" data-lesson-id="${escapeHtml(lesson.id)}" data-topic-id="${escapeHtml(topic.id)}" data-subject="${escapeHtml(course.subject)}"></div>` : ''}
@@ -1002,6 +1021,7 @@
           lessonId: d.lessonId,
           lessonTitle: d.lessonTitle,
           difficulty: Number(d.difficulty) || 1,
+          chapterNumber: Number(d.chapterNumber) || undefined,
         });
         state.lastOpenedLesson = {
           subject: d.subject,
@@ -1015,6 +1035,31 @@
     });
 
     els.courseTree.querySelectorAll('.btn-exercise').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const d = button.dataset;
+        vscode.postMessage({
+          type: 'openOrGenerateExercises',
+          subject: d.subject,
+          topicId: d.topicId,
+          topicTitle: d.topicTitle,
+          lessonId: d.lessonId,
+          lessonTitle: d.lessonTitle,
+          count: state.preferences?.pace?.exercisesPerSession || 5,
+          difficulty: Number(d.difficulty) || 1,
+        });
+        state.lastOpenedLesson = {
+          subject: d.subject,
+          topicId: d.topicId,
+          topicTitle: d.topicTitle,
+          lessonId: d.lessonId,
+          lessonTitle: d.lessonTitle,
+        };
+        persist();
+      });
+    });
+
+    els.courseTree.querySelectorAll('.btn-lesson-more').forEach((button) => {
       const wrapper = document.createElement('span');
       wrapper.className = 'lesson-menu';
 
@@ -1023,7 +1068,7 @@
 
       button.classList.add('btn-more');
       button.type = 'button';
-      button.textContent = '...';
+      button.textContent = '⋯';
       button.setAttribute('aria-haspopup', 'menu');
       button.setAttribute('aria-expanded', 'false');
       button.setAttribute('title', '更多操作');
@@ -1032,8 +1077,8 @@
       popover.className = 'lesson-menu-popover';
       popover.setAttribute('role', 'menu');
       popover.innerHTML = `
-        <button class="lesson-menu-action" type="button" role="menuitem" data-action="answer">答题与批改</button>
-        <button class="lesson-menu-action" type="button" role="menuitem" data-action="exercise">练习</button>
+        <button class="lesson-menu-action" type="button" role="menuitem" data-action="answer">打开练习室</button>
+        <button class="lesson-menu-action" type="button" role="menuitem" data-action="exercise">重新生成练习</button>
         <button class="lesson-menu-action" type="button" role="menuitem" data-action="reset">重新学习</button>
         <button class="lesson-menu-action" type="button" role="menuitem" data-action="complete">已完成</button>
       `;
@@ -1062,7 +1107,8 @@
           const action = actionButton.dataset.action;
 
           if (action === 'answer') {
-            openAnswerSubmitModal({
+            vscode.postMessage({
+              type: 'openPracticeRoom',
               subject: d.subject,
               topicId: d.topicId,
               topicTitle: d.topicTitle,
@@ -1074,7 +1120,7 @@
 
           if (action === 'exercise') {
             vscode.postMessage({
-              type: 'openOrGenerateExercises',
+              type: 'generateExercises',
               subject: d.subject,
               topicId: d.topicId,
               topicTitle: d.topicTitle,
@@ -2034,6 +2080,11 @@
       return;
     }
 
+    const dueCount = items.filter((item) => !item.nextReviewAt || Date.parse(item.nextReviewAt) <= Date.now()).length;
+    if (els.btnPracticeWrongQuestions) {
+      els.btnPracticeWrongQuestions.textContent = dueCount > 0 ? `开始今日复习（${dueCount}）` : '提前复习下一题';
+    }
+
     const grouped = {};
     items.forEach((item) => {
       const key = item.lessonTitle || '未命名讲义';
@@ -2046,16 +2097,23 @@
         <div class="wrong-questions-group-title">${escapeHtml(lessonTitle)}</div>
         <ul class="wrong-questions-list-ul">
           ${list.map((item) => {
-            const text = String(item.questionText || '');
+            const text = String(item.prompt || item.questionText || '');
             const truncated = text.length > 100 ? `${text.slice(0, 100)}...` : text;
             const weakness = Array.isArray(item.weaknessTags) ? item.weaknessTags : [];
             const score = Number(item.score);
+            const dueAt = item.nextReviewAt ? new Date(item.nextReviewAt) : null;
+            const dueNow = !dueAt || dueAt.getTime() <= Date.now();
+            const dueLabel = dueNow
+              ? '现在复习'
+              : `${dueAt.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })} 复习`;
+            const reviewProgress = Math.max(0, Math.min(2, Number(item.successfulReviews) || 0));
             return `
               <li class="wrong-question-item" data-id="${escapeHtml(item.id)}">
                 <div class="wrong-question-text">${escapeHtml(truncated)}</div>
                 ${weakness.length ? `<div class="wrong-question-tags">${weakness.map((tag) => `<span class="wrong-question-tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
                 <div class="wrong-question-meta">
                   ${Number.isFinite(score) ? `<span class="wrong-question-score">${escapeHtml(String(score))}</span>` : ''}
+                  <span class="wrong-question-due ${dueNow ? 'is-due' : ''}">${escapeHtml(dueLabel)} · 掌握 ${reviewProgress}/2</span>
                   <button class="wrong-question-resolve" type="button" data-id="${escapeHtml(item.id)}">已解决</button>
                 </div>
               </li>
@@ -2085,9 +2143,10 @@
     vscode.postMessage({ type: 'getWrongQuestions', subject: state.selectedSubject });
   }
 
-  /** 草稿存储 key：按 subject + lessonId 区分。 */
+  /** 草稿存储 key：按课时 + 题组 generationId 区分，防止重新出题后 ex-1 串答案。 */
   function answerDraftKey(ctx) {
-    return `cc-answer-draft:${ctx.subject}:${ctx.topicId}:${ctx.lessonId}`;
+    const base = `cc-answer-draft:${ctx.subject}:${ctx.topicId}:${ctx.lessonId}`;
+    return ctx.generationId ? `${base}:${ctx.generationId}` : base;
   }
 
   function loadAnswerDraft(ctx) {
@@ -2097,13 +2156,16 @@
     } catch { return ''; }
   }
 
-  function saveAnswerDraft(ctx, text) {
+  function saveAnswerDraft(ctx, value) {
     try {
       const cur = vscode.getState() || {};
       const drafts = { ...(cur.answerDrafts || {}) };
       const key = answerDraftKey(ctx);
-      if (text && text.trim()) {
-        drafts[key] = text;
+      const hasValue = typeof value === 'string'
+        ? value.trim().length > 0
+        : value && Object.values(value).some((item) => String(item || '').trim());
+      if (hasValue) {
+        drafts[key] = value;
       } else {
         delete drafts[key];
       }
@@ -2115,40 +2177,274 @@
     saveAnswerDraft(ctx, '');
   }
 
+  function getAnswerDraftMap(ctx) {
+    const savedDraft = loadAnswerDraft(ctx);
+    if (savedDraft && typeof savedDraft === 'object' && !Array.isArray(savedDraft)) {
+      return savedDraft;
+    }
+    const legacy = parseAnswerSubmissions(savedDraft);
+    return Object.fromEntries(legacy.map((item) => [item.exerciseId, item.answer]));
+  }
+
+  function collectPracticeAnswers() {
+    const answers = {};
+    els.answerQuestionList?.querySelectorAll('.practice-answer').forEach((input) => {
+      answers[input.dataset.exerciseId] = input.value || '';
+    });
+    els.answerQuestionList?.querySelectorAll('.practice-choice:checked').forEach((input) => {
+      answers[input.dataset.exerciseId] = input.value || '';
+    });
+    return answers;
+  }
+
+  function setPracticeActiveIndex(index) {
+    if (state.answerSubmitContext) {
+      saveAnswerDraft(state.answerSubmitContext, collectPracticeAnswers());
+    }
+    const max = Math.max(0, state.answerExercises.length - 1);
+    state.answerActiveIndex = Math.max(0, Math.min(max, Number(index) || 0));
+    renderPracticeSession();
+  }
+
+  function renderPracticeStepper() {
+    if (!els.answerQuestionStepper) return;
+    const answers = collectPracticeAnswers();
+    els.answerQuestionStepper.innerHTML = state.answerExercises.map((exercise, index) => {
+      const answered = !!String(answers[exercise.id] || '').trim();
+      const graded = !!state.answerResults[exercise.id];
+      const pending = state.answerPendingIds.has(exercise.id);
+      const className = [
+        'practice-step',
+        index === state.answerActiveIndex ? 'is-active' : '',
+        answered ? 'is-answered' : '',
+        graded ? 'is-graded' : '',
+        pending ? 'is-pending' : '',
+      ].filter(Boolean).join(' ');
+      return `<button class="${className}" type="button" data-practice-index="${index}" aria-label="第 ${index + 1} 题${graded ? '，已批改' : answered ? '，已作答' : ''}">${graded ? '✓' : index + 1}</button>`;
+    }).join('');
+    els.answerQuestionStepper.querySelectorAll('[data-practice-index]').forEach((button) => {
+      button.addEventListener('click', () => setPracticeActiveIndex(Number(button.dataset.practiceIndex)));
+    });
+  }
+
+  function updatePracticeProgress() {
+    const total = state.answerExercises.length;
+    const answers = collectPracticeAnswers();
+    const answered = Object.values(answers).filter((value) => String(value).trim()).length;
+    const graded = Object.keys(state.answerResults).length;
+    const ready = Object.entries(answers).filter(([exerciseId, value]) =>
+      String(value).trim() && !state.answerResults[exerciseId] && !state.answerPendingIds.has(exerciseId)
+    ).length;
+    if (els.answerSubmitProgress) {
+      els.answerSubmitProgress.textContent = total
+        ? `已作答 ${answered}/${total} · 已批改 ${graded}/${total}${state.answerGrading || state.answerPendingIds.size ? ' · AI 正在批改…' : ''}`
+        : '本节还没有可作答的练习';
+    }
+    if (els.btnAnswerSubmitConfirm) {
+      els.btnAnswerSubmitConfirm.disabled = ready === 0 || state.answerGrading || state.answerPendingIds.size > 0;
+      els.btnAnswerSubmitConfirm.textContent = state.answerGrading ? '正在批改…' : `批改其余已作答题目${ready ? `（${ready}）` : ''}`;
+    }
+    if (els.answerQuestionPosition) {
+      els.answerQuestionPosition.textContent = total ? `${state.answerActiveIndex + 1} / ${total}` : '0 / 0';
+    }
+    if (els.btnAnswerPrev) els.btnAnswerPrev.disabled = state.answerActiveIndex <= 0;
+    if (els.btnAnswerNext) els.btnAnswerNext.disabled = state.answerActiveIndex >= total - 1;
+    els.answerQuestionNav?.classList.toggle('hidden', total === 0);
+    renderPracticeStepper();
+  }
+
+  function renderPracticeSession() {
+    if (!els.answerQuestionList) return;
+    const ctx = state.answerSubmitContext;
+    const draft = ctx ? getAnswerDraftMap(ctx) : {};
+    const exercises = state.answerExercises;
+    if (!exercises.length) {
+      els.answerQuestionList.innerHTML = '<div class="hint">尚未生成本节练习。请关闭窗口，在课时菜单中选择“练习”生成后再答题。</div>';
+      updatePracticeProgress();
+      return;
+    }
+    els.answerQuestionList.innerHTML = exercises.map((exercise, index) => {
+      const result = state.answerResults[exercise.id];
+      const score = Number(result?.score);
+      const resultClass = result ? (score >= 80 ? 'is-correct' : 'needs-work') : '';
+      const weaknesses = Array.isArray(result?.weaknesses) ? result.weaknesses : [];
+      const dimensions = Array.isArray(result?.dimensionScores) ? result.dimensionScores : [];
+      const draftAnswer = String(draft[exercise.id] || '');
+      const pending = state.answerPendingIds.has(exercise.id);
+      const disabled = state.answerGrading || pending || !!result;
+      const hints = Array.isArray(exercise.hints) ? exercise.hints : [];
+      const hintsUsed = Math.max(0, Math.min(hints.length, Number(state.answerHintsUsed[exercise.id]) || 0));
+      const answerControl = exercise.type === 'multiple-choice' && Array.isArray(exercise.options) && exercise.options.length
+        ? `<div class="practice-options" role="radiogroup" aria-label="第 ${index + 1} 题选项">${exercise.options.map((option, optionIndex) => {
+            const value = `${String.fromCharCode(65 + optionIndex)}. ${option}`;
+            return `<label class="practice-option ${draftAnswer === value ? 'is-selected' : ''}">
+              <input class="practice-choice" type="radio" name="practice-${escapeHtml(exercise.id)}" data-exercise-id="${escapeHtml(exercise.id)}" value="${escapeHtml(value)}" ${draftAnswer === value ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span class="practice-option-key">${String.fromCharCode(65 + optionIndex)}</span>
+              <span>${escapeHtml(option)}</span>
+            </label>`;
+          }).join('')}</div>`
+        : `${exercise.type === 'code' && exercise.starterCode ? `<pre class="practice-starter-code"><code>${escapeHtml(exercise.starterCode)}</code></pre>` : ''}
+          <textarea class="practice-answer ${exercise.type === 'code' ? 'is-code' : ''}" data-exercise-id="${escapeHtml(exercise.id)}" placeholder="${exercise.type === 'code' ? '在这里补全或重写代码…' : '写下你的推理过程和答案…'}" ${disabled ? 'disabled' : ''}>${escapeHtml(draftAnswer)}</textarea>`;
+      return `
+        <article class="practice-question ${resultClass} ${index === state.answerActiveIndex ? 'is-active' : ''}" data-exercise-card="${escapeHtml(exercise.id)}">
+          <div class="practice-question-head">
+            <span class="practice-question-number">QUESTION ${index + 1}</span>
+            <span>${escapeHtml(exercise.intent || exercise.type || 'free-response')} · 难度 ${Number(exercise.difficulty) || 1}/5${exercise.estimatedMinutes ? ` · ${Number(exercise.estimatedMinutes)} min` : ''}</span>
+          </div>
+          ${exercise.learningObjective ? `<div class="practice-objective">目标：${escapeHtml(exercise.learningObjective)}</div>` : ''}
+          <div class="practice-question-prompt">${renderMarkdown(exercise.prompt || '')}</div>
+          ${answerControl}
+          ${hints.length ? `<div class="practice-hints">
+            ${hints.slice(0, hintsUsed).map((hint, hintIndex) => `<div class="practice-hint"><strong>提示 ${hintIndex + 1}</strong><span>${escapeHtml(hint)}</span></div>`).join('')}
+            ${hintsUsed < hints.length && !result ? `<button class="btn ghost small practice-reveal-hint" type="button" data-exercise-id="${escapeHtml(exercise.id)}">${hintsUsed ? '再看一级提示' : '需要一点提示'}</button>` : ''}
+          </div>` : ''}
+          ${!result ? `<div class="practice-question-actions">
+            <span class="muted">${pending ? 'AI 正在批改本题…' : hintsUsed ? `已使用 ${hintsUsed} 级提示` : '尽量先独立完成'}</span>
+            <button class="btn primary small practice-grade-one" type="button" data-exercise-id="${escapeHtml(exercise.id)}" ${pending || !draftAnswer.trim() ? 'disabled' : ''}>${pending ? '批改中…' : '批改本题'}</button>
+          </div>` : ''}
+          ${result ? `
+            <div class="practice-feedback">
+              <div class="practice-feedback-score">${score >= 80 ? '掌握良好' : '需要巩固'} · ${score}/100</div>
+              <div>${renderMarkdown(result.feedback || '')}</div>
+              ${dimensions.length ? `<div class="practice-dimensions">${dimensions.map((dimension) => {
+                const dimensionScore = Math.max(0, Math.min(100, Number(dimension.score) || 0));
+                return `<div class="practice-dimension">
+                  <div class="practice-dimension-head"><span>${escapeHtml(dimension.name)}</span><strong>${dimensionScore}</strong></div>
+                  <div class="practice-dimension-track"><span style="width:${dimensionScore}%"></span></div>
+                  ${dimension.comment ? `<div class="muted">${escapeHtml(dimension.comment)}</div>` : ''}
+                </div>`;
+              }).join('')}</div>` : ''}
+              ${result.errorDiagnosis ? `<div class="practice-diagnosis"><strong>关键诊断</strong>${escapeHtml(result.errorDiagnosis)}</div>` : ''}
+              ${result.correction ? `<div class="practice-diagnosis"><strong>最小修正</strong>${escapeHtml(result.correction)}</div>` : ''}
+              ${result.nextStep ? `<div class="practice-next-step"><strong>现在做</strong>${escapeHtml(result.nextStep)}</div>` : ''}
+              ${weaknesses.length ? `<ul>${weaknesses.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+              <div class="practice-feedback-actions">
+                <span class="muted">${Number(result.hintsUsed) ? `本次使用 ${Number(result.hintsUsed)} 级提示，需再独立完成一次` : '本次作答已写入练习历史'}</span>
+                <button class="btn ghost small practice-retry-one" type="button" data-exercise-id="${escapeHtml(exercise.id)}">订正本题</button>
+              </div>
+            </div>` : ''}
+        </article>`;
+    }).join('');
+    els.answerQuestionList.querySelectorAll('.practice-question-prompt, .practice-feedback').forEach((node) => renderMath(node));
+    els.answerQuestionList.querySelectorAll('.practice-answer, .practice-choice').forEach((input) => {
+      const eventName = input.classList.contains('practice-choice') ? 'change' : 'input';
+      input.addEventListener(eventName, () => {
+        if (input.classList.contains('practice-choice')) {
+          input.closest('.practice-options')?.querySelectorAll('.practice-option').forEach((option) => option.classList.remove('is-selected'));
+          input.closest('.practice-option')?.classList.add('is-selected');
+        }
+        const card = input.closest('.practice-question');
+        const exerciseId = input.dataset.exerciseId;
+        const answer = String(collectPracticeAnswers()[exerciseId] || '').trim();
+        const gradeButton = card?.querySelector('.practice-grade-one');
+        if (gradeButton) gradeButton.disabled = !answer || state.answerPendingIds.has(exerciseId);
+        updatePracticeProgress();
+        if (_draftAutoSaveTimer) clearTimeout(_draftAutoSaveTimer);
+        _draftAutoSaveTimer = setTimeout(() => {
+          if (!state.answerSubmitContext) return;
+          saveAnswerDraft(state.answerSubmitContext, collectPracticeAnswers());
+          if (els.answerSubmitDraftStatus) els.answerSubmitDraftStatus.textContent = '✓ 已自动保存草稿';
+        }, 800);
+      });
+      if (input.classList.contains('practice-answer')) {
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Tab' && input.classList.contains('is-code')) {
+            event.preventDefault();
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.setRangeText('  ', start, end, 'end');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            return;
+          }
+          if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            event.preventDefault();
+            input.closest('.practice-question')?.querySelector('.practice-grade-one')?.click();
+          }
+        });
+      }
+    });
+    els.answerQuestionList.querySelectorAll('.practice-reveal-hint').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!state.answerSubmitContext) return;
+        saveAnswerDraft(state.answerSubmitContext, collectPracticeAnswers());
+        const exerciseId = button.dataset.exerciseId;
+        state.answerHintsUsed[exerciseId] = (Number(state.answerHintsUsed[exerciseId]) || 0) + 1;
+        renderPracticeSession();
+      });
+    });
+    els.answerQuestionList.querySelectorAll('.practice-grade-one').forEach((button) => {
+      button.addEventListener('click', () => {
+        const ctx = state.answerSubmitContext;
+        const exerciseId = button.dataset.exerciseId;
+        const answer = String(collectPracticeAnswers()[exerciseId] || '').trim();
+        if (!ctx || !answer || state.answerPendingIds.has(exerciseId)) return;
+        saveAnswerDraft(ctx, collectPracticeAnswers());
+        state.answerPendingIds.add(exerciseId);
+        renderPracticeSession();
+        vscode.postMessage({
+          type: 'submitAnswer',
+          subject: ctx.subject,
+          topicId: ctx.topicId,
+          topicTitle: ctx.topicTitle,
+          lessonId: ctx.lessonId,
+          lessonTitle: ctx.lessonTitle,
+          exerciseId,
+          answer,
+          hintsUsed: Number(state.answerHintsUsed[exerciseId]) || 0,
+        });
+      });
+    });
+    els.answerQuestionList.querySelectorAll('.practice-retry-one').forEach((button) => {
+      button.addEventListener('click', () => {
+        const ctx = state.answerSubmitContext;
+        const exerciseId = button.dataset.exerciseId;
+        if (!ctx || !exerciseId) return;
+        const answers = collectPracticeAnswers();
+        answers[exerciseId] = '';
+        saveAnswerDraft(ctx, answers);
+        delete state.answerResults[exerciseId];
+        state.answerHintsUsed[exerciseId] = 0;
+        state.answerActiveIndex = Math.max(0, state.answerExercises.findIndex((item) => item.id === exerciseId));
+        renderPracticeSession();
+        requestAnimationFrame(() => els.answerQuestionList?.querySelector('.practice-question.is-active .practice-answer, .practice-question.is-active .practice-choice')?.focus());
+      });
+    });
+    updatePracticeProgress();
+  }
+
   function openAnswerSubmitModal(ctx) {
     state.answerSubmitContext = ctx;
+    state.answerExercises = [];
+    state.answerResults = {};
+    state.answerGrading = false;
+    state.answerActiveIndex = 0;
+    state.answerHintsUsed = {};
+    state.answerPendingIds = new Set();
     if (els.answerSubmitLessonInfo) {
-      const draft = loadAnswerDraft(ctx);
-      const draftHint = draft ? '（已加载之前保存的草稿）' : '';
-      els.answerSubmitLessonInfo.textContent = `当前讲义：${ctx.lessonTitle}${draftHint}`;
+      els.answerSubmitLessonInfo.textContent = `当前讲义：${ctx.lessonTitle}`;
     }
-    if (els.answerSubmitTextarea) {
-      // 优先恢复草稿
-      els.answerSubmitTextarea.value = loadAnswerDraft(ctx);
-    }
+    if (els.answerQuestionList) els.answerQuestionList.innerHTML = '<div class="hint">正在加载本节练习…</div>';
+    if (els.answerSubmitProgress) els.answerSubmitProgress.textContent = '正在加载练习…';
+    if (els.answerSubmitScore) els.answerSubmitScore.classList.add('hidden');
     if (els.answerSubmitError) {
       els.answerSubmitError.classList.add('hidden');
       els.answerSubmitError.textContent = '';
     }
     els.answerSubmitModal?.classList.remove('hidden');
     els.answerSubmitModal?.setAttribute('aria-hidden', 'false');
-    requestAnimationFrame(() => {
-      els.answerSubmitTextarea?.focus();
-      // 光标移到末尾（让用户继续在草稿后写）
-      try {
-        const len = els.answerSubmitTextarea?.value?.length || 0;
-        els.answerSubmitTextarea?.setSelectionRange(len, len);
-      } catch { /* ignore */ }
+    vscode.postMessage({
+      type: 'getLessonExercises',
+      subject: ctx.subject,
+      topicId: ctx.topicId,
+      lessonId: ctx.lessonId,
+      lessonTitle: ctx.lessonTitle,
     });
   }
 
   function closeAnswerSubmitModal() {
     // 关闭时若有未提交内容，自动保存为草稿（用户没点保存草稿也算）
-    if (state.answerSubmitContext && els.answerSubmitTextarea) {
-      const text = els.answerSubmitTextarea.value || '';
-      if (text.trim()) {
-        saveAnswerDraft(state.answerSubmitContext, text);
-      }
+    if (state.answerSubmitContext && !state.answerGrading) {
+      saveAnswerDraft(state.answerSubmitContext, collectPracticeAnswers());
     }
     state.answerSubmitContext = null;
     els.answerSubmitModal?.classList.add('hidden');
@@ -4468,18 +4764,27 @@
   els.btnRefreshWrongQuestions?.addEventListener('click', () => requestWrongQuestions());
 
   els.btnPracticeWrongQuestions?.addEventListener('click', () => {
-    const last = state.lastOpenedLesson;
     if (!state.selectedSubject) { addLog('请先选择课程。', 'warn'); return; }
-    if (!last || last.subject !== state.selectedSubject) {
-      addLog('请先在课程树中点开任一课时（讲义或练习），再使用错题再练。', 'warn');
+    const wrongs = Array.isArray(state.wrongQuestions) ? state.wrongQuestions : [];
+    const target = wrongs.find((item) => !item.nextReviewAt || Date.parse(item.nextReviewAt) <= Date.now()) || wrongs[0];
+    if (!target) {
+      addLog('当前没有需要复习的错题。', 'info');
       return;
     }
+    state.lastOpenedLesson = {
+      subject: state.selectedSubject,
+      topicId: target.topicId,
+      topicTitle: target.topicTitle || target.topicId,
+      lessonId: target.lessonId,
+      lessonTitle: target.lessonTitle || target.lessonId,
+    };
+    persist();
     vscode.postMessage({
       type: 'practiceWrongQuestions',
       subject: state.selectedSubject,
-      topicId: last.topicId,
-      lessonId: last.lessonId,
-      lessonTitle: last.lessonTitle,
+      topicId: target.topicId,
+      lessonId: target.lessonId,
+      lessonTitle: target.lessonTitle || target.lessonId,
       count: 5,
     });
   });
@@ -4505,6 +4810,8 @@
 
   els.btnCloseAnswerSubmitModal?.addEventListener('click', closeAnswerSubmitModal);
   els.btnAnswerSubmitCancel?.addEventListener('click', closeAnswerSubmitModal);
+  els.btnAnswerPrev?.addEventListener('click', () => setPracticeActiveIndex(state.answerActiveIndex - 1));
+  els.btnAnswerNext?.addEventListener('click', () => setPracticeActiveIndex(state.answerActiveIndex + 1));
   els.answerSubmitModal?.addEventListener('click', (event) => {
     if (event.target === els.answerSubmitModal) closeAnswerSubmitModal();
   });
@@ -4512,10 +4819,18 @@
   els.btnAnswerSubmitConfirm?.addEventListener('click', () => {
     const ctx = state.answerSubmitContext;
     if (!ctx) { closeAnswerSubmitModal(); return; }
-    const submissions = parseAnswerSubmissions(els.answerSubmitTextarea?.value);
+    const submissions = Object.entries(collectPracticeAnswers())
+      .map(([exerciseId, answer]) => ({
+        exerciseId,
+        answer: String(answer || '').trim(),
+        hintsUsed: Number(state.answerHintsUsed[exerciseId]) || 0,
+      }))
+      .filter((item) => item.answer && !state.answerResults[item.exerciseId] && !state.answerPendingIds.has(item.exerciseId));
     if (submissions.length === 0) {
       if (els.answerSubmitError) {
-        els.answerSubmitError.textContent = '没有解析到任何答案。请按"## 第 N 题"格式粘贴。';
+        els.answerSubmitError.textContent = Object.keys(state.answerResults).length
+          ? '当前已作答题目都已批改。请继续完成其他题目。'
+          : '请至少完成一道题再提交。';
         els.answerSubmitError.classList.remove('hidden');
       }
       return;
@@ -4529,17 +4844,16 @@
       lessonTitle: ctx.lessonTitle,
       answers: submissions,
     });
-    // 提交成功后清掉草稿
-    clearAnswerDraft(ctx);
-    closeAnswerSubmitModal();
+    saveAnswerDraft(ctx, collectPracticeAnswers());
+    state.answerGrading = true;
+    renderPracticeSession();
     addLog(`已提交 ${submissions.length} 道答案进入批改队列`, 'info');
   });
 
   els.btnAnswerSubmitSaveDraft?.addEventListener('click', () => {
     const ctx = state.answerSubmitContext;
     if (!ctx) return;
-    const text = els.answerSubmitTextarea?.value || '';
-    saveAnswerDraft(ctx, text);
+    saveAnswerDraft(ctx, collectPracticeAnswers());
     if (els.answerSubmitDraftStatus) {
       const stamp = new Date().toLocaleTimeString();
       els.answerSubmitDraftStatus.textContent = `✓ 草稿已保存（${stamp}）。下次打开此课时答题模态会自动恢复。`;
@@ -4554,7 +4868,11 @@
     const ctx = state.answerSubmitContext;
     if (!ctx) return;
     clearAnswerDraft(ctx);
-    if (els.answerSubmitTextarea) els.answerSubmitTextarea.value = '';
+    els.answerQuestionList?.querySelectorAll('.practice-answer').forEach((input) => { input.value = ''; });
+    els.answerQuestionList?.querySelectorAll('.practice-choice').forEach((input) => { input.checked = false; });
+    els.answerQuestionList?.querySelectorAll('.practice-option').forEach((option) => option.classList.remove('is-selected'));
+    state.answerHintsUsed = {};
+    updatePracticeProgress();
     if (els.answerSubmitDraftStatus) {
       els.answerSubmitDraftStatus.textContent = '✓ 草稿已清空。';
       setTimeout(() => {
@@ -4563,19 +4881,8 @@
     }
   });
 
-  // textarea 输入时 debounce 300ms 自动保存草稿，防止意外丢失
+  // 输入时自动保存草稿，防止意外丢失
   let _draftAutoSaveTimer = null;
-  els.answerSubmitTextarea?.addEventListener('input', () => {
-    if (_draftAutoSaveTimer) clearTimeout(_draftAutoSaveTimer);
-    _draftAutoSaveTimer = setTimeout(() => {
-      const ctx = state.answerSubmitContext;
-      if (!ctx) return;
-      saveAnswerDraft(ctx, els.answerSubmitTextarea.value || '');
-      if (els.answerSubmitDraftStatus) {
-        els.answerSubmitDraftStatus.textContent = '✓ 已自动保存草稿';
-      }
-    }, 800);
-  });
 
   els.btnChatSend?.addEventListener('click', () => {
     const text = (els.chatInput?.value || '').trim();
@@ -5386,6 +5693,17 @@
       }
       case 'gradeResult': {
         addLog(`批改完成，得分 ${msg.result?.score ?? 0}/100`, 'info');
+        if (
+          state.answerSubmitContext
+          && msg.subject === state.answerSubmitContext.subject
+          && msg.topicId === state.answerSubmitContext.topicId
+          && msg.lessonId === state.answerSubmitContext.lessonId
+          && msg.result?.exerciseId
+        ) {
+          state.answerPendingIds.delete(msg.result.exerciseId);
+          state.answerResults[msg.result.exerciseId] = msg.result;
+          renderPracticeSession();
+        }
         break;
       }
       case 'taskStart': {
@@ -5560,8 +5878,78 @@
         renderWrongQuestions();
         break;
       }
+      case 'lessonExercises': {
+        if (
+          !state.answerSubmitContext
+          || state.answerSubmitContext.subject !== msg.subject
+          || state.answerSubmitContext.topicId !== msg.topicId
+          || state.answerSubmitContext.lessonId !== msg.lessonId
+        ) break;
+        state.answerExercises = Array.isArray(msg.data) ? msg.data : [];
+        state.answerSubmitContext.generationId = state.answerExercises[0]?.generationId || undefined;
+        if (els.answerSubmitLessonInfo) {
+          const draft = loadAnswerDraft(state.answerSubmitContext);
+          els.answerSubmitLessonInfo.textContent = `当前讲义：${state.answerSubmitContext.lessonTitle}${draft ? '（已恢复本题组草稿）' : ''}`;
+        }
+        renderPracticeSession();
+        requestAnimationFrame(() => els.answerQuestionList?.querySelector('.practice-answer')?.focus());
+        break;
+      }
       case 'gradingProgress': {
         addLog(`批改中 ${msg.current}/${msg.total}：${msg.lessonTitle || ''}`, 'info');
+        if (
+          state.answerSubmitContext
+          && state.answerSubmitContext.subject === msg.subject
+          && state.answerSubmitContext.topicId === msg.topicId
+          && state.answerSubmitContext.lessonId === msg.lessonId
+          && els.answerSubmitProgress
+        ) {
+          els.answerSubmitProgress.textContent = `正在批改 ${msg.current} / ${msg.total} 题…`;
+        }
+        break;
+      }
+      case 'gradingComplete': {
+        if (
+          !state.answerSubmitContext
+          || state.answerSubmitContext.subject !== msg.subject
+          || state.answerSubmitContext.topicId !== msg.topicId
+          || state.answerSubmitContext.lessonId !== msg.lessonId
+        ) break;
+        state.answerGrading = false;
+        if (els.answerSubmitScore) {
+          els.answerSubmitScore.textContent = `本轮平均 ${msg.averageScore}/100`;
+          els.answerSubmitScore.classList.remove('hidden');
+        }
+        renderPracticeSession();
+        if (els.answerSubmitProgress) {
+          els.answerSubmitProgress.textContent = `已完成 ${msg.succeeded} / ${msg.total} 题 · 查看每题反馈后再针对薄弱点练习`;
+        }
+        break;
+      }
+      case 'gradingFailed': {
+        if (
+          !state.answerSubmitContext
+          || state.answerSubmitContext.subject !== msg.subject
+          || state.answerSubmitContext.topicId !== msg.topicId
+          || state.answerSubmitContext.lessonId !== msg.lessonId
+        ) break;
+        state.answerPendingIds.delete(msg.exerciseId);
+        if (els.answerSubmitError) {
+          els.answerSubmitError.textContent = `第 ${Math.max(1, state.answerExercises.findIndex((item) => item.id === msg.exerciseId) + 1)} 题批改失败：${msg.message || '未知错误'}`;
+          els.answerSubmitError.classList.remove('hidden');
+        }
+        renderPracticeSession();
+        break;
+      }
+      case 'practiceReady': {
+        if (msg.subject !== state.selectedSubject) break;
+        openAnswerSubmitModal({
+          subject: msg.subject,
+          topicId: msg.topicId,
+          topicTitle: msg.topicTitle,
+          lessonId: msg.lessonId,
+          lessonTitle: msg.lessonTitle,
+        });
         break;
       }
       case 'autoDiagnosisRan': {

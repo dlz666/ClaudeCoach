@@ -672,6 +672,65 @@ export class CourseManager {
     return this.paths.courseExerciseGradePath(subject, topicId, sessionId);
   }
 
+  getGradeHistoryDir(subject: Subject, topicId: string, sessionId: string): string {
+    return path.join(path.dirname(this.getGradePath(subject, topicId, sessionId)), 'grades');
+  }
+
+  async archiveExerciseSession(
+    subject: Subject,
+    topicId: string,
+    sessionId: string,
+    reason: 'regenerate' | 'reset',
+    includeAll: boolean = false,
+  ): Promise<string | null> {
+    const sessionDir = path.dirname(this.getExercisePath(subject, topicId, sessionId));
+    if (!(await fileExists(sessionDir))) return null;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archiveDir = path.join(this.paths.courseTopicDir(subject, topicId), 'exercise-history', sessionId, `${stamp}-${reason}`);
+    await ensureDir(archiveDir);
+    if (includeAll) {
+      await fs.cp(sessionDir, archiveDir, { recursive: true });
+      return archiveDir;
+    }
+
+    const candidates = [
+      this.getExercisePath(subject, topicId, sessionId),
+      this.getExerciseJsonPath(subject, topicId, sessionId),
+      this.getFeedbackPath(subject, topicId, sessionId),
+      this.getGradePath(subject, topicId, sessionId),
+    ];
+    let copied = 0;
+    for (const source of candidates) {
+      if (!(await fileExists(source))) continue;
+      await fs.copyFile(source, path.join(archiveDir, path.basename(source)));
+      copied++;
+    }
+    if (copied === 0) {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+      return null;
+    }
+    return archiveDir;
+  }
+
+  async saveGradeResult(
+    subject: Subject,
+    topicId: string,
+    sessionId: string,
+    result: GradeResult,
+  ): Promise<{ latestPath: string; historyPath: string }> {
+    const latestPath = this.getGradePath(subject, topicId, sessionId);
+    const historyDir = this.getGradeHistoryDir(subject, topicId, sessionId);
+    await ensureDir(historyDir);
+    const stamp = (result.gradedAt || new Date().toISOString()).replace(/[:.]/g, '-');
+    const identity = [result.exerciseId, result.generationId].filter(Boolean).join('-').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const historyPath = path.join(historyDir, `${stamp}-${identity || 'grade'}.json`);
+    await Promise.all([
+      writeJson(latestPath, result),
+      writeJson(historyPath, result),
+    ]);
+    return { latestPath, historyPath };
+  }
+
   /**
    * 列出指定 lesson 最近 N 次 grade 结果，按 gradedAt 降序。
    * 用于流式难度：基于最近几道题表现调下一题难度。
@@ -684,22 +743,27 @@ export class CourseManager {
   ): Promise<GradeResult[]> {
     try {
       const sessionId = await this.getDeterministicSessionId(subject, topicId, lessonId);
-      const gradeDir = path.dirname(this.getGradePath(subject, topicId, sessionId));
-      if (!(await fileExists(gradeDir))) return [];
-      const fs = await import('fs/promises');
-      const entries = await fs.readdir(gradeDir);
+      const gradeDir = this.getGradeHistoryDir(subject, topicId, sessionId);
       const candidates: GradeResult[] = [];
-      for (const name of entries) {
-        if (!name.endsWith('.json')) continue;
-        const full = path.join(gradeDir, name);
-        const data = await readJson<GradeResult>(full);
-        if (data && data.gradedAt) candidates.push(data);
+      if (await fileExists(gradeDir)) {
+        const entries = await fs.readdir(gradeDir);
+        for (const name of entries) {
+          if (!name.endsWith('.json')) continue;
+          const data = await readJson<GradeResult>(path.join(gradeDir, name));
+          if (data?.gradedAt) candidates.push(data);
+        }
       }
+      const legacyLatest = await readJson<GradeResult>(this.getGradePath(subject, topicId, sessionId));
+      if (legacyLatest?.gradedAt) candidates.push(legacyLatest);
       // 仅取与本 lesson 关联的（exerciseId 来自该 lessonId）
       const filtered = candidates.filter((g) => g.exerciseId && (g as any).lessonId === sessionId)
         .concat(candidates.filter((g) => !((g as any).lessonId)));
-      filtered.sort((a, b) => (b.gradedAt || '').localeCompare(a.gradedAt || ''));
-      return filtered.slice(0, limit);
+      const unique = Array.from(new Map(filtered.map((grade) => [
+        `${grade.gradedAt}:${grade.exerciseId}:${grade.generationId || ''}`,
+        grade,
+      ])).values());
+      unique.sort((a, b) => (b.gradedAt || '').localeCompare(a.gradedAt || ''));
+      return unique.slice(0, limit);
     } catch {
       return [];
     }
@@ -814,12 +878,12 @@ export class CourseManager {
     }
   }
 
-  private async resolveLessonStatus(
+  private async resolveLessonState(
     subject: Subject,
     topicId: string,
     lessonId: string,
     currentStatus?: LessonMeta['status'],
-  ): Promise<LessonMeta['status']> {
+  ): Promise<{ status: LessonMeta['status']; hasExercises: boolean }> {
     await this.migrateExerciseMarkdownNameIfNeeded(subject, topicId, lessonId);
     const lessonPath = this.getLessonPath(subject, topicId, lessonId);
     const exercisePath = this.getExercisePath(subject, topicId, lessonId);
@@ -833,7 +897,7 @@ export class CourseManager {
         const markdown = await fs.readFile(exercisePath, 'utf-8');
         const sections = this.parseExerciseSections(markdown);
         if (sections.length > 0 && sections.every(section => section.answer.trim() && section.alreadyGraded)) {
-          return 'completed';
+          return { status: 'completed', hasExercises: true };
         }
       } catch {
         // Fall through to file-based status.
@@ -841,10 +905,13 @@ export class CourseManager {
     }
 
     if (currentStatus === 'completed') {
-      return 'completed';
+      return { status: 'completed', hasExercises: exerciseExists };
     }
 
-    return lessonExists || exerciseExists ? 'in-progress' : 'not-started';
+    return {
+      status: lessonExists || exerciseExists ? 'in-progress' : 'not-started',
+      hasExercises: exerciseExists,
+    };
   }
 
   async updateLessonStatus(subject: Subject, topicId: string, lessonId: string, status: LessonMeta['status']): Promise<boolean> {
@@ -874,12 +941,14 @@ export class CourseManager {
     const lessonPath = this.getLessonPath(subject, topicId, lessonId);
     const exerciseDir = path.dirname(this.getExercisePath(subject, topicId, lessonId));
 
+    await this.archiveExerciseSession(subject, topicId, lessonId, 'reset', true);
     await Promise.all([
       fs.rm(lessonPath, { force: true }),
       fs.rm(exerciseDir, { recursive: true, force: true }),
     ]);
 
     await this.updateLessonStatus(subject, topicId, lessonId, 'not-started');
+    await this.syncLessonStatus(subject, topicId, lessonId);
   }
 
   async syncLessonStatus(subject: Subject, topicId: string, lessonId: string): Promise<LessonMeta['status'] | null> {
@@ -896,13 +965,14 @@ export class CourseManager {
       return null;
     }
 
-    const nextStatus = await this.resolveLessonStatus(subject, topicId, lessonId, lesson.status);
-    if (lesson.status !== nextStatus) {
-      lesson.status = nextStatus;
+    const nextState = await this.resolveLessonState(subject, topicId, lessonId, lesson.status);
+    if (lesson.status !== nextState.status || lesson.hasExercises !== nextState.hasExercises) {
+      lesson.status = nextState.status;
+      lesson.hasExercises = nextState.hasExercises;
       await this.saveCourseOutline(subject, outline);
     }
 
-    return nextStatus;
+    return nextState.status;
   }
 
   /**
@@ -940,16 +1010,20 @@ export class CourseManager {
         }
       }
 
-      const nextStatuses = await Promise.all(
+      const nextStates = await Promise.all(
         flat.map(({ topicId, lesson }) =>
-          this.resolveLessonStatus(outline.subject, topicId, lesson.id, lesson.status)
+          this.resolveLessonState(outline.subject, topicId, lesson.id, lesson.status)
         )
       );
 
       let changed = false;
       flat.forEach(({ lesson }, i) => {
-        if (lesson.status !== nextStatuses[i]) {
-          lesson.status = nextStatuses[i];
+        if (
+          lesson.status !== nextStates[i].status
+          || lesson.hasExercises !== nextStates[i].hasExercises
+        ) {
+          lesson.status = nextStates[i].status;
+          lesson.hasExercises = nextStates[i].hasExercises;
           changed = true;
         }
       });
@@ -1003,17 +1077,23 @@ export class CourseManager {
 
   async upsertWrongQuestion(subject: Subject, question: WrongQuestion): Promise<void> {
     const book = await this.getWrongQuestionBook(subject);
-    const existingIndex = book.questions.findIndex(q =>
-      q.exerciseId === question.exerciseId
-      && q.lessonId === question.lessonId
-      && q.topicId === question.topicId
-    );
+    const existingIndex = book.questions.findIndex(q => {
+      if (q.id === question.id) return true;
+      if (question.sourceWrongQuestionId && q.id === question.sourceWrongQuestionId) return true;
+      return !!question.generationId
+        && q.generationId === question.generationId
+        && q.exerciseId === question.exerciseId
+        && q.lessonId === question.lessonId
+        && q.topicId === question.topicId;
+    });
 
     if (existingIndex >= 0) {
       const existing = book.questions[existingIndex];
       book.questions[existingIndex] = {
         ...existing,
         ...question,
+        id: existing.id,
+        prompt: existing.prompt,
         // preserve original first-failure metadata
         firstFailedAt: existing.firstFailedAt || question.firstFailedAt,
         attempts: (existing.attempts ?? 0) + 1,
@@ -1043,6 +1123,31 @@ export class CourseManager {
     await this.saveWrongQuestionBook(subject, book);
   }
 
+  async recordSuccessfulWrongQuestionReview(subject: Subject, questionId: string, score: number): Promise<void> {
+    const book = await this.getWrongQuestionBook(subject);
+    const target = book.questions.find(q => q.id === questionId);
+    if (!target || target.resolved) return;
+
+    const now = new Date();
+    const successfulReviews = (target.successfulReviews ?? 0) + 1;
+    target.successfulReviews = successfulReviews;
+    target.lastReviewScore = score;
+    target.lastAttemptedAt = now.toISOString();
+    target.attempts = (target.attempts ?? 0) + 1;
+
+    if (successfulReviews >= 2) {
+      target.resolved = true;
+      target.resolvedAt = now.toISOString();
+      target.nextReviewAt = undefined;
+    } else {
+      const difficulty = Math.max(1, Math.min(5, Math.round(Number(target.difficulty) || 3)));
+      const intervalDays = difficulty >= 4 ? 2 : difficulty <= 2 ? 5 : 3;
+      target.reviewIntervalDays = intervalDays;
+      target.nextReviewAt = new Date(now.getTime() + intervalDays * 24 * 60 * 60 * 1000).toISOString();
+    }
+    await this.saveWrongQuestionBook(subject, book);
+  }
+
   async listWrongQuestions(
     subject: Subject,
     options?: { topicId?: string; lessonId?: string; onlyUnresolved?: boolean; limit?: number }
@@ -1063,8 +1168,14 @@ export class CourseManager {
       return true;
     });
 
-    // Most recent failures first
-    filtered.sort((a, b) => (b.lastAttemptedAt || '').localeCompare(a.lastAttemptedAt || ''));
+    // Due reviews first, then most recent failures. Old records without a due date
+    // remain visible and are treated as due now for backwards compatibility.
+    filtered.sort((a, b) => {
+      const dueA = a.nextReviewAt || '';
+      const dueB = b.nextReviewAt || '';
+      if (dueA !== dueB) return dueA.localeCompare(dueB);
+      return (b.lastAttemptedAt || '').localeCompare(a.lastAttemptedAt || '');
+    });
 
     if (typeof options?.limit === 'number' && options.limit >= 0) {
       filtered = filtered.slice(0, options.limit);

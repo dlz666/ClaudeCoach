@@ -152,6 +152,16 @@ export function inferRevisionPreferenceTags(message: string): RevisionPreference
 export function normalizeGradeSignals(result: GradeResult): GradeResult {
   const strengths = Array.isArray(result.strengths) ? result.strengths.filter(Boolean) : [];
   const weaknesses = Array.isArray(result.weaknesses) ? result.weaknesses.filter(Boolean) : [];
+  const dimensionScores = Array.isArray(result.dimensionScores)
+    ? result.dimensionScores
+        .filter((item) => item && String(item.name || '').trim())
+        .slice(0, 4)
+        .map((item) => ({
+          name: String(item.name).trim(),
+          score: Math.max(0, Math.min(100, Math.round(Number(item.score) || 0))),
+          comment: item.comment ? String(item.comment).trim() : undefined,
+        }))
+    : [];
   return {
     ...result,
     strengths,
@@ -159,6 +169,7 @@ export function normalizeGradeSignals(result: GradeResult): GradeResult {
     strengthTags: normalizeStrengthTags(result.strengthTags, strengths),
     weaknessTags: normalizeWeaknessTags(result.weaknessTags, weaknesses),
     confidence: result.confidence === 'low' || result.confidence === 'high' ? result.confidence : 'medium',
+    dimensionScores,
   };
 }
 

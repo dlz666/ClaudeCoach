@@ -38,6 +38,14 @@ interface LectureViewerArgs {
   topicTitle: string;
   lessonId: string;
   lessonTitle: string;
+  chapterNumber?: number;
+}
+
+function _buildChapPrefix(args: LectureViewerArgs): string {
+  const idMatch = args.lessonId?.match(/^(\d+)-(\d+)/);
+  const chapN = idMatch ? parseInt(idMatch[1]) : (args.chapterNumber || 1);
+  const lessonX = idMatch ? parseInt(idMatch[2]) : 1;
+  return 'Chap ' + chapN + '.' + lessonX;
 }
 
 interface PanelContext {
@@ -216,6 +224,7 @@ export class LectureWebviewProvider {
       lessonTitle: args.lessonTitle,
       topicTitle: args.topicTitle,
       subject: args.subject,
+      chapPrefix: _buildChapPrefix(args),
       applyMode,
       highlightChangesMs,
       assetBaseUri,

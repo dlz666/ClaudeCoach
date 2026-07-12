@@ -15,6 +15,7 @@
     content: '',
     applyMode: 'preview-confirm',
     highlightChangesMs: 5000,
+    chapPrefix: '',
     /** 当前活跃的 turn（preview 等待用户决定） */
     activeTurns: new Map(),
   };
@@ -1265,6 +1266,7 @@ canvas { display: block; max-width: 100%; }
     toastContainer: document.getElementById('toastContainer'),
     btnReload: document.getElementById('btnReload'),
     btnRevert: document.getElementById('btnRevert'),
+    toc: document.getElementById('lectureToc'),
   };
 
   let currentSelectionInfo = null;
@@ -1285,6 +1287,113 @@ canvas { display: block; max-width: 100%; }
     renderVideoCards(els.body);    // 视频卡片（粘贴 YouTube/B 站 URL 后嵌入的）
     renderSuggestPlaceholders(els.body);  // 讲义生成时 AI 输出的可视化建议块
     attachImageDeleteButtons(els.body);   // 每张图片右上角加 hover 浮现的 ✕ 删除按钮
+    applyChapPrefixAndToc();
+  }
+
+  // ---- h1 前缀 + heading id + TOC 目录 ----
+  var _tocObserver = null;
+
+  function applyChapPrefixAndToc() {
+    var root = els.body;
+    if (!root) return;
+
+    // h1 前缀
+    var h1 = root.querySelector('h1');
+    if (h1 && state.chapPrefix) {
+      h1.textContent = state.chapPrefix + ': ' + (h1.textContent || '');
+    }
+
+    // heading id（slugify）
+    var headings = root.querySelectorAll('h1,h2,h3,h4');
+    var used = {};
+    headings.forEach(function (h) {
+      if (h.id) return; // 已有 id 不覆盖
+      var slug = _slugify(h.textContent || '');
+      if (!slug) slug = 'heading';
+      var id = slug;
+      var n = 2;
+      while (used[id]) { id = slug + '-' + n; n++; }
+      used[id] = true;
+      h.id = id;
+    });
+
+    // TOC
+    _buildToc(root);
+  }
+
+  function _slugify(text) {
+    return String(text)
+      .replace(/<[^>]*>/g, '')          // 去 HTML 标签
+      .replace(/[^\w一-龥\s-]/g, '') // 保留字母数字中文空格短横
+      .trim()
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+  }
+
+  function _buildToc(root) {
+    if (!els.toc) return; // 无 TOC 容器（不应发生，但防御性 return）
+    els.toc.innerHTML = '';
+
+    var headings = root.querySelectorAll('h1,h2,h3,h4');
+    if (!headings.length) { els.toc.innerHTML = ''; return; }
+
+    var ul = document.createElement('ul');
+    ul.className = 'lecture-toc-list';
+
+    headings.forEach(function (h) {
+      var li = document.createElement('li');
+      li.className = 'lecture-toc-item level-' + h.tagName.toLowerCase().substring(1);
+      var a = document.createElement('a');
+      a.href = '#' + (h.id || '');
+      a.className = 'lecture-toc-link';
+      a.textContent = h.textContent || '';
+      a.dataset.tocTarget = h.id || '';
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        var target = document.getElementById(this.dataset.tocTarget);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+
+    els.toc.appendChild(ul);
+
+    // scrollspy: IntersectionObserver
+    if (_tocObserver) { _tocObserver.disconnect(); _tocObserver = null; }
+
+    var links = els.toc.querySelectorAll('.lecture-toc-link');
+    if (!links.length) return;
+
+    // 用 rootMargin 让"标题在视口顶部 1/4 处"算激活
+    _tocObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          var id = entry.target.id;
+          links.forEach(function (link) {
+            link.classList.toggle('lecture-toc-active', link.dataset.tocTarget === id);
+          });
+          // 让 active 项在 TOC 内可见
+          var active = els.toc.querySelector('.lecture-toc-active');
+          if (active) {
+            var tocRect = els.toc.getBoundingClientRect();
+            var linkRect = active.getBoundingClientRect();
+            if (linkRect.top < tocRect.top || linkRect.bottom > tocRect.bottom) {
+              active.scrollIntoView({ block: 'nearest' });
+            }
+          }
+        }
+      });
+    }, {
+      rootMargin: '-20% 0px -70% 0px',
+      threshold: 0,
+    });
+
+    headings.forEach(function (h) {
+      if (h.id) _tocObserver.observe(h);
+    });
   }
 
   /**
@@ -1531,15 +1640,22 @@ canvas { display: block; max-width: 100%; }
     // 才能让视觉位置等于输入。scale=1 时零影响。
     const scale = _lectureFontScale || 1;
     const POPOVER_W = 380; // CSS width（局部 px）；视觉宽度 = POPOVER_W × scale
+    const GAP = 8;         // popover 右边离 chip 左边的视觉间距
     let visualTop, visualLeft;
     const chipRect = els.chip?.getBoundingClientRect();
     if (chipRect) {
-      visualTop = chipRect.bottom + 8;                               // chip 下方 8px
-      visualLeft = Math.max(16, chipRect.right - POPOVER_W * scale); // 右对齐 chip
+      // 紧贴 chip 左侧、顶部与 chip 对齐 —— 用户要"在右上角、蓝色按钮旁边"。
+      // 不再用旧版「chip 下方 + 右对齐 chip」：那会让 380px 宽的框向左下铺开，
+      // 视觉上像"中间靠左"，不贴着 chip。
+      visualTop = chipRect.top;
+      visualLeft = chipRect.left - GAP - POPOVER_W * scale;
     } else {
-      visualTop = 60;
-      visualLeft = Math.max(16, window.innerWidth - POPOVER_W * scale - 16);
+      visualTop = 16;
+      visualLeft = window.innerWidth - POPOVER_W * scale - 16;
     }
+    // 视口过窄、popover 放不到 chip 左边时，左边界兜底 16px（极端情况会与 chip
+    // 重叠，但 .lecture-comment-popover 的 max-width: calc(100vw - 32px) 会收窄）。
+    visualLeft = Math.max(16, visualLeft);
     els.popover.style.top = `${visualTop / scale}px`;
     els.popover.style.left = `${visualLeft / scale}px`;
     els.popover.innerHTML = '';
@@ -2763,6 +2879,7 @@ canvas { display: block; max-width: 100%; }
         state.subject = msg.subject || '';
         state.topicTitle = msg.topicTitle || '';
         state.lessonTitle = msg.lessonTitle || '';
+        state.chapPrefix = msg.chapPrefix || '';
         setHeader(msg);
         renderLecture(msg.content || '');
         flashStatus('已加载', 'info');

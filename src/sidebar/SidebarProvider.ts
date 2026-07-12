@@ -1185,6 +1185,58 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return Array.isArray(exercises) ? exercises : [];
   }
 
+  async loadPracticeRoomExercises(args: import('../types').PracticeRoomArgs): Promise<Exercise[]> {
+    await this.courseManager.migrateExerciseMarkdownNameIfNeeded(args.subject, args.topicId, args.lessonId);
+    return this._loadLessonExercises(args.subject, args.topicId, args.lessonId);
+  }
+
+  async loadPracticeRoomResults(args: import('../types').PracticeRoomArgs): Promise<GradeResult[]> {
+    const exercises = await this._loadLessonExercises(args.subject, args.topicId, args.lessonId);
+    if (!exercises.length) return [];
+    const exerciseIds = new Set(exercises.map((exercise) => exercise.id));
+    const generationId = exercises[0]?.generationId;
+    const grades = await this.courseManager.listRecentLessonGrades(
+      args.subject,
+      args.topicId,
+      args.lessonId,
+      500,
+    );
+    const latest = new Map<string, GradeResult>();
+    for (const grade of grades) {
+      if (!exerciseIds.has(grade.exerciseId) || latest.has(grade.exerciseId)) continue;
+      if (generationId) {
+        if (grade.generationId !== generationId) continue;
+      } else if (grade.generationId) {
+        continue;
+      }
+      latest.set(grade.exerciseId, grade);
+    }
+    return Array.from(latest.values());
+  }
+
+  async gradePracticeRoomAnswer(
+    request: import('../types').PracticeRoomGradeRequest,
+  ): Promise<GradeResult> {
+    const answer = String(request.answer || '').trim();
+    if (!answer) throw new Error('答案不能为空');
+    const result = await this._gradeOneAnswer({
+      subject: request.subject,
+      topicId: request.topicId,
+      topicTitle: request.topicTitle,
+      lessonId: request.lessonId,
+      lessonTitle: request.lessonTitle,
+      exercise: request.exercise,
+      answer,
+      hintsUsed: Math.max(0, Number(request.hintsUsed) || 0),
+    });
+    await this.progressStore.incrementExercises(1);
+    await this.courseManager.syncLessonStatus(request.subject, request.topicId, request.lessonId);
+    await this._refreshCourses();
+    await this._refreshWrongQuestions(request.subject);
+    this._scheduleAutoDiagnosis(request.subject);
+    return result;
+  }
+
   /**
    * 容错匹配：兼容旧练习中 AI 给的 `ex-01` 格式与新 webview 解析出的 `ex-1`。
    * 优先严格相等，其次按尾数字位置（ex-N → 第 N 道），再按尾数字相等（ex-1 ↔ ex-01）。
@@ -1216,6 +1268,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     lessonTitle: string;
     exercise: Exercise;
     answer: string;
+    hintsUsed?: number;
   }): Promise<GradeResult> {
     const [prefs, diag, profile, courseProfileContext] = await Promise.all([
       this.prefsStore.get(),
@@ -1232,7 +1285,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       args.topicId,
       sessionId,
       { profile, preferences: prefs, diagnosis: diag, ...courseProfileContext },
-      { topicTitle: args.topicTitle, lessonTitle: args.lessonTitle, lessonId: args.lessonId },
+      { topicTitle: args.topicTitle, lessonTitle: args.lessonTitle, lessonId: args.lessonId, hintsUsed: args.hintsUsed },
     );
 
     return result;
@@ -1725,6 +1778,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 topicTitle: msg.topicTitle,
                 lessonId: msg.lessonId,
                 lessonTitle: msg.lessonTitle,
+                chapterNumber: msg.chapterNumber,
               });
               if (viewerMode === 'split-both') {
                 await openMarkdownPreview(lessonPath, 'native-preview');
@@ -1800,6 +1854,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 topicTitle: msg.topicTitle,
                 lessonId: msg.lessonId,
                 lessonTitle: msg.lessonTitle,
+                chapterNumber: msg.chapterNumber,
               });
               if (viewerMode === 'split-both') {
                 await openMarkdownPreview(lPath, 'native-preview');
@@ -1821,7 +1876,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
           if (msg.type === 'openOrGenerateExercises') {
             if (await fileExists(expectedPath)) {
-              await openMarkdownPreview(expectedPath);
+              await vscode.commands.executeCommand('claudeCoach.openPracticeRoom', {
+                subject: msg.subject,
+                topicId: msg.topicId,
+                topicTitle: msg.topicTitle,
+                lessonId: msg.lessonId,
+                lessonTitle: msg.lessonTitle,
+              });
               break;
             }
           } else if (await fileExists(expectedPath)) {
@@ -1877,6 +1938,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
                 : `已生成 ${msg.count} 道练习题`,
               level: 'info',
             });
+            await vscode.commands.executeCommand('claudeCoach.openPracticeRoom', {
+              subject: msg.subject,
+              topicId: msg.topicId,
+              topicTitle: msg.topicTitle,
+              lessonId: msg.lessonId,
+              lessonTitle: msg.lessonTitle,
+            });
+          });
+          break;
+        }
+
+        case 'openPracticeRoom': {
+          await vscode.commands.executeCommand('claudeCoach.openPracticeRoom', {
+            subject: msg.subject,
+            topicId: msg.topicId,
+            topicTitle: msg.topicTitle,
+            lessonId: msg.lessonId,
+            lessonTitle: msg.lessonTitle,
           });
           break;
         }
@@ -2062,15 +2141,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             if (!exercise) {
               throw new Error(`未在练习 JSON 中找到 ${exerciseId}`);
             }
-            const result = await this._gradeOneAnswer({
-              subject, topicId, topicTitle, lessonId, lessonTitle, exercise, answer,
-            });
+            let result: GradeResult;
+            try {
+              result = await this._gradeOneAnswer({
+                subject, topicId, topicTitle, lessonId, lessonTitle, exercise, answer,
+                hintsUsed: Math.max(0, Number(msg.hintsUsed) || 0),
+              });
+            } catch (error: any) {
+              this._post({
+                type: 'gradingFailed',
+                subject,
+                topicId,
+                lessonId,
+                exerciseId,
+                message: error?.message || String(error),
+              });
+              throw error;
+            }
             await this.progressStore.incrementExercises(1);
-            this._post({ type: 'gradeResult', result });
+            this._post({ type: 'gradeResult', subject, topicId, lessonId, result });
             this._post({ type: 'log', message: `批改完成，得分 ${result.score}/100`, level: 'info' });
             await this.courseManager.syncLessonStatus(subject, topicId, lessonId);
             await this._refreshCourses();
+            await this._refreshWrongQuestions(subject);
             await this._maybeRunAutoDiagnosis(subject);
+          });
+          break;
+        }
+
+        case 'getLessonExercises': {
+          const subject = msg.subject as Subject;
+          const topicId = String(msg.topicId ?? '');
+          const lessonId = String(msg.lessonId ?? '');
+          if (!subject || !topicId || !lessonId) {
+            this._post({ type: 'log', message: '加载练习缺少必要参数', level: 'warn' });
+            break;
+          }
+          await this.courseManager.migrateExerciseMarkdownNameIfNeeded(subject, topicId, lessonId);
+          const exercises = await this._loadLessonExercises(subject, topicId, lessonId);
+          const safeExercises = exercises.map(({ referenceAnswer: _referenceAnswer, ...exercise }) => exercise);
+          this._post({
+            type: 'lessonExercises',
+            subject,
+            topicId,
+            lessonId,
+            lessonTitle: String(msg.lessonTitle ?? lessonId),
+            data: safeExercises,
           });
           break;
         }
@@ -2083,7 +2199,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           const lessonTitle = String(msg.lessonTitle ?? lessonId);
           const submissions: AnswerSubmission[] = Array.isArray(msg.answers) ? msg.answers : [];
           const valid = submissions
-            .map((item) => ({ exerciseId: String(item?.exerciseId ?? '').trim(), answer: String(item?.answer ?? '').trim() }))
+            .map((item) => ({
+              exerciseId: String(item?.exerciseId ?? '').trim(),
+              answer: String(item?.answer ?? '').trim(),
+              hintsUsed: Math.max(0, Number(item?.hintsUsed) || 0),
+            }))
             .filter((item) => item.exerciseId && item.answer);
 
           if (!subject || !topicId || !lessonId || valid.length === 0) {
@@ -2108,6 +2228,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               }
               this._view?.webview.postMessage({
                 type: 'gradingProgress',
+                subject,
+                topicId,
+                lessonId,
                 current: index + 1,
                 total,
                 lessonTitle,
@@ -2115,11 +2238,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               try {
                 lastResult = await this._gradeOneAnswer({
                   subject, topicId, topicTitle, lessonId, lessonTitle, exercise, answer: submission.answer,
+                  hintsUsed: submission.hintsUsed,
                 });
                 scores.push(lastResult.score);
-                this._post({ type: 'gradeResult', result: lastResult });
+                this._post({ type: 'gradeResult', subject, topicId, lessonId, result: lastResult });
                 succeeded += 1;
               } catch (error: any) {
+                this._post({
+                  type: 'gradingFailed',
+                  subject,
+                  topicId,
+                  lessonId,
+                  exerciseId: submission.exerciseId,
+                  message: error?.message || String(error),
+                });
                 this._post({
                   type: 'log',
                   message: `批改失败 ${submission.exerciseId}：${error?.message || error}`,
@@ -2128,9 +2260,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               }
             }
 
+            const avg = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : 0;
+            this._post({
+              type: 'gradingComplete',
+              subject,
+              topicId,
+              lessonId,
+              succeeded,
+              total,
+              averageScore: avg,
+            });
+
             if (succeeded > 0) {
               await this.progressStore.incrementExercises(succeeded);
-              const avg = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : 0;
               this._post({
                 type: 'log',
                 message: `批改 ${succeeded}/${total} 道完成，平均分 ${avg}`,
@@ -2317,6 +2459,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               message: `已生成 1 道自适应题（最近 ${recentSessionScores.length} 道平均 ${avg} 分 → 难度自调）`,
               level: 'info',
             });
+            await vscode.commands.executeCommand('claudeCoach.openPracticeRoom', {
+              subject,
+              topicId,
+              topicTitle: topicTitle || topicId,
+              lessonId,
+              lessonTitle,
+            });
             await this._refreshCourses();
           });
           break;
@@ -2379,6 +2528,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               type: 'log',
               message: `已基于 ${focusedWrongs.length} 道错题为 ${lessonTitle} 再出 ${count} 道练习`,
               level: 'info',
+            });
+            await vscode.commands.executeCommand('claudeCoach.openPracticeRoom', {
+              subject,
+              topicId,
+              topicTitle: focusedWrongs.find((item) => item.topicId === topicId)?.topicTitle ?? topicId,
+              lessonId,
+              lessonTitle,
             });
           });
           break;
@@ -3021,6 +3177,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             topicTitle: msg.topicTitle,
             lessonId: msg.lessonId,
             lessonTitle: msg.lessonTitle,
+            chapterNumber: msg.chapterNumber,
           });
           break;
         }

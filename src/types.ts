@@ -327,6 +327,8 @@ export interface LessonMeta {
   title: string;
   difficulty: number;
   status: 'not-started' | 'in-progress' | 'completed';
+  /** Whether this lesson currently has a generated 练习.md set. */
+  hasExercises?: boolean;
   filePath: string;
 }
 
@@ -366,10 +368,29 @@ export interface Exercise {
   prompt: string;
   difficulty: number;
   type: 'free-response' | 'multiple-choice' | 'code';
+  /** Distinguishes regenerated sets whose positional ids (ex-1, ex-2) repeat. */
+  generationId?: string;
+  /** Wrong-question records this transfer/review exercise was generated from. */
+  sourceWrongQuestionIds?: string[];
+  learningObjective?: string;
+  intent?: 'retrieval' | 'explain' | 'predict' | 'debug' | 'transfer' | 'synthesis';
+  estimatedMinutes?: number;
+  options?: string[];
+  hints?: string[];
+  evaluationCriteria?: string[];
+  starterCode?: string;
+  language?: string;
+  /** Internal grading anchor. Must be removed before sending exercises to the webview. */
+  referenceAnswer?: string;
 }
 
 export interface GradeResult {
   exerciseId: string;
+  lessonId?: string;
+  generationId?: string;
+  questionPrompt?: string;
+  studentAnswer?: string;
+  hintsUsed?: number;
   score: number;
   feedback: string;
   strengths: string[];
@@ -384,6 +405,14 @@ export interface GradeResult {
    */
   preferenceTags?: RevisionPreferenceTag[];
   confidence?: 'low' | 'medium' | 'high';
+  errorDiagnosis?: string;
+  correction?: string;
+  nextStep?: string;
+  dimensionScores?: Array<{
+    name: string;
+    score: number;
+    comment?: string;
+  }>;
   gradedAt: string;
 }
 
@@ -1007,6 +1036,13 @@ export interface WrongQuestion {
   lastAttemptedAt: string;
   resolved: boolean;
   resolvedAt?: string;
+  generationId?: string;
+  sourceWrongQuestionId?: string;
+  nextReviewAt?: string;
+  reviewIntervalDays?: number;
+  successfulReviews?: number;
+  lastReviewScore?: number;
+  difficulty?: number;
 }
 
 export interface WrongQuestionBook {
@@ -1042,6 +1078,21 @@ export type AdaptiveTriggerReason =
 export interface AnswerSubmission {
   exerciseId: string;
   answer: string;
+  hintsUsed?: number;
+}
+
+export interface PracticeRoomArgs {
+  subject: Subject;
+  topicId: string;
+  topicTitle: string;
+  lessonId: string;
+  lessonTitle: string;
+}
+
+export interface PracticeRoomGradeRequest extends PracticeRoomArgs {
+  exercise: Exercise;
+  answer: string;
+  hintsUsed?: number;
 }
 
 // ===== Grounding Sources =====
@@ -1111,14 +1162,16 @@ export type SidebarCommand =
   | { type: 'deleteTopic'; subject: Subject; topicId: string; topicTitle?: string }
   | { type: 'reorderTopic'; subject: Subject; topicId: string; dir: -1 | 1 }
   | { type: 'generateLesson'; topicId: string; lessonId: string }
-  | { type: 'generateExercises'; lessonId: string; count: number }
+  | { type: 'generateExercises'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; count: number; difficulty: number }
   | { type: 'openOrGenerateLesson'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; difficulty: number }
   | { type: 'openLessonContent'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'openOrGenerateExercises'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; count: number; difficulty: number }
   | { type: 'resetLessonProgress'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string }
   | { type: 'markLessonCompleted'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string }
-  | { type: 'submitAnswer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; exerciseId: string; answer: string }
+  | { type: 'submitAnswer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; exerciseId: string; answer: string; hintsUsed?: number }
   | { type: 'submitAllAnswers'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; answers: AnswerSubmission[] }
+  | { type: 'getLessonExercises'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string }
+  | { type: 'openPracticeRoom'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
   | { type: 'scanAllExercises' }
   | { type: 'reprocessAllMarkdown' }
   | { type: 'retryMaterial'; materialId: string }
@@ -1178,7 +1231,7 @@ export type SidebarCommand =
       baseDifficulty: number;
     }
   // ===== Inline 内联编辑（Phase 1） =====
-  | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
+  | { type: 'openLectureViewer'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string; chapterNumber?: number }
   | { type: 'inlineSuggest'; request: InlineSuggestRequest }
   | { type: 'inlineApply'; request: InlineApplyRequest }
   | { type: 'inlineDismiss'; turnId: string }
@@ -1216,7 +1269,11 @@ export type SidebarResponse =
       warnings?: string[];
     }
   | { type: 'coursePreviewDiscarded'; previewId: string }
-  | { type: 'gradeResult'; result: GradeResult }
+  | { type: 'gradeResult'; subject: Subject; topicId: string; lessonId: string; result: GradeResult }
+  | { type: 'lessonExercises'; subject: Subject; topicId: string; lessonId: string; lessonTitle: string; data: Exercise[] }
+  | { type: 'gradingComplete'; subject: Subject; topicId: string; lessonId: string; succeeded: number; total: number; averageScore: number }
+  | { type: 'practiceReady'; subject: Subject; topicId: string; topicTitle: string; lessonId: string; lessonTitle: string }
+  | { type: 'gradingFailed'; subject: Subject; topicId: string; lessonId: string; exerciseId: string; message: string }
   | { type: 'diagnosis'; data: LatestDiagnosis | null }
   | { type: 'preferences'; data: LearningPreferences }
   | {
@@ -1237,7 +1294,7 @@ export type SidebarResponse =
   | { type: 'aiImportResult'; data: AIImportPreview }
   | { type: 'aiTestResult'; success: boolean; message: string }
   | { type: 'wrongQuestions'; subject?: Subject; data: WrongQuestion[] }
-  | { type: 'gradingProgress'; current: number; total: number; lessonTitle?: string }
+  | { type: 'gradingProgress'; subject: Subject; topicId: string; lessonId: string; current: number; total: number; lessonTitle?: string }
   | { type: 'autoDiagnosisRan'; subject: Subject; reason: AdaptiveTriggerReason }
   | { type: 'groundingSources'; turnId: string; sources: GroundingSource[] }
   // ===== Lesson 知识点响应 =====

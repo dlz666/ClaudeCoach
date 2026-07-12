@@ -29,7 +29,10 @@
       <button class="btn-mini" id="btnReload" title="重新加载">↻</button>
     </div>
   </header>
-  <main id="lectureBody" class="lecture-body markdown-body"></main>
+  <div class="lecture-layout">
+    <main id="lectureBody" class="lecture-body markdown-body"></main>
+    <aside id="lectureToc" class="lecture-toc" aria-label="目录"></aside>
+  </div>
 
   <button id="chip" class="lecture-chip" type="button" title="问 AI / 改写选区（无选区时基于全文）" aria-label="问 AI">💬</button>
   <div id="popover" class="lecture-comment-popover" hidden></div>

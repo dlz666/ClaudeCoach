@@ -4,13 +4,16 @@ import { AIClient } from '../ai/client';
 import { gradePrompt } from '../ai/prompts';
 import { Exercise, GradeResult, Subject } from '../types';
 import { CourseManager } from './courseManager';
-import { readJson, writeText } from '../utils/fileSystem';
+import { readJson } from '../utils/fileSystem';
 import { writeMarkdown } from '../utils/markdown';
 import { ProgressStore } from '../progress/progressStore';
 import { PreferencesStore } from '../progress/preferencesStore';
 import { CourseProfileStore, normalizeGradeSignals } from '../progress/courseProfileStore';
-
-const GRADE_MARKER = '> **Score: ';
+import { recordPracticeOutcome } from './practiceOutcome';
+import {
+  EXERCISE_REVIEW_SCORE_MARKER,
+  upsertExerciseReviewMarkdown,
+} from './exerciseReviewMarkdown';
 
 interface ParsedExerciseSection {
   exerciseIndex: number;
@@ -86,19 +89,30 @@ export class ExerciseScanner {
             profile,
             preferences,
             ...courseProfileContext,
-          });
+          }, exercise.evaluationCriteria, exercise.referenceAnswer);
           const result = await this.ai.chatJson<Omit<GradeResult, 'exerciseId' | 'gradedAt'>>(messages);
           const gradeResult: GradeResult = normalizeGradeSignals({
             ...result,
             exerciseId: exercise.id,
+            lessonId: sessionId,
+            generationId: exercise.generationId,
+            questionPrompt: exercise.prompt,
+            studentAnswer: section.answer,
             gradedAt: new Date().toISOString(),
           });
 
-          updatedMarkdown = this.insertFeedback(updatedMarkdown, section.exerciseIndex, gradeResult);
-          const gradePath = this.courseManager.getGradePath(subject, topicId, sessionId);
-          const feedbackPath = this.courseManager.getFeedbackPath(subject, topicId, sessionId);
-          await writeText(gradePath, JSON.stringify(gradeResult, null, 2));
-          await writeMarkdown(feedbackPath, this.buildFeedbackMarkdown(exercise, gradeResult));
+          updatedMarkdown = upsertExerciseReviewMarkdown(
+            updatedMarkdown,
+            exercise,
+            gradeResult,
+            section.answer,
+          );
+          const { historyPath } = await this.courseManager.saveGradeResult(
+            subject,
+            topicId,
+            sessionId,
+            gradeResult,
+          );
           await this.courseManager.updateTopicSummary(subject, topicId, gradeResult.score, gradeResult.weaknesses);
           await this.courseProfileStore.recordEvent(subject, {
             id: `grade-${topicId}-${sessionId}-${gradeResult.gradedAt}`,
@@ -110,12 +124,21 @@ export class ExerciseScanner {
             summary: `Score ${gradeResult.score}/100. Strengths: ${(gradeResult.strengths ?? []).slice(0, 2).join(', ') || 'none'}. Weaknesses: ${(gradeResult.weaknesses ?? []).slice(0, 3).join(', ') || 'none'}.`,
             weaknessTags: gradeResult.weaknessTags ?? [],
             strengthTags: gradeResult.strengthTags ?? [],
-            rawRefs: [gradePath, feedbackPath],
+            rawRefs: [historyPath, promptPath],
             metadata: {
               score: gradeResult.score,
               confidence: gradeResult.confidence ?? 'medium',
             },
           });
+          await recordPracticeOutcome(
+            this.courseManager,
+            exercise,
+            section.answer,
+            subject,
+            topicId,
+            sessionId,
+            gradeResult,
+          );
           gradedForFile++;
         } catch (error) {
           console.error(`Grade failed for ${exercise.id}:`, error);
@@ -139,13 +162,13 @@ export class ExerciseScanner {
     for (let index = 1; index < parts.length; index += 2) {
       const section = (parts[index] || '') + (parts[index + 1] || '');
       const exerciseIndex = result.length;
-      const alreadyGraded = section.includes(GRADE_MARKER);
+      const alreadyGraded = section.includes(EXERCISE_REVIEW_SCORE_MARKER);
       let answer = '';
 
       const answerMatch = section.match(/>\s*(?:.*answer.*|.*choice.*|.*答案.*|.*选项.*)\n([\s\S]*?)(?:\n---|\n##\s|$)/i);
       if (answerMatch) {
         answer = answerMatch[1].trim();
-        const markerIndex = answer.indexOf(GRADE_MARKER);
+        const markerIndex = answer.indexOf(EXERCISE_REVIEW_SCORE_MARKER);
         if (markerIndex >= 0) {
           answer = answer.slice(0, markerIndex).trim();
         }
@@ -167,50 +190,4 @@ export class ExerciseScanner {
     return result;
   }
 
-  private insertFeedback(markdown: string, exerciseIndex: number, grade: GradeResult): string {
-    const parts = markdown.split(/^(##\s+[^\n]+)/m);
-    const partIndex = 1 + exerciseIndex * 2;
-    if (partIndex + 1 >= parts.length) {
-      return markdown;
-    }
-
-    let sectionContent = parts[partIndex + 1];
-    const feedback = this.buildFeedbackBlock(grade);
-    const separatorIndex = sectionContent.lastIndexOf('\n---');
-
-    if (separatorIndex >= 0) {
-      sectionContent = sectionContent.slice(0, separatorIndex) + '\n\n' + feedback + sectionContent.slice(separatorIndex);
-    } else {
-      sectionContent += '\n\n' + feedback;
-    }
-
-    parts[partIndex + 1] = sectionContent;
-    return parts.join('');
-  }
-
-  private buildFeedbackBlock(grade: GradeResult): string {
-    let feedback = `${GRADE_MARKER}${grade.score}/100**\n>\n`;
-    feedback += `> ${grade.feedback.replace(/\n/g, '\n> ')}\n`;
-    if (grade.strengths.length) {
-      feedback += `>\n> Strengths: ${grade.strengths.join(', ')}\n`;
-    }
-    if (grade.weaknesses.length) {
-      feedback += `>\n> Weaknesses: ${grade.weaknesses.join(', ')}\n`;
-    }
-    return feedback;
-  }
-
-  private buildFeedbackMarkdown(exercise: Exercise, result: GradeResult): string {
-    let markdown = '# Feedback\n\n';
-    markdown += `**Score: ${result.score}/100**\n\n`;
-    markdown += `## Prompt\n\n${exercise.prompt}\n\n`;
-    markdown += `## Detailed Feedback\n\n${result.feedback}\n\n`;
-    if (result.strengths.length) {
-      markdown += `## Strengths\n\n${result.strengths.map(item => `- ${item}`).join('\n')}\n\n`;
-    }
-    if (result.weaknesses.length) {
-      markdown += `## Weaknesses\n\n${result.weaknesses.map(item => `- ${item}`).join('\n')}\n\n`;
-    }
-    return markdown;
-  }
 }

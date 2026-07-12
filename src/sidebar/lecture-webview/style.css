@@ -129,6 +129,57 @@ html, body {
   padding: 28px 40px 120px;
 }
 
+/* ===== 右侧 TOC 目录 ===== */
+.lecture-layout {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 0;
+}
+.lecture-toc {
+  position: sticky;
+  top: 64px;  /* header 高度约 56px + padding，留余量确保在 header 下方 */
+  height: calc(100vh - 64px);
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding: 12px 8px 40px;
+  scrollbar-width: thin;
+  font-size: 13px;
+  z-index: 1;
+}
+.lecture-toc::-webkit-scrollbar { width: 4px; }
+.lecture-toc::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.lecture-toc:empty { display: none; }
+.lecture-toc-list { list-style: none; padding: 0; margin: 0; }
+.lecture-toc-item { padding: 0; }
+.lecture-toc-link {
+  display: block;
+  padding: 4px 8px;
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: color 100ms ease, border-color 100ms ease;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.lecture-toc-link:hover { color: var(--vscode-foreground); }
+.lecture-toc-link.lecture-toc-active {
+  color: var(--vscode-textLink-foreground, #4daafc);
+  border-left-color: var(--vscode-button-background, #0e639c);
+  font-weight: 600;
+}
+.lecture-toc-item.level-3 .lecture-toc-link {
+  padding-left: 18px;
+  font-size: 12px;
+  border-left: 2px solid var(--vscode-button-background, #0e639c);
+  opacity: 0.8;
+}
+.lecture-toc-item.level-4 .lecture-toc-link {
+  padding-left: 28px;
+  font-size: 12px;
+  border-left: 2px solid var(--vscode-button-background, #0e639c);
+  opacity: 0.7;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
@@ -542,7 +593,7 @@ div.cc-suggest {
 /* ===== popover (评论框) ===== */
 
 .lecture-comment-popover {
-  /* position: fixed 让 popover 跟着 chip 一样锚到视口右上角，
+  /* position: fixed 让 popover 锚在 chip 左侧（顶部与 chip 对齐，紧贴右上角），
      用户滚动讲义不会改变 popover 位置。
      Ctrl+滚轮缩放时 body.zoom≠1，但 popover 高度由内容（mode-bar/quote/textarea/
      actions）决定，本身是 shrink-to-fit，没有写死的 height/max-height，所以不会

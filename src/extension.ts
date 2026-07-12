@@ -9,6 +9,7 @@ import { ProgressStore } from './progress/progressStore';
 import { AdaptiveEngine } from './progress/adaptiveEngine';
 import { CourseProfileStore } from './progress/courseProfileStore';
 import { LectureWebviewProvider } from './coach/lectureWebviewProvider';
+import { PracticeWebviewProvider } from './coach/practiceWebviewProvider';
 import { registerInlineEditCommands } from './coach/inlineEdit';
 import { CourseManager } from './courses/courseManager';
 import { MaterialManager } from './materials/materialManager';
@@ -126,6 +127,18 @@ export async function activate(context: vscode.ExtensionContext) {
     progressStore,
     adaptiveEngine,
     courseProfileStore,
+  });
+
+  // ===== 独立专注练习室（编辑器区域 WebviewPanel） =====
+  PracticeWebviewProvider.register(context, context.extensionUri, {
+    loadExercises: (args) => sidebarProvider.loadPracticeRoomExercises(args),
+    loadResults: (args) => sidebarProvider.loadPracticeRoomResults(args),
+    gradeAnswer: (request) => sidebarProvider.gradePracticeRoomAnswer(request),
+    openMarkdown: async (args) => {
+      const sessionId = await courseManager.getDeterministicSessionId(args.subject, args.topicId, args.lessonId);
+      const filePath = courseManager.getExercisePath(args.subject, args.topicId, sessionId);
+      await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(filePath));
+    },
   });
 
   // ===== Inline 编辑命令（Alt+I / 右键 / CodeLens） =====

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}">
+  <link rel="stylesheet" href="{{designSystemUri}}">
+  <link rel="stylesheet" href="{{katexStyleUri}}">
+  <link rel="stylesheet" href="{{hljsStyleUri}}">
+  <link rel="stylesheet" href="{{styleUri}}">
+  <title>专注练习室</title>
+</head>
+<body>
+  <div class="room-shell">
+    <header class="room-header">
+      <div class="room-brand">
+        <span class="room-mark">◎</span>
+        <div>
+          <div class="room-kicker">FOCUS PRACTICE</div>
+          <h1 id="lesson-title">专注练习室</h1>
+        </div>
+      </div>
+      <div class="room-header-actions">
+        <span class="room-status" id="room-status" aria-live="polite">正在加载题组…</span>
+        <button class="room-btn ghost" id="btn-open-markdown" type="button">查看 Markdown</button>
+        <button class="room-btn ghost" id="btn-reload" type="button">刷新题组</button>
+      </div>
+    </header>
+
+    <main class="room-layout">
+      <aside class="room-rail" aria-label="题目导航">
+        <div class="rail-label">题组进度</div>
+        <div id="question-nav" class="question-nav"></div>
+        <div class="rail-summary">
+          <strong id="graded-count">0 / 0</strong>
+          <span>已批改</span>
+        </div>
+      </aside>
+
+      <section class="room-stage">
+        <div class="question-meta">
+          <span id="question-number">QUESTION 1</span>
+          <div class="meta-pills">
+            <span id="question-intent">transfer</span>
+            <span id="question-difficulty">难度 3/5</span>
+            <span id="question-time">约 5 min</span>
+          </div>
+        </div>
+        <div id="question-objective" class="question-objective"></div>
+        <article id="question-prompt" class="question-prompt"></article>
+        <div id="starter-code" class="starter-code hidden"></div>
+        <div id="answer-zone" class="answer-zone"></div>
+        <div id="hint-zone" class="hint-zone"></div>
+        <div class="question-actions">
+          <button class="room-btn ghost" id="btn-hint" type="button">给我一点提示</button>
+          <span class="key-hint">Ctrl/⌘ + Enter 批改本题</span>
+          <button class="room-btn primary" id="btn-grade-one" type="button">批改本题</button>
+        </div>
+        <section id="feedback-zone" class="feedback-zone hidden" aria-live="polite"></section>
+        <nav class="stage-nav" aria-label="上一题和下一题">
+          <button class="room-btn ghost" id="btn-prev" type="button">← 上一题</button>
+          <span id="question-position">1 / 1</span>
+          <button class="room-btn ghost" id="btn-next" type="button">下一题 →</button>
+        </nav>
+      </section>
+
+      <aside class="room-coach">
+        <div class="coach-card">
+          <div class="coach-label">本轮策略</div>
+          <h2>先独立作答，再看提示</h2>
+          <p>提示会被记录。借助提示答对不会直接算作独立掌握，系统会安排下一次检验。</p>
+        </div>
+        <div class="coach-card compact">
+          <div class="coach-label">草稿</div>
+          <p id="draft-status">答案会自动保存到当前题组。</p>
+        </div>
+        <button class="room-btn batch" id="btn-grade-many" type="button">批改所有已作答题目</button>
+      </aside>
+    </main>
+  </div>
+
+  <script nonce="{{nonce}}" src="{{markdownItUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexScriptUri}}"></script>
+  <script nonce="{{nonce}}" src="{{katexAutoRenderUri}}"></script>
+  <script nonce="{{nonce}}" src="{{hljsScriptUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

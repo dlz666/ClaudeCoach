@@ -27,7 +27,7 @@ import {
   subjectLabel,
 } from '../types';
 import { CourseManager } from './courseManager';
-import { writeText } from '../utils/fileSystem';
+import { readJson, writeText } from '../utils/fileSystem';
 import { writeMarkdownAndPreview, buildCourseSummaryMd } from '../utils/markdown';
 
 interface GenerationContext {
@@ -354,16 +354,81 @@ export class ContentGenerator {
     // 课程教学法 tag 的 defaultExerciseMix 覆盖用户全局 exerciseTypeMix
     // （tag 是课程级硬约束，应胜过用户的"通用偏好"）
     const enrichedCtx = this.applyTagExerciseMix(enrichedCtxBase);
+    const sessionId = await this.courseManager.getDeterministicSessionId(subject, topicId, lessonId);
+    const previousExercises = await readJson<Exercise[]>(
+      this.courseManager.getExerciseJsonPath(subject, topicId, sessionId),
+    );
+    const previousPromptBlock = (previousExercises ?? [])
+      .slice(0, 8)
+      .map((exercise, index) => `${index + 1}. ${(exercise.prompt || '').replace(/\s+/g, ' ').slice(0, 140)}`)
+      .filter((line) => line.length > 3)
+      .join('\n');
+    const historyAwareCtx = previousPromptBlock
+      ? {
+          ...enrichedCtx,
+          profileEvidenceSummary: [
+            enrichedCtx.profileEvidenceSummary,
+            `本课时上一题组如下。新题不得与其同构，不得只替换数字、变量、名词或背景：\n${previousPromptBlock}`,
+          ].filter(Boolean).join('\n\n'),
+        }
+      : enrichedCtx;
 
-    const messages = exercisePrompt(subject, lessonTitle, count, adaptiveDifficulty, enrichedCtx);
-    const exercises = await this.ai.chatJson<Exercise[]>(messages);
+    const messages = exercisePrompt(subject, lessonTitle, count, adaptiveDifficulty, historyAwareCtx);
+    const generated = await this.ai.chatJson<Exercise[]>(messages);
+    const seenPrompts = new Set<string>();
+    const allowedTypes = new Set<Exercise['type']>(['free-response', 'multiple-choice', 'code']);
+    const allowedIntents = new Set<NonNullable<Exercise['intent']>>(['retrieval', 'explain', 'predict', 'debug', 'transfer', 'synthesis']);
+    const exercises = (Array.isArray(generated) ? generated : [])
+      .filter((exercise) => exercise && typeof exercise.prompt === 'string' && exercise.prompt.trim().length >= 8)
+      .map((exercise) => {
+        const normalizedPrompt = exercise.prompt.replace(/\s+/g, ' ').trim();
+        const options = Array.isArray(exercise.options)
+          ? exercise.options.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+          : [];
+        const type = allowedTypes.has(exercise.type) ? exercise.type : 'free-response';
+        const finalType: Exercise['type'] = type === 'multiple-choice' && options.length < 2 ? 'free-response' : type;
+        return {
+          ...exercise,
+          prompt: exercise.prompt.trim(),
+          type: finalType,
+          difficulty: Math.max(1, Math.min(5, Math.round(Number(exercise.difficulty) || adaptiveDifficulty))),
+          intent: allowedIntents.has(exercise.intent as NonNullable<Exercise['intent']>) ? exercise.intent : 'transfer',
+          estimatedMinutes: Math.max(2, Math.min(15, Math.round(Number(exercise.estimatedMinutes) || 5))),
+          options: finalType === 'multiple-choice' ? options : [],
+          hints: Array.isArray(exercise.hints) ? exercise.hints.map((item) => String(item).trim()).filter(Boolean).slice(0, 2) : [],
+          evaluationCriteria: Array.isArray(exercise.evaluationCriteria)
+            ? exercise.evaluationCriteria.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
+            : [],
+          starterCode: finalType === 'code' ? String(exercise.starterCode || '') : '',
+          language: finalType === 'code' ? String(exercise.language || '').trim() : '',
+          referenceAnswer: String(exercise.referenceAnswer || '').trim(),
+          _normalizedPrompt: normalizedPrompt,
+        } as Exercise & { _normalizedPrompt: string };
+      })
+      .filter((exercise) => {
+        if (seenPrompts.has(exercise._normalizedPrompt)) return false;
+        seenPrompts.add(exercise._normalizedPrompt);
+        return true;
+      })
+      .slice(0, Math.max(1, count))
+      .map(({ _normalizedPrompt, ...exercise }) => exercise as Exercise);
+
+    if (exercises.length === 0) {
+      throw new Error('AI 未生成可用练习题：题目为空、过短或格式无效');
+    }
 
     // Assign lesson IDs. 强制按位置规范化为 `ex-${i+1}`，不保留 AI 可能给的 `ex-01` 等格式，
     // 否则前端"## 第 N 题"解析出的 `ex-N` 与后端 id 对不上，submitAllAnswers 会全部跳过。
-    const sessionId = await this.courseManager.getDeterministicSessionId(subject, topicId, lessonId);
+    const generationId = `gen-${Date.now().toString(36)}`;
+    const validWrongQuestionIds = new Set(focused.map((item) => item.id));
     exercises.forEach((ex, i) => {
       ex.id = `ex-${i + 1}`;
       ex.lessonId = sessionId;
+      ex.generationId = generationId;
+      const declaredSources = Array.isArray(ex.sourceWrongQuestionIds) ? ex.sourceWrongQuestionIds : [];
+      ex.sourceWrongQuestionIds = Array.from(new Set(
+        declaredSources.filter((id) => validWrongQuestionIds.has(id))
+      ));
     });
 
     // Write exercises as markdown
@@ -372,16 +437,25 @@ export class ContentGenerator {
       md += `## 第 ${i + 1} 题 (难度 ${'★'.repeat(ex.difficulty)}${'☆'.repeat(5 - ex.difficulty)})\n\n`;
       md += `${ex.prompt}\n\n`;
       if (ex.type === 'multiple-choice') {
+        if (ex.options?.length) {
+          md += `${ex.options.map((option, optionIndex) => `${String.fromCharCode(65 + optionIndex)}. ${option}`).join('\n')}\n\n`;
+        }
         md += `> 请在下方写出你的选择\n\n`;
       } else if (ex.type === 'code') {
-        md += '```\n// 请在此处写出你的代码\n```\n\n';
+        md += `\`\`\`${ex.language || ''}\n${ex.starterCode || '// 请在此处写出你的代码'}\n\`\`\`\n\n`;
       } else {
         md += `> 请在下方写出你的答案\n\n`;
+      }
+      if (ex.hints?.length) {
+        ex.hints.forEach((hint, hintIndex) => {
+          md += `<details><summary>提示 ${hintIndex + 1}</summary>\n\n${hint}\n\n</details>\n\n`;
+        });
       }
       md += `---\n\n`;
     });
 
     const filePath = this.courseManager.getExercisePath(subject, topicId, sessionId);
+    await this.courseManager.archiveExerciseSession(subject, topicId, sessionId, 'regenerate');
     await writeMarkdownAndPreview(filePath, md);
 
     // Save exercises JSON alongside
@@ -498,7 +572,7 @@ export class ContentGenerator {
       const promptSnippet = truncate(q.prompt, 80);
       const weaknessText = (q.weaknesses ?? []).filter(Boolean).join('、') || '未标注';
       const feedbackSnippet = truncate(q.feedback ?? '', 100);
-      return `- 题${idx + 1}：${promptSnippet}。薄弱点：${weaknessText}。AI 反馈：${feedbackSnippet}`;
+      return `- 题${idx + 1}：[sourceWrongQuestionId=${q.id}] ${promptSnippet}。薄弱点：${weaknessText}。AI 反馈：${feedbackSnippet}`;
     });
 
     const block = `${heading}：\n${lines.join('\n')}`;

@@ -1290,17 +1290,39 @@ export function exercisePrompt(subject: Subject, lessonTitle: string, count: num
     "id": "ex-01",
     "prompt": "题目内容",
     "type": "free-response",
-    "difficulty": ${difficulty}
+    "difficulty": ${difficulty},
+    "learningObjective": "这道题检验的单一核心能力",
+    "intent": "transfer",
+    "estimatedMinutes": 6,
+    "sourceWrongQuestionIds": [],
+    "options": [],
+    "hints": ["只指出切入点的提示", "给出关键方法但不直接给答案"],
+    "evaluationCriteria": ["可观察的得分标准1", "可观察的得分标准2"],
+    "starterCode": "",
+    "language": "",
+    "referenceAnswer": "供批改使用的简洁参考答案或答案要点"
   }
 ]
 要求：
 - type 可选：free-response、multiple-choice、code
+- intent 只能从 retrieval、explain、predict、debug、transfer、synthesis 中选择
 - 生成 ${count} 道题
 - 难度围绕 ${difficulty}/5
+- 题目少而精，避免只考术语回忆；题数允许时至少包含一道预测/纠错题和一道迁移题
+- 每题只设置一个清晰的核心目标，题目之间不能只是替换数字、名词或代码变量
+- 题面必须自洽、条件充分、可判分；不要泄露答案，也不要要求学生猜出题者意图
+- estimatedMinutes 应为 2-15 分钟的现实估计
+- 每题给 1-2 条渐进提示：第一条只提示切入点，第二条提示关键方法；两条都不能直接泄露最终答案
+- evaluationCriteria 给出 2-4 条可观察、可区分部分得分的标准，供批改模型使用，不要写空泛要求
+- multiple-choice 必须把选项放在 options 数组中，通常为 4 项；干扰项应对应真实易错点，不能靠措辞或长度暴露答案
+- 非选择题的 options 必须为空数组；代码题可提供最小 starterCode 和 language，不能在 starterCode 中写出核心解法
+- referenceAnswer 每题必填：选择题写“字母. 选项全文”，主观题写关键步骤和结论，代码题写核心正确性标准；它只供后端批改，不得出现在 prompt、hints 或 starterCode 中
+- 如果上下文含 sourceWrongQuestionId，针对某道历史错题生成的变式必须把对应 ID 放入 sourceWrongQuestionIds；没有明确对应关系时返回空数组，严禁猜测或编造 ID
 - 如果资料中的参考习题有明确章节映射、题型风格或考点分布，请优先借鉴这些信息重新命题，不要复制原题
 - 题目要明显贴合学生当前水平、学习目标、学习偏好和最近薄弱点
 - 如果生成选择题，不要把所有题都做成选择题；尽量保证题型有区分度
 - 如果生成代码题，只在当前学科或资料内容明显适合代码表达时使用
+- 输出前在内部自检：题目之间不重复、条件充分、存在明确可判分答案、题型和认知动作有区分；不要输出自检过程
 - 只输出 JSON`,
     },
     {
@@ -1315,7 +1337,13 @@ export function exercisePrompt(subject: Subject, lessonTitle: string, count: num
   ];
 }
 
-export function gradePrompt(exercisePromptText: string, studentAnswer: string, ctx: PromptContext): ChatMessage[] {
+export function gradePrompt(
+  exercisePromptText: string,
+  studentAnswer: string,
+  ctx: PromptContext,
+  evaluationCriteria: string[] = [],
+  referenceAnswer: string = '',
+): ChatMessage[] {
   const scopedCtx: PromptContext = { ...ctx, scope: 'grade' };
   return [
     {
@@ -1329,11 +1357,23 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
   "strengthTags": ["clarity"],
   "weaknessTags": ["concept"],
   "preferenceTags": ["needs-steps"],
-  "confidence": "medium"
+  "confidence": "medium",
+  "errorDiagnosis": "最关键的错误或空字符串",
+  "correction": "最小必要修正",
+  "nextStep": "学生现在应该做的一个具体动作",
+  "dimensionScores": [
+    { "name": "正确性", "score": 85, "comment": "一句话依据" },
+    { "name": "推理过程", "score": 75, "comment": "一句话依据" }
+  ]
 }
 要求：
 - 分数范围 0 到 100
 - 反馈具体、可执行
+- feedback 先给结论，再用最短路径解释依据；不要重复整道题或输出空泛鼓励
+- errorDiagnosis 精确指出导致失分的首要原因；完全正确时为空字符串
+- correction 只给修正当前错误所需的最小提示或正确方法，避免无关扩写
+- nextStep 必须是一个可立即执行的动作，例如“重算边界条件 x=0”或“用一句话解释为何不能交换极限”
+- dimensionScores 根据题型和评分量规给出 2-4 个最有意义的维度，每维 0-100；计算题可用方法/计算/检验，证明题可用思路/严谨/完备，代码题可用正确性/边界/复杂度/可读性
 - strengthTags 只能从 accuracy reasoning clarity structure application other 中选择
 - weaknessTags 只能从 concept syntax logic edge-case complexity debugging other 中选择
 - preferenceTags（重要！用来沉淀学生的"学习风格信号"，直接影响后续讲义生成）：
@@ -1349,7 +1389,10 @@ export function gradePrompt(exercisePromptText: string, studentAnswer: string, c
 - strengths 和 weaknesses 保持简洁，便于后续沉淀到课程 profile
 - 只输出 JSON`,
     },
-    { role: 'user', content: `题目：${exercisePromptText}\n\n学生答案：${studentAnswer}` },
+    {
+      role: 'user',
+      content: `题目：${exercisePromptText}\n\n内部参考答案：${referenceAnswer || '未提供，请独立求解并谨慎判分'}\n\n评分量规：${evaluationCriteria.length ? evaluationCriteria.map((item, index) => `${index + 1}. ${item}`).join('\n') : '未提供，请根据题目建立最小合理量规'}\n\n学生答案：${studentAnswer}\n\n注意：参考答案仅是批改锚点；若它与题面冲突，应以题面和严谨推理为准，并在 feedback 中指出冲突。`,
+    },
   ];
 }
 

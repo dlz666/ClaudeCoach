@@ -1,3 +1,4 @@
+import { readFile } from 'fs/promises';
 import { AIClient } from '../ai/client';
 import { gradePrompt } from '../ai/prompts';
 import {
@@ -9,16 +10,16 @@ import {
   Subject,
   CourseProfile,
   CourseProfileChapter,
-  WrongQuestion,
 } from '../types';
 import { CourseManager } from './courseManager';
-import { writeJson } from '../utils/fileSystem';
-import { writeMarkdownAndPreview } from '../utils/markdown';
+import { writeMarkdown } from '../utils/markdown';
 import { CourseProfileStore, normalizeGradeSignals } from '../progress/courseProfileStore';
 import {
   loadMisconceptionsForSubject,
   matchMisconceptions,
 } from '../progress/misconceptionTemplates';
+import { recordPracticeOutcome } from './practiceOutcome';
+import { upsertExerciseReviewMarkdown } from './exerciseReviewMarkdown';
 
 interface GradeContext {
   profile?: StudentProfile | null;
@@ -47,14 +48,25 @@ export class Grader {
     topicId: string,
     sessionId: string,
     ctx: GradeContext,
-    meta?: { topicTitle?: string; lessonTitle?: string; lessonId?: string }
+    meta?: { topicTitle?: string; lessonTitle?: string; lessonId?: string; hintsUsed?: number }
   ): Promise<GradeResult> {
-    const messages = gradePrompt(exercise.prompt, studentAnswer, ctx);
+    const messages = gradePrompt(
+      exercise.prompt,
+      studentAnswer,
+      ctx,
+      exercise.evaluationCriteria,
+      exercise.referenceAnswer,
+    );
     const result = await this.ai.chatJson<Omit<GradeResult, 'exerciseId' | 'gradedAt'>>(messages);
 
     const gradeResult: GradeResult = normalizeGradeSignals({
       ...result,
       exerciseId: exercise.id,
+      lessonId: sessionId,
+      generationId: exercise.generationId,
+      questionPrompt: exercise.prompt,
+      studentAnswer,
+      hintsUsed: Math.max(0, Number(meta?.hintsUsed) || 0),
       gradedAt: new Date().toISOString(),
     });
 
@@ -77,13 +89,24 @@ export class Grader {
       gradeResult.weaknessTags = Array.from(tagSet);
     }
 
-    // Save grade JSON
-    const gradePath = this.courseManager.getGradePath(subject, topicId, sessionId);
-    await writeJson(gradePath, gradeResult);
+    // Keep the learner's answer and latest review beside the question in 练习.md.
+    // The practice Webview renders gradeResult immediately, while an already-open native
+    // Markdown preview refreshes this same file automatically. Do not create or preview a
+    // separate feedback.md document.
+    const exercisePath = this.courseManager.getExercisePath(subject, topicId, sessionId);
+    const exerciseMarkdown = await readFile(exercisePath, 'utf8');
+    await writeMarkdown(
+      exercisePath,
+      upsertExerciseReviewMarkdown(exerciseMarkdown, exercise, gradeResult, studentAnswer),
+    );
 
-    const md = this._buildFeedbackMd(exercise, gradeResult);
-    const feedbackPath = this.courseManager.getFeedbackPath(subject, topicId, sessionId);
-    await writeMarkdownAndPreview(feedbackPath, md);
+    // Save structured grade JSON/history for mastery, review scheduling and reopening the room.
+    const { historyPath } = await this.courseManager.saveGradeResult(
+      subject,
+      topicId,
+      sessionId,
+      gradeResult,
+    );
 
     // Update topic summary
     await this.courseManager.updateTopicSummary(
@@ -106,84 +129,15 @@ export class Grader {
       // 关键：把 AI 推断的"学习风格信号"沉淀进 profile，驱动后续 preferredScaffolding /
       // generationHints / responseHints。修复前这个字段一直是空，导致 5 个聚合字段全死
       preferenceTags: gradeResult.preferenceTags ?? [],
-      rawRefs: [gradePath, feedbackPath],
+      rawRefs: [historyPath, exercisePath],
       metadata: {
         score: gradeResult.score,
         confidence: gradeResult.confidence ?? 'medium',
       },
     });
 
-    await this._maybeUpdateWrongQuestionBook(exercise, studentAnswer, subject, topicId, sessionId, gradeResult, meta);
+    await recordPracticeOutcome(this.courseManager, exercise, studentAnswer, subject, topicId, sessionId, gradeResult, meta);
 
     return gradeResult;
-  }
-
-  private async _maybeUpdateWrongQuestionBook(
-    exercise: Exercise,
-    studentAnswer: string,
-    subject: Subject,
-    topicId: string,
-    sessionId: string,
-    gradeResult: GradeResult,
-    meta?: { topicTitle?: string; lessonTitle?: string; lessonId?: string }
-  ): Promise<void> {
-    const lessonId = meta?.lessonId ?? sessionId;
-    const topicTitle = meta?.topicTitle ?? topicId;
-    const lessonTitle = meta?.lessonTitle ?? sessionId;
-    const wrongId = `wrong-${subject}-${topicId}-${sessionId}-${exercise.id}`;
-    const score = Number(gradeResult.score) || 0;
-    const weaknesses = gradeResult.weaknesses ?? [];
-
-    const isWrong = score < 60 || weaknesses.length > 0;
-
-    if (isWrong) {
-      const wq: WrongQuestion = {
-        id: wrongId,
-        exerciseId: exercise.id,
-        subject,
-        topicId,
-        topicTitle,
-        lessonId,
-        lessonTitle,
-        prompt: exercise.prompt,
-        studentAnswer,
-        score,
-        feedback: gradeResult.feedback,
-        weaknesses,
-        weaknessTags: gradeResult.weaknessTags ?? [],
-        attempts: 1,
-        firstFailedAt: gradeResult.gradedAt,
-        lastAttemptedAt: gradeResult.gradedAt,
-        resolved: false,
-      };
-      await this.courseManager.upsertWrongQuestion(subject, wq);
-      return;
-    }
-
-    if (score >= 90) {
-      const existing = await this.courseManager.listWrongQuestions(subject, {
-        topicId,
-        lessonId,
-        onlyUnresolved: true,
-      });
-      const match = existing.find(q => q.id === wrongId || q.exerciseId === exercise.id);
-      if (match) {
-        await this.courseManager.resolveWrongQuestion(subject, match.id);
-      }
-    }
-  }
-
-  private _buildFeedbackMd(exercise: Exercise, result: GradeResult): string {
-    let md = `# 批改反馈\n\n`;
-    md += `**得分：${result.score}/100**\n\n`;
-    md += `## 题目\n\n${exercise.prompt}\n\n`;
-    md += `## 详细反馈\n\n${result.feedback}\n\n`;
-    if (result.strengths.length) {
-      md += `## 优点\n\n${result.strengths.map(s => `- ${s}`).join('\n')}\n\n`;
-    }
-    if (result.weaknesses.length) {
-      md += `## 需要改进\n\n${result.weaknesses.map(w => `- ${w}`).join('\n')}\n\n`;
-    }
-    return md;
   }
 }
